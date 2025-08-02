@@ -20,7 +20,7 @@ Download the latest .zip release, extract it, and run YTGet.exe.
     📦 Extract the downloaded .zip file.
     ▶️ Double-click YTGet.exe to launch the app.
     🔗 Paste your YouTube URL in the input box.
-    🎚 Select Format (e.g. 1080p MKV or MP3 Audio).
+    🔥 Select Format (e.g. 1080p MKV or MP3 Audio).
     ⬇️ Click Download — Sit back and watch the log in real time!
     💡 You can cancel any ongoing download by clicking the same button again.
 
@@ -32,9 +32,9 @@ Download the latest .zip release, extract it, and run YTGet.exe.
         English subtitles (if available)
 
 ## 🧩 Format Options
-    🎞 480p - 2160p	MKV video with merged best audio
-    🎵 MP3 Audio	High-quality MP3 with thumbnail + tags
-    🎵 MP3 Playlist	Extract audio from full playlist
+    🎢 480p - 2160p	MKV Video with merged best audio
+    🎵 MP3 Audio	    High-quality MP3 with thumbnail + tags
+    🎵 MP3 Playlist    	Extract audio from full playlist
 
 ## 🔒 Cookies Support
 To enable downloading age-restricted or private videos, place your exported cookies.txt file in the following directory:
@@ -52,4 +52,3 @@ This project is licensed under the MIT License. See the LICENSE file for details
 
 ## 📦 Download
 👉 [Latest Release (.zip)](https://github.com/ErfanNamira/YTGet/releases/latest)
-
