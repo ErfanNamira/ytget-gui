@@ -102,8 +102,6 @@ class DownloadWorker(QObject):
             fallback = self._extract_fallback(self.format_code)
             if fallback:
                 self.log.emit(f"\n🔁 Retrying with fallback format: {fallback}\n", "#ffd600")
-                # For simplicity, do NOT auto retry here in this worker to avoid complexity
-                # Could be implemented in main class if needed
 
         self.finished.emit(exit_code)
 
