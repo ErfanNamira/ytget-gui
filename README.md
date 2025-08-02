@@ -4,7 +4,7 @@ YTGet GUI is a sleek, user-friendly desktop application built with Python and Py
 Download the latest .zip release, extract it, and run YTGet.exe.
 
 ## ✨ Features
-    🎯 Clean Qt GUI — Intuitive design with light/dark-friendly visuals.
+    🎯 Clean Qt GUI — Intuitive design with dark friendly visuals.
     📥 Download formats — Choose from multiple resolutions up to 4K, or audio-only (MP3).
     🎵 MP3 Mode — Extract high-quality audio with thumbnails and metadata.
     📃 Auto Subtitles — Automatically fetch English subtitles (if available).
