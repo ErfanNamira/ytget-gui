@@ -14,7 +14,7 @@ Download the latest .zip release, extract it, and run YTGet.exe.
     🛑 Cancel Anytime — Gracefully terminate downloads mid-process.
 
 # 🖼 Screenshot
-<p align="center"> <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/main/Imagez/YTGet1.1.7.jpg" alt="YTGet GUI"> </p>
+<p align="center"> <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/main/Imagez/YTGet.jpg" alt="YTGet GUI"> </p>
 
 ## 🧰 How to Use
     📦 Extract the downloaded .zip file.
