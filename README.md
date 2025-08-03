@@ -13,7 +13,7 @@ Download the latest .zip release, extract it, and run YTGet.exe.
     🪟 Fully Offline Capable — No need for runtime Python installation.
     🛑 Cancel Anytime — Gracefully terminate downloads mid-process.
 
-# 🖼 Screenshot
+## 🖼 Screenshot
 <p align="center"> <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Imagez/YTGet2.1.0.JPG" alt="YTGet GUI"> </p>
 
 ## 🧰 How to Use
