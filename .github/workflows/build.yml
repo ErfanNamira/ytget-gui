@@ -33,15 +33,16 @@ jobs:
         Copy-Item -Path (Get-ChildItem -Path ffmpeg\ffmpeg-* -Recurse -Filter ffprobe.exe).FullName -Destination "_internal\"
 
     - name: Build with PyInstaller
+      shell: pwsh
       run: |
-        pyinstaller ytget.pyw ^
-          --one-dir ^
-          --name YTGet ^
-          --noconfirm ^
-          --icon=icon.ico ^
-          --add-data "_internal\\ffmpeg.exe;_internal" ^
-          --add-data "_internal\\ffprobe.exe;_internal" ^
-          --add-data "cookies.txt;_internal" ^
+        pyinstaller ytget.pyw `
+          --one-dir `
+          --name YTGet `
+          --noconfirm `
+          --icon=icon.ico `
+          --add-data "_internal\\ffmpeg.exe;_internal" `
+          --add-data "_internal\\ffprobe.exe;_internal" `
+          --add-data "cookies.txt;_internal" `
           --add-data "icon.ico;_internal"
 
     - name: Compress with 7z maximum compression
