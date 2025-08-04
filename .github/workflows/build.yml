@@ -1,0 +1,63 @@
+name: Build YTGet Executable
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.13.5'
+
+    - name: Install PyInstaller
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+
+    - name: Download and extract FFmpeg
+      run: |
+        Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip"
+        Expand-Archive ffmpeg.zip -DestinationPath "ffmpeg"
+        New-Item -ItemType Directory -Force -Path "_internal"
+        Copy-Item -Path (Get-ChildItem -Path ffmpeg\ffmpeg-* -Recurse -Filter ffmpeg.exe).FullName -Destination "_internal\"
+        Copy-Item -Path (Get-ChildItem -Path ffmpeg\ffmpeg-* -Recurse -Filter ffprobe.exe).FullName -Destination "_internal\"
+
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller ytget.pyw ^
+          --one-dir ^
+          --name YTGet ^
+          --noconfirm ^
+          --icon=icon.ico ^
+          --add-data "_internal\\ffmpeg.exe;_internal" ^
+          --add-data "_internal\\ffprobe.exe;_internal" ^
+          --add-data "cookies.txt;_internal" ^
+          --add-data "icon.ico;_internal"
+
+    - name: Compress with 7z maximum compression
+      run: |
+        & 'C:\Program Files\7-Zip\7z.exe' a -tzip YTGet.zip dist\YTGet\* -mx=9
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: YTGet-Build
+        path: YTGet.zip
+
+    - name: Upload to GitHub Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: YTGet.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
