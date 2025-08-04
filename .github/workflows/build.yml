@@ -40,10 +40,10 @@ jobs:
           --name YTGet `
           --noconfirm `
           --icon=icon.ico `
-          --add-data "_internal\\ffmpeg.exe;_internal" `
-          --add-data "_internal\\ffprobe.exe;_internal" `
-          --add-data "cookies.txt;_internal" `
-          --add-data "icon.ico;_internal"
+          --add-data "_internal\\ffmpeg.exe;." `
+          --add-data "_internal\\ffprobe.exe;." `
+          --add-data "cookies.txt;." `
+          --add-data "icon.ico;."
 
     - name: Compress with 7z maximum compression
       run: |
