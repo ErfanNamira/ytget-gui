@@ -36,7 +36,7 @@ jobs:
       shell: pwsh
       run: |
         pyinstaller ytget.pyw `
-          --one-dir `
+          --onedir `
           --name YTGet `
           --noconfirm `
           --icon=icon.ico `
