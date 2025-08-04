@@ -3,7 +3,7 @@ name: Build YTGet Executable
 on:
   push:
     tags:
-      - 'v*'
+      - '*'
   workflow_dispatch:
 
 jobs:
