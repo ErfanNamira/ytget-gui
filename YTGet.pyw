@@ -40,7 +40,7 @@ def get_base_path() -> Path:
 @dataclass
 class AppSettings:
     """Holds all application settings and constants."""
-    VERSION: str = "2.2.0"
+    VERSION: str = "2.2.1"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/YTGet"
     CONFIG_PATH: Path = field(init=False)
@@ -49,10 +49,11 @@ class AppSettings:
     BASE_DIR: Path = field(default_factory=get_base_path)
     INTERNAL_DIR: Path = field(init=False)  
     DOWNLOADS_DIR: Path = field(init=False)  
-    COOKIES_PATH: Path = field(init=False)  
+    COOKIES_PATH: Path = field(init=False) 
+    YT_DLP_PATH: Path = field(init=False)
     FFMPEG_PATH: Path = field(init=False)   
     FFPROBE_PATH: Path = field(init=False)  
-    ARCHIVE_PATH: Path = field(init=False)  # For download archive
+    ARCHIVE_PATH: Path = field(init=False)
 
     # yt-dlp templates
     OUTPUT_TEMPLATE: str = field(init=False)
@@ -105,6 +106,7 @@ class AppSettings:
         self.INTERNAL_DIR = self.BASE_DIR / "_internal"
         self.DOWNLOADS_DIR = Path(os.path.join(os.getcwd(), "Downloads"))
         self.COOKIES_PATH = self.BASE_DIR / "cookies.txt"
+        self.YT_DLP_PATH = self.BASE_DIR / "yt-dlp.exe"
         self.FFMPEG_PATH = self.BASE_DIR / "ffmpeg.exe"
         self.FFPROBE_PATH = self.BASE_DIR / "ffprobe.exe"
         self.ARCHIVE_PATH = self.BASE_DIR / "archive.txt"
@@ -127,6 +129,8 @@ class AppSettings:
             self.ARCHIVE_PATH.touch()
             
         # Verify ffmpeg and ffprobe exist
+        if not self.YT_DLP_PATH.exists():  # Add this check
+            raise FileNotFoundError(f"yt-dlp.exe not found at {self.YT_DLP_PATH}")
         if not self.FFMPEG_PATH.exists():
             raise FileNotFoundError(f"ffmpeg.exe not found at {self.FFMPEG_PATH}")
         if not self.FFPROBE_PATH.exists():
@@ -814,7 +818,7 @@ class TitleFetcher(QObject):
         """Executes yt-dlp to get video/playlist metadata."""
         try:
             cmd = [
-                "yt-dlp",
+                str(self.ffprobe_path.parent / "yt-dlp.exe"),
                 "--ffmpeg-location", str(self.ffprobe_path.parent),
                 "--skip-download",
                 "--print-json",
@@ -950,7 +954,7 @@ class DownloadWorker(QObject):
 
     def _build_command(self) -> List[str]:
         """Constructs the yt-dlp command list."""
-        cmd = ["yt-dlp", "--no-warnings", "--progress"]
+        cmd = [str(self.settings.YT_DLP_PATH), "--no-warnings", "--progress"]
         format_code = self.item["format_code"]
         is_playlist = "list=" in self.item["url"] or format_code in ["playlist_mp3", "youtube_music"]
         is_audio = format_code in ["bestaudio", "playlist_mp3", "youtube_music"]
