@@ -46,17 +46,17 @@
 ## 🖼 Screenshot
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Imagez/YTGet2.2%20(1).JPG">
-    <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Imagez/YTGet2.2%20(1).JPG" width="220" />
+  <a href="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.2%20(1).JPG">
+    <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.2%20(1).JPG" width="220" />
   </a>
-  <a href="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Imagez/YTGet2.2%20(2).JPG">
-    <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Imagez/YTGet2.2%20(2).JPG" width="220" />
+  <a href="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.2%20(2).JPG">
+    <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.2%20(2).JPG" width="220" />
   </a>
-  <a href="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Imagez/YTGet2.2%20(3).JPG">
-    <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Imagez/YTGet2.2%20(3).JPG" width="220" />
+  <a href="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.2%20(3).JPG">
+    <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.2%20(3).JPG" width="220" />
   </a>
-  <a href="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Imagez/YTGet2.2%20(4).JPG">
-    <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Imagez/YTGet2.2%20(4).JPG" width="220" />
+  <a href="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.2%20(4).JPG">
+    <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.2%20(4).JPG" width="220" />
   </a>
 </p>
 
