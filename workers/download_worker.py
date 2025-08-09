@@ -225,7 +225,7 @@ class DownloadWorker(QObject):
 
         audio_exts = {".mp3"}
 
-        # Safer: store literal tag texts and escape them for regex
+        # Store literal tag texts and escape them for regex
         tag_texts = [
             "(music video)",
             "(official video)",
