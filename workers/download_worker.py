@@ -73,14 +73,13 @@ class DownloadWorker(QObject):
         elif exit_code == 0:
             self.log.emit("✅ Download finished successfully.\n", AppStyles.SUCCESS_COLOR)
 
-            # Post-step: clean "(Music Video)" from audio filenames
+            # Post-step: clean tags from audio filenames
             try:
                 if self._is_audio_download():
                     cleaned = self._clean_music_video_tags()
                     if cleaned > 0:
                         self.log.emit(f"✨ Cleaned {cleaned} filename(s).\n", AppStyles.SUCCESS_COLOR)
             except Exception as e:
-                # Non-fatal: just notify in log
                 self.log.emit(f"⚠️ Filename cleanup failed: {e}\n", AppStyles.WARNING_COLOR)
 
             self.finished.emit(0)
@@ -115,6 +114,7 @@ class DownloadWorker(QObject):
         is_playlist = "list=" in it["url"] or format_code in ("playlist_mp3", "youtube_music")
         is_audio = self._is_audio_download()
 
+        # Auth/network
         if s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0:
             cmd.extend(["--cookies", str(s.COOKIES_PATH)])
         if s.COOKIES_FROM_BROWSER:
@@ -125,6 +125,7 @@ class DownloadWorker(QObject):
             cmd.extend(["--limit-rate", s.LIMIT_RATE])
         cmd.extend(["--retries", str(s.RETRIES)])
 
+        # Filters and playlist behavior
         if s.DATEAFTER:
             cmd.extend(["--dateafter", s.DATEAFTER])
         if s.LIVE_FROM_START:
@@ -150,7 +151,22 @@ class DownloadWorker(QObject):
             template = str(s.DOWNLOADS_DIR / fallback_template)
             cmd.extend(["-o", template])
 
-        # Audio & post-processing
+        # Organize by uploader
+        if s.ORGANIZE_BY_UPLOADER:
+            if is_playlist:
+                template = str(Path(s.DOWNLOADS_DIR) / "%(playlist_title)s" / "%(uploader)s" / fallback_template)
+            else:
+                template = str(Path(s.DOWNLOADS_DIR) / "%(uploader)s" / fallback_template)
+            # Replace the value that follows "-o"
+            try:
+                o_index = cmd.index("-o")
+                cmd[o_index + 1] = template
+            except ValueError:
+                if is_playlist and "--yes-playlist" not in cmd:
+                    cmd.append("--yes-playlist")
+                cmd.extend(["-o", template])
+
+        # Formats and post-processing
         if is_audio:
             cmd.extend([
                 "-f", "bestaudio",
@@ -174,7 +190,7 @@ class DownloadWorker(QObject):
             if s.ADD_METADATA:
                 cmd.append("--add-metadata")
 
-        # SponsorBlock handling
+        # SponsorBlock
         if s.SPONSORBLOCK_CATEGORIES and not self.is_short_video(it["url"]):
             cmd.extend(["--sponsorblock-remove", ",".join(s.SPONSORBLOCK_CATEGORIES)])
             cmd.extend(["--sleep-requests", "1", "--sleep-subtitles", "1"])
@@ -195,10 +211,9 @@ class DownloadWorker(QObject):
             if s.CONVERT_SUBS_TO_SRT:
                 cmd.extend(["--convert-subs", "srt"])
 
-        # FFmpeg postprocessor args (escaped)
+        # Custom FFmpeg args (post-processing)
         if s.CUSTOM_FFMPEG_ARGS:
-            escaped_args = s.CUSTOM_FFMPEG_ARGS.replace('"', '\\"')
-            cmd.extend(["--postprocessor-args", f'ffmpeg:"{escaped_args}"'])
+            cmd.extend(["--postprocessor-args", f"ffmpeg:{s.CUSTOM_FFMPEG_ARGS}"])
 
         cmd.append(it["url"])
         return cmd
@@ -209,38 +224,41 @@ class DownloadWorker(QObject):
             return 0
 
         audio_exts = {".mp3"}
-        tag_patterns = [
-            r"\(music video\)",
-            r"\(official video\)",
-            r"\(official visualizer\)",
-            r"\(video oficial\)",
-            r"\[official video\]",
-            r"\(drone\)",
-            r"\(video\)",
-            r"\(visualiser\)",
-            r"\(lyric video\)",
-            r"\(lyrics\)",
-            r"\(audio\)",
-            r"\(official track\)",
-            r"\(original mix\)",
-            r"\(hq\)",
-            r"\(hd\)",
-            r"\(high quality\)",
-            r"\(full song\)",
-            r"\(snippet\)",
-            r"\(reaction\)",
-            r"\(review\)",
-            r"\(trailer\)",
-            r"\(teaser\)",
-            r"\(fan edit\)",
-            r"\(studio version\)",
-            r"\(youtube\)",
-            r"\(vevo\)",
-            r"\(tiktok\)",
-            r"\(drone shot\)",
-            r"\(pov video\)",
+
+        # Safer: store literal tag texts and escape them for regex
+        tag_texts = [
+            "(music video)",
+            "(official video)",
+            "(official visualizer)",
+            "(video oficial)",
+            "[official video]",
+            "(drone)",
+            "(video)",
+            "(visualiser)",
+            "(lyric video)",
+            "(lyrics)",
+            "(audio)",
+            "(official track)",
+            "(original mix)",
+            "(hq)",
+            "(hd)",
+            "(high quality)",
+            "(full song)",
+            "(snippet)",
+            "(reaction)",
+            "(review)",
+            "(trailer)",
+            "(teaser)",
+            "(fan edit)",
+            "(studio version)",
+            "(youtube)",
+            "(vevo)",
+            "(tiktok)",
+            "(drone shot)",
+            "(pov video)",
         ]
-        combined_regex = re.compile(r"\s*(" + "|".join(tag_patterns) + r")", re.IGNORECASE)
+        escaped_alts = "|".join(re.escape(t) for t in tag_texts)
+        combined_regex = re.compile(r"\s*(?:" + escaped_alts + r")", re.IGNORECASE)
 
         renamed_count = 0
         for root, _dirs, files in os.walk(downloads_root):
@@ -248,12 +266,15 @@ class DownloadWorker(QObject):
                 p = Path(root) / fname
                 if p.suffix.lower() not in audio_exts:
                     continue
-
                 if not combined_regex.search(fname):
                     continue
 
                 new_stem = combined_regex.sub("", p.stem)
                 new_stem = re.sub(r"\s{2,}", " ", new_stem).strip(" -_.,")
+                if not new_stem:
+                    # Keep at least original stem if everything was stripped
+                    new_stem = p.stem
+
                 new_name = f"{new_stem}{p.suffix}"
                 new_path = p.with_name(new_name)
 
