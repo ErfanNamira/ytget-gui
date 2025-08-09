@@ -60,7 +60,7 @@ class AppSettings:
     DATEAFTER: str = ""
     COOKIES_FROM_BROWSER: str = ""
     LIVE_FROM_START: bool = False
-    YT_MUSIC_METADATA: bool = True
+    YT_MUSIC_METADATA: bool = False
     PLAYLIST_ITEMS: str = ""
     CLIP_START: str = ""
     CLIP_END: str = ""
@@ -189,4 +189,5 @@ class AppSettings:
             if a: self.ARCHIVE_PATH = Path(a)
 
         except Exception as e:
+
             print(f"Error loading config: {e}")
