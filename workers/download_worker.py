@@ -1,13 +1,16 @@
 # File: ytget/workers/download_worker.py
+
 from __future__ import annotations
-from time import sleep
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-
 from PySide6.QtCore import QObject, Signal, QProcess
+import os
+import re
+from pathlib import Path
 
 from ytget.styles import AppStyles
 from ytget.settings import AppSettings
+
 
 @dataclass
 class QueueItem:
@@ -15,9 +18,10 @@ class QueueItem:
     title: str
     format_code: str
 
+
 class DownloadWorker(QObject):
-    log = Signal(str, str)     # text, color
-    finished = Signal(int)     # exit code
+    log = Signal(str, str)
+    finished = Signal(int)
     error = Signal(str)
 
     def __init__(self, item: Dict[str, Any], settings: AppSettings):
@@ -66,29 +70,51 @@ class DownloadWorker(QObject):
         if self._cancel_requested:
             self.log.emit("⏹️ Download cancelled by user.\n", AppStyles.WARNING_COLOR)
             self.finished.emit(-1)
-            return
-        if exit_code == 0:
+        elif exit_code == 0:
             self.log.emit("✅ Download finished successfully.\n", AppStyles.SUCCESS_COLOR)
+
+            # Post-step: clean "(Music Video)" from audio filenames
+            try:
+                if self._is_audio_download():
+                    cleaned = self._clean_music_video_tags()
+                    if cleaned > 0:
+                        self.log.emit(f"✨ Cleaned {cleaned} filename(s).\n", AppStyles.SUCCESS_COLOR)
+            except Exception as e:
+                # Non-fatal: just notify in log
+                self.log.emit(f"⚠️ Filename cleanup failed: {e}\n", AppStyles.WARNING_COLOR)
+
+            self.finished.emit(0)
         else:
             self.log.emit(f"❌ yt-dlp exited with code {exit_code}.\n", AppStyles.ERROR_COLOR)
-        self.finished.emit(exit_code)
+            self.finished.emit(exit_code)
 
     def _short(self, title: str) -> str:
         return title[:35] + "..." if len(title) > 35 else title
 
+    @staticmethod
     def is_short_video(url: str) -> bool:
         return "youtube.com/shorts/" in url
+
+    def _is_audio_download(self) -> bool:
+        format_code = self.item["format_code"]
+        return format_code in ("bestaudio", "playlist_mp3", "youtube_music")
 
     def _build_command(self) -> List[str]:
         s = self.settings
         it = self.item
-        cmd: List[str] = [str(s.YT_DLP_PATH), "--no-warnings", "--progress", "--ffmpeg-location", str(s.FFMPEG_PATH.parent)]
+
+        cmd: List[str] = [
+            str(s.YT_DLP_PATH),
+            "--no-warnings",
+            "--progress",
+            "--output-na-placeholder", "Unknown",
+            "--ffmpeg-location", str(s.FFMPEG_PATH.parent),
+        ]
 
         format_code = it["format_code"]
         is_playlist = "list=" in it["url"] or format_code in ("playlist_mp3", "youtube_music")
-        is_audio = format_code in ("bestaudio", "playlist_mp3", "youtube_music")
+        is_audio = self._is_audio_download()
 
-        # Cookies / proxy / retries / rate
         if s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0:
             cmd.extend(["--cookies", str(s.COOKIES_PATH)])
         if s.COOKIES_FROM_BROWSER:
@@ -115,36 +141,31 @@ class DownloadWorker(QObject):
             cmd.extend(["--download-sections", f"*{s.CLIP_START}-{s.CLIP_END}"])
 
         # Output template
+        fallback_template = "%(artist)s - %(title)s.%(ext)s" if s.YT_MUSIC_METADATA else "%(title)s.%(ext)s"
+
         if is_playlist:
-            # audio playlists go to subfolder of playlist title
-            if format_code in ("playlist_mp3", "youtube_music"):
-                playlist_template = str(s.DOWNLOADS_DIR / "%(playlist_title)s" / "%(playlist_index)s - %(title)s.%(ext)s")
-                cmd.extend(["--yes-playlist", "-o", playlist_template])
-            else:
-                cmd.extend(["--yes-playlist", "-o", s.PLAYLIST_TEMPLATE])
+            template = str(s.DOWNLOADS_DIR / "%(playlist_title)s" / fallback_template)
+            cmd.extend(["--yes-playlist", "-o", template])
         else:
-            cmd.extend(["-o", s.OUTPUT_TEMPLATE])
+            template = str(s.DOWNLOADS_DIR / fallback_template)
+            cmd.extend(["-o", template])
 
-        # Organize by uploader
-        if s.ORGANIZE_BY_UPLOADER:
-            # replace last template argument
-            template = cmd[-1]
-            if is_playlist:
-                template = str(s.DOWNLOADS_DIR / "%(uploader)s" / "%(playlist_index)s - %(title)s.%(ext)s")
-            else:
-                template = str(s.DOWNLOADS_DIR / "%(uploader)s" / "%(title)s.%(ext)s")
-            cmd[-1] = template
-
-        # Formats and post-process
+        # Audio & post-processing
         if is_audio:
-            cmd.extend(["-f", "bestaudio", "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0", "--embed-thumbnail"])
+            cmd.extend([
+                "-f", "bestaudio",
+                "--extract-audio",
+                "--audio-format", "mp3",
+                "--audio-quality", "0",
+                "--embed-thumbnail",
+            ])
             if s.ADD_METADATA:
                 cmd.append("--add-metadata")
             if format_code == "youtube_music" and s.YT_MUSIC_METADATA:
                 cmd.extend([
                     "--parse-metadata", "description:(?s)(?P<meta_comment>.+)",
-                    "--parse-metadata", "%(meta_comment)s:(?P<artist>.+) - .+",
-                    "--parse-metadata", "%(meta_comment)s:.+ - (?P<title>.+)",
+                    "--parse-metadata", "%(meta_comment)s:(?P<artist>[^\\n]+)",
+                    "--parse-metadata", "%(meta_comment)s:.+ - (?P<title>[^\\n]+)",
                 ])
             if s.AUDIO_NORMALIZE:
                 cmd.append("--audio-normalize")
@@ -153,8 +174,8 @@ class DownloadWorker(QObject):
             if s.ADD_METADATA:
                 cmd.append("--add-metadata")
 
-        # SponsorBlock with Shorts-aware throttling
-        if s.SPONSORBLOCK_CATEGORIES and not is_short_video(it["url"]):
+        # SponsorBlock handling
+        if s.SPONSORBLOCK_CATEGORIES and not self.is_short_video(it["url"]):
             cmd.extend(["--sponsorblock-remove", ",".join(s.SPONSORBLOCK_CATEGORIES)])
             cmd.extend(["--sleep-requests", "1", "--sleep-subtitles", "1"])
 
@@ -174,11 +195,84 @@ class DownloadWorker(QObject):
             if s.CONVERT_SUBS_TO_SRT:
                 cmd.extend(["--convert-subs", "srt"])
 
-        # Custom FFmpeg args (post-processing)
+        # FFmpeg postprocessor args (escaped)
         if s.CUSTOM_FFMPEG_ARGS:
-            # Safe cross-platform: rely on yt-dlp postprocessor args instead of shell 'move'
-            # This runs after download to produce an additional transformed output
-            cmd.extend(["--postprocessor-args", f"ffmpeg:{s.CUSTOM_FFMPEG_ARGS}"])
+            escaped_args = s.CUSTOM_FFMPEG_ARGS.replace('"', '\\"')
+            cmd.extend(["--postprocessor-args", f'ffmpeg:"{escaped_args}"'])
 
         cmd.append(it["url"])
         return cmd
+
+    def _clean_music_video_tags(self) -> int:
+        downloads_root: Path = Path(self.settings.DOWNLOADS_DIR)
+        if not downloads_root.exists():
+            return 0
+
+        audio_exts = {".mp3"}
+        tag_patterns = [
+            r"\(music video\)",
+            r"\(official video\)",
+            r"\(official visualizer\)",
+            r"\(video oficial\)",
+            r"\[official video\]",
+            r"\(drone\)",
+            r"\(video\)",
+            r"\(visualiser\)",
+            r"\(lyric video\)",
+            r"\(lyrics\)",
+            r"\(audio\)",
+            r"\(official track\)",
+            r"\(original mix\)",
+            r"\(hq\)",
+            r"\(hd\)",
+            r"\(high quality\)",
+            r"\(full song\)",
+            r"\(snippet\)",
+            r"\(reaction\)",
+            r"\(review\)",
+            r"\(trailer\)",
+            r"\(teaser\)",
+            r"\(fan edit\)",
+            r"\(studio version\)",
+            r"\(youtube\)",
+            r"\(vevo\)",
+            r"\(tiktok\)",
+            r"\(drone shot\)",
+            r"\(pov video\)",
+        ]
+        combined_regex = re.compile(r"\s*(" + "|".join(tag_patterns) + r")", re.IGNORECASE)
+
+        renamed_count = 0
+        for root, _dirs, files in os.walk(downloads_root):
+            for fname in files:
+                p = Path(root) / fname
+                if p.suffix.lower() not in audio_exts:
+                    continue
+
+                if not combined_regex.search(fname):
+                    continue
+
+                new_stem = combined_regex.sub("", p.stem)
+                new_stem = re.sub(r"\s{2,}", " ", new_stem).strip(" -_.,")
+                new_name = f"{new_stem}{p.suffix}"
+                new_path = p.with_name(new_name)
+
+                if new_path == p:
+                    continue
+                if new_path.exists():
+                    i = 1
+                    while True:
+                        candidate = p.with_name(f"{new_stem} ({i}){p.suffix}")
+                        if not candidate.exists():
+                            new_path = candidate
+                            break
+                        i += 1
+
+                try:
+                    p.rename(new_path)
+                    renamed_count += 1
+                    self.log.emit(f"🧹 Renamed: {p.name} → {new_path.name}\n", AppStyles.INFO_COLOR)
+                except Exception as e:
+                    self.log.emit(f"⚠️ Could not rename {p.name}: {e}\n", AppStyles.WARNING_COLOR)
+
+        return renamed_count
