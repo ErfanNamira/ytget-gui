@@ -1,4 +1,5 @@
-PySide6>=6.5
-requests>=2.31
-mutagen>=1.46
-Pillow>=10.0
+yt-dlp
+PySide6
+requests
+mutagen
+Pillow
