@@ -1,18 +1,44 @@
+# File: ytget/main_window.py
 from __future__ import annotations
 
 import os
 import sys
+import json
 import webbrowser
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from PySide6.QtCore import Qt, QThread, QTimer, QSettings, QUrl
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QPalette, QGuiApplication, QTextCursor, QColor
+from PySide6.QtCore import Qt, QThread, QTimer, QSettings, QSize
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QIcon,
+    QPalette,
+    QGuiApplication,
+    QTextCursor,
+    QColor,
+    QFont,
+    QPixmap,  # added
+)
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QListWidget,
-    QListWidgetItem, QLineEdit, QComboBox, QPushButton, QTextEdit, QFileDialog,
-    QMenuBar, QMessageBox, QStyle
+    QMainWindow,
+    QWidget,
+    QHBoxLayout,
+    QVBoxLayout,
+    QSplitter,
+    QListWidget,
+    QListWidgetItem,
+    QLineEdit,
+    QComboBox,
+    QPushButton,
+    QTextEdit,
+    QFileDialog,
+    QMenuBar,
+    QMessageBox,
+    QFrame,
+    QLabel,
+    QProgressBar,
 )
 
 from ytget.settings import AppSettings
@@ -20,14 +46,267 @@ from ytget.styles import AppStyles
 from ytget.utils.validators import is_youtube_url
 from ytget.dialogs.preferences import PreferencesDialog
 from ytget.dialogs.advanced import AdvancedOptionsDialog
-from ytget.widgets.queue_item import QueueItemWidget
 from ytget.workers.title_fetcher import TitleFetcher
 from ytget.workers.download_worker import DownloadWorker
 from ytget.workers.cover_crop_worker import CoverCropWorker
+from ytget.widgets.queue_card import QueueCard
 
 
-def short(title: str, n: int = 35) -> str:
-    return title[:n] + "..." if len(title) > n else title
+def short(text: str, n: int = 35) -> str:
+    return text[:n] + "..." if len(text) > n else text
+
+
+QSS_THEME = """
+/* Window */
+QMainWindow {
+  background: #0F1115;
+  color: #E6EAF2;
+  font-size: 14px;
+}
+
+/* Top / Bottom bars */
+#TopBar, #BottomBar {
+  background: #1C2230;
+  border: 1px solid #263042;
+  border-radius: 12px;
+}
+
+#Pane {
+  background: #161A22;
+  border: 1px solid #263042;
+  border-radius: 12px;
+}
+
+#Brand {
+  font-size: 20px;
+  font-weight: 600;
+  color: #E6EAF2;
+}
+#VersionChip {
+  padding: 2px 8px;
+  background: #1D2533;
+  color: #A7B0C0;
+  border-radius: 999px;
+  margin-left: 8px;
+}
+
+/* URL pill */
+#UrlPillWrap {
+  background: #121620;
+  border: 1px solid #263042;
+  border-radius: 22px;
+}
+#UrlPillWrap:hover { border-color: #2F3B55; }
+#UrlPillWrap QLineEdit {
+  background: transparent;
+  border: none;
+  color: #E6EAF2;
+  padding: 10px 12px;
+  font-size: 15px;
+}
+#PillBtn {
+  background: #2A3550;
+  color: #E6EAF2;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 16px;
+}
+#PillBtn:hover { background: #36436A; }
+#PillIconBtn {
+  background: transparent;
+  border: none;
+  padding: 6px 10px;
+  color: #A7B0C0;
+}
+#PillIconBtn:hover { color: #E6EAF2; }
+
+/* Chips and ghost buttons */
+#Chip, #ChipCombo {
+  background: #1D2533;
+  border: 1px solid #263042;
+  color: #E6EAF2;
+  border-radius: 16px;
+  padding: 6px 10px;
+}
+#Chip:hover, #ChipCombo:hover { background: #2A3550; }
+
+#ChipGhost, #Ghost {
+  background: transparent;
+  border: 1px solid #263042;
+  color: #A7B0C0;
+  border-radius: 12px;
+  padding: 6px 10px;
+}
+#Ghost:hover { color: #E6EAF2; border-color: #2F3B55; }
+
+/* Primary/Secondary buttons */
+#Primary {
+  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #6EA8FE, stop:1 #5476F0);
+  color: #0F1115;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+#Primary:hover { background: #6A9CF6; }
+#Secondary {
+  background: #2A3550;
+  color: #E6EAF2;
+  border: none;
+  padding: 10px 14px;
+  border-radius: 10px;
+}
+
+/* Pane titles and empty state */
+#PaneTitle {
+  font-weight: 600;
+  font-size: 16px;
+  color: #E6EAF2;
+}
+#EmptyState {
+  color: #8A95A8;
+  background: #10141C;
+  border: 1px dashed #263042;
+  border-radius: 12px;
+  padding: 28px;
+}
+
+/* Queue header */
+#QueueHeader {
+  background: #161A22;
+  border: 1px solid #263042;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+#QueueTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: #E6EAF2;
+}
+#CountChip {
+  background: #1D2533;
+  color: #A7B0C0;
+  border: 1px solid #263042;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+#Search {
+  background: #121620;
+  border: 1px solid #263042;
+  border-radius: 10px;
+  padding: 6px 10px;
+  color: #E6EAF2;
+}
+#Search:focus { border-color: #2F3B55; }
+
+/* Sort combo should be rectangular (no rounded corners) */
+#SortCombo {
+  background: #1D2533;
+  border: 1px solid #263042;
+  color: #E6EAF2;
+  border-radius: 0;  /* square corners */
+  padding: 6px 10px;
+}
+
+/* Queue list */
+#QueueList {
+  background: transparent;
+  border: none;
+}
+QListWidget::item {
+  background: transparent;
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Queue card (external widget) */
+#QueueCard {
+  background: #161A22;
+  border: 1px solid #263042;
+  border-radius: 12px;
+}
+#QueueCard:hover { border-color: #2F3B55; }
+
+#CardTitle { font-weight: 600; color: #E6EAF2; }
+#CardMeta { color: #8591A3; font-size: 12px; }
+#Thumb {
+  background: #0F141C;
+  border: 1px solid #263042;
+  border-radius: 8px;
+}
+#StatusChip {
+  background: #1D2533;
+  color: #E6EAF2;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  border: 1px solid #263042;
+}
+#DragHandle { color: #6A7487; }
+#DragHandle:hover { color: #E6EAF2; }
+
+#IconBtn {
+  background: transparent;
+  border: 1px solid #263042;
+  color: #A7B0C0;
+  border-radius: 8px;
+  padding: 2px 8px;
+}
+#IconBtn:hover { color: #E6EAF2; border-color: #2F3B55; }
+
+/* Progress (global only) */
+#Progress {
+  background: #202839;
+  border: 1px solid #263042;
+  border-radius: 999px;
+}
+#Progress::chunk {
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6EA8FE, stop:1 #5476F0);
+  border-radius: 999px;
+}
+
+/* Console */
+#Console {
+  background: #10141C;
+  color: #E6EAF2;
+  border: 1px solid #263042;
+  border-radius: 10px;
+  padding: 8px;
+}
+
+/* Combo popup */
+QAbstractItemView {
+  background: #161A22;
+  color: #E6EAF2;
+  border: 1px solid #263042;
+  selection-background-color: #2A3550;
+  selection-color: #E6EAF2;
+}
+
+/* Scrollbar */
+QScrollBar:vertical, QScrollBar:horizontal {
+  background: transparent; border: none;
+}
+QScrollBar::handle {
+  background: #2A3550; border-radius: 6px;
+}
+QScrollBar::handle:hover { background: #36436A; }
+
+/* Drag highlight for queue pane */
+#Pane[dropActive="true"] {
+  border-color: #6EA8FE;
+}
+
+/* Bulk bar */
+#BulkBar {
+  background: #121620;
+  border: 1px solid #263042;
+  border-radius: 10px;
+  padding: 6px 10px;
+  color: #E6EAF2;
+}
+"""
 
 
 class MainWindow(QMainWindow):
@@ -36,11 +315,19 @@ class MainWindow(QMainWindow):
         self.settings = AppSettings()
         self.styles = AppStyles()
 
+        # Thumbnail cache folder and async jobs
+        self.thumb_cache_dir: Path = self.settings.BASE_DIR / "cache" / "thumbs"
+        self.thumb_cache_dir.mkdir(parents=True, exist_ok=True)
+        self._thumb_jobs: Dict[str, QThread] = {}
+
         self.queue: List[Dict[str, Any]] = []
         self.current_download_item: Optional[Dict[str, Any]] = None
         self.is_downloading = False
         self.queue_paused = True
         self.post_queue_action = "Keep"  # Keep | Shutdown | Sleep | Restart | Close
+
+        # For global progress
+        self._initial_queue_len: int = 0
 
         # Threads
         self.download_thread: Optional[QThread] = None
@@ -50,13 +337,47 @@ class MainWindow(QMainWindow):
         self.cover_thread: Optional[QThread] = None
         self.cover_worker: Optional[CoverCropWorker] = None
 
+        # Logging store for filter
+        self._log_entries: List[Tuple[str, str, str]] = []  # (text, color, level)
+
+        # Permanent queue file
+        self.queue_file_path: Path = self.settings.BASE_DIR / "queue.json"
+
+        # UI refs created in builders
+        self.queue_list: QListWidget
+        self.queue_empty_state: QLabel
+        self.log_output: QTextEdit
+        self.url_input: QLineEdit
+        self.format_box: QComboBox
+        self.btn_add_inline: QPushButton
+        self.btn_start_queue: QPushButton
+        self.btn_pause_queue: QPushButton
+        self.btn_skip: QPushButton
+        self.global_progress: QProgressBar
+        self.post_action: QComboBox
+        self.download_path_btn: QPushButton
+        self.queue_pane: QWidget
+        self.filter_combo: QComboBox
+
+        # Queue header/bulk UI refs
+        self.queue_title: QLabel
+        self.count_chip: QLabel
+        self.search_box: QLineEdit
+        self.sort_combo: QComboBox
+        self.bulk_bar: QFrame
+        self.bulk_label: QLabel
+
+        # App icon cache for reuse (e.g., Help button)
+        self._app_icon: Optional[QIcon] = None
+
         self._setup_ui()
         self._setup_connections()
         self._setup_menu()
+        self._load_permanent_queue()
         self._restore_window()
         self._log_startup()
 
-    # ---------- UI ----------
+    # ---------- UI scaffold
 
     def _setup_ui(self):
         self.setWindowTitle(f"{self.settings.APP_NAME} {self.settings.VERSION}")
@@ -68,103 +389,337 @@ class MainWindow(QMainWindow):
         ]
         for p in icon_candidates:
             if p.exists():
-                self.setWindowIcon(QIcon(str(p)))
+                self._app_icon = QIcon(str(p))
+                self.setWindowIcon(self._app_icon)
                 break
 
-        self.resize(980, 680)
-        self.setStyleSheet(self.styles.MAIN)
+        self.resize(1200, 780)
 
+        # Font
+        f = QFont("Inter", 10)
+        self.setFont(f)
+
+        # Apply dark theme
+        self.setStyleSheet(QSS_THEME)
+
+        # Root container
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(5, 5, 5, 5)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(12)
 
-        splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(splitter)
+        # Top bar
+        self.top_bar = self._build_top_bar()
+        outer.addWidget(self.top_bar)
 
-        # Left: Queue
-        queue_container = QWidget()
-        queue_layout = QVBoxLayout(queue_container)
-        queue_layout.setContentsMargins(0, 0, 0, 0)
-        self.queue_list = QListWidget()
-        self.queue_list.setStyleSheet(self.styles.QUEUE)
-        queue_layout.addWidget(self.queue_list)
-        splitter.addWidget(queue_container)
-        splitter.setStretchFactor(0, 1)
+        # Main split: Queue (1/3) | Console (2/3)
+        self.main_split = QSplitter(Qt.Horizontal)
+        self.main_split.setChildrenCollapsible(False)
+        outer.addWidget(self.main_split, 1)
 
-        # Right: Controls
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(10, 0, 0, 0)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(1, 2)
+        self.queue_pane = self._build_queue_pane()
+        self.console_pane = self._build_console_pane()
 
-        # URL input
-        self.url_input = QLineEdit(placeholderText="🔎 Paste YouTube URL and press Enter")
-        self.url_input.setStyleSheet("padding: 8px; font-size: 16px;")
-        right_layout.addWidget(self.url_input)
+        self.main_split.addWidget(self.queue_pane)
+        self.main_split.addWidget(self.console_pane)
+        self.main_split.setStretchFactor(0, 1)
+        self.main_split.setStretchFactor(1, 2)
+        QTimer.singleShot(100, lambda: self.main_split.setSizes([int(self.width() * 0.38), int(self.width() * 0.62)]))
 
-        # Format row
-        format_row = QHBoxLayout()
-        self.format_box = QComboBox()
-        self.format_box.addItems(self.settings.RESOLUTIONS.keys())
-        self.format_box.setStyleSheet("padding: 8px; font-size: 15px;")
-        format_row.addWidget(self.format_box, 3)
+        # Bottom control bar
+        self.bottom_bar = self._build_bottom_bar()
+        outer.addWidget(self.bottom_bar)
 
-        self.btn_advanced = QPushButton("⚙️ Advanced")
-        self.btn_advanced.setStyleSheet(AppStyles.BUTTON.format(
-            bg_color=AppStyles.INFO_COLOR, text_color="white", hover_color="#81d4fa"
-        ))
-        format_row.addWidget(self.btn_advanced, 1)
-        right_layout.addLayout(format_row)
-
-        # Buttons
-        btn_row = QHBoxLayout()
-        self.btn_add_queue = QPushButton("➕ Add to Queue", enabled=False)
-        self.btn_start_queue = QPushButton("▶️ Start Queue")
-        self.btn_pause_queue = QPushButton("⏸️ Pause Queue", enabled=False)
-
-        self.btn_add_queue.setStyleSheet(self.styles.BUTTON.format(
-            bg_color=AppStyles.INFO_COLOR, text_color="white", hover_color="#81d4fa"
-        ))
-        self.btn_start_queue.setStyleSheet(self.styles.BUTTON.format(
-            bg_color=AppStyles.SUCCESS_COLOR, text_color="black", hover_color="#69f0ae"
-        ))
-        self.btn_pause_queue.setStyleSheet(self.styles.BUTTON.format(
-            bg_color=AppStyles.WARNING_COLOR, text_color="black", hover_color="#ffd54f"
-        ))
-        btn_row.addWidget(self.btn_add_queue)
-        btn_row.addWidget(self.btn_start_queue)
-        btn_row.addWidget(self.btn_pause_queue)
-        right_layout.addLayout(btn_row)
-
-        # Log
-        self.log_output = QTextEdit(readOnly=True)
-        self.log_output.setStyleSheet(self.styles.LOG)
-        right_layout.addWidget(self.log_output)
-
-        # Initial splitter sizes after show
-        QTimer.singleShot(100, lambda: splitter.setSizes([self.width() // 3, self.width() * 2 // 3]))
-
-        # DnD
+        # Drag-and-drop
         self.setAcceptDrops(True)
+
+    def _build_top_bar(self) -> QWidget:
+        w = QFrame()
+        w.setObjectName("TopBar")
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(12)
+
+        brand = QLabel(self.settings.APP_NAME)
+        brand.setObjectName("Brand")
+        version = QLabel(f"v{self.settings.VERSION}")
+        version.setObjectName("VersionChip")
+
+        # URL pill
+        pillw = QFrame()
+        pillw.setObjectName("UrlPillWrap")
+        pill = QHBoxLayout(pillw)
+        pill.setContentsMargins(10, 2, 6, 2)
+        pill.setSpacing(6)
+        self.url_input = QLineEdit(placeholderText="Paste YouTube URL and press Enter")
+        self.url_input.setClearButtonEnabled(False)
+        self.btn_add_inline = QPushButton("Add")
+        self.btn_add_inline.setObjectName("PillBtn")
+        self.btn_add_inline.setCursor(Qt.PointingHandCursor)
+        btn_paste = QPushButton("Paste")
+        btn_paste.setObjectName("PillBtn")
+        btn_paste.setCursor(Qt.PointingHandCursor)
+        btn_clear = QPushButton("✕")
+        btn_clear.setObjectName("PillIconBtn")
+        btn_clear.setCursor(Qt.PointingHandCursor)
+        pill.addWidget(self.url_input, 1)
+        pill.addWidget(self.btn_add_inline)
+        pill.addWidget(btn_paste)
+        pill.addWidget(btn_clear)
+
+        # Quick chips
+        self.format_box = QComboBox()
+        self.format_box.setObjectName("ChipCombo")
+        for k in self.settings.RESOLUTIONS.keys():
+            self.format_box.addItem(k)
+
+        self.btn_advanced = QPushButton("Advanced")
+        self.btn_advanced.setObjectName("Chip")
+        self.btn_advanced.setCursor(Qt.PointingHandCursor)
+        btn_settings = QPushButton("Settings")
+        btn_settings.setObjectName("Chip")
+        btn_settings.setCursor(Qt.PointingHandCursor)
+
+        # Help uses app icon
+        btn_help = QPushButton()
+        btn_help.setObjectName("ChipGhost")
+        btn_help.setCursor(Qt.PointingHandCursor)
+        btn_help.setToolTip("Help")
+        if self._app_icon:
+            btn_help.setIcon(self._app_icon)
+        else:
+            btn_help.setText("Help")
+
+        lay.addWidget(brand)
+        lay.addWidget(version)
+        lay.addWidget(pillw, 1)
+        lay.addWidget(self.format_box)
+        lay.addWidget(self.btn_advanced)
+        lay.addWidget(btn_settings)
+        lay.addWidget(btn_help)
+
+        # Wire helpers
+        btn_paste.clicked.connect(self._paste_into_url)
+        btn_clear.clicked.connect(self.url_input.clear)
+        btn_settings.clicked.connect(self._show_preferences)
+        btn_help.clicked.connect(self._show_about)
+
+        # Start with Add disabled until URL looks valid
+        self.btn_add_inline.setEnabled(False)
+
+        return w
+
+    def _build_queue_pane(self):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # Header row
+        header = QFrame()
+        header.setObjectName("QueueHeader")
+        h = QHBoxLayout(header)
+        h.setContentsMargins(10, 8, 10, 8)
+        h.setSpacing(8)
+
+        self.queue_title = QLabel("Queue")
+        self.queue_title.setObjectName("QueueTitle")
+        self.count_chip = QLabel("0")
+        self.count_chip.setObjectName("CountChip")
+
+        self.search_box = QLineEdit()
+        self.search_box.setObjectName("Search")
+        self.search_box.setClearButtonEnabled(True)
+        self.search_box.setPlaceholderText("Search queue…")
+        self.search_box.setMinimumWidth(320)
+
+        self.sort_combo = QComboBox()
+        self.sort_combo.setObjectName("SortCombo")
+        self.sort_combo.addItems(["Added", "Title", "Status"])
+
+        h.addWidget(self.queue_title)
+        h.addWidget(self.count_chip)
+        h.addStretch(1)
+        h.addWidget(self.search_box, 2)
+        h.addWidget(self.sort_combo, 0)
+        layout.addWidget(header)
+
+        # Empty state
+        self.queue_empty_state = QLabel("Add YouTube links to build your queue.\nDrag to reorder.")
+        self.queue_empty_state.setObjectName("EmptyState")
+        self.queue_empty_state.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.queue_empty_state)
+
+        # List
+        self.queue_list = QListWidget()
+        self.queue_list.setObjectName("QueueList")
+        self.queue_list.setSpacing(8)
+        self.queue_list.setFrameShape(QFrame.NoFrame)
+        self.queue_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.queue_list.setUniformItemSizes(False)
+        # Native drag reorder
+        self.queue_list.setDragEnabled(True)
+        self.queue_list.setAcceptDrops(True)
+        self.queue_list.setDragDropMode(QListWidget.InternalMove)
+        self.queue_list.setDefaultDropAction(Qt.MoveAction)
+
+        layout.addWidget(self.queue_list, 1)
+
+        # Bulk bar (appears when items selected)
+        self.bulk_bar = QFrame()
+        self.bulk_bar.setObjectName("BulkBar")
+        self.bulk_bar.setVisible(False)
+        bh = QHBoxLayout(self.bulk_bar)
+        bh.setContentsMargins(10, 6, 10, 6)
+        bh.setSpacing(8)
+        self.bulk_label = QLabel("0 selected")
+        btn_rm = QPushButton("Remove")
+        btn_top = QPushButton("Move to top")
+        btn_bot = QPushButton("Move to bottom")
+        btn_clear_done = QPushButton("Clear completed")
+        for b in (btn_rm, btn_top, btn_bot, btn_clear_done):
+            b.setObjectName("Ghost")
+            b.setCursor(Qt.PointingHandCursor)
+        bh.addWidget(self.bulk_label)
+        bh.addStretch(1)
+        bh.addWidget(btn_rm)
+        bh.addWidget(btn_top)
+        bh.addWidget(btn_bot)
+        bh.addWidget(btn_clear_done)
+        layout.addWidget(self.bulk_bar)
+
+        # Connections
+        self.queue_list.model().rowsMoved.connect(self._on_rows_moved)
+        self.queue_list.itemSelectionChanged.connect(self._on_selection_changed)
+        self.search_box.textChanged.connect(self._apply_queue_filter)
+        self.sort_combo.currentTextChanged.connect(self._apply_queue_sort)
+
+        btn_rm.clicked.connect(self._bulk_remove_selected)
+        btn_top.clicked.connect(lambda: self._bulk_move_selected(top=True))
+        btn_bot.clicked.connect(lambda: self._bulk_move_selected(bottom=True))
+        btn_clear_done.clicked.connect(self._bulk_clear_completed)
+
+        return container
+
+    def _build_console_pane(self) -> QWidget:
+        w = QFrame()
+        w.setObjectName("Pane")
+        v = QVBoxLayout(w)
+        v.setContentsMargins(12, 12, 12, 12)
+        v.setSpacing(8)
+
+        title = QLabel("Console")
+        title.setObjectName("PaneTitle")
+        v.addWidget(title)
+
+        tools_row = QHBoxLayout()
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItems(["All", "Info", "Warning", "Error"])
+        btn_copy = QPushButton("Copy all")
+        btn_copy.setObjectName("Ghost")
+        btn_clear = QPushButton("Clear")
+        btn_clear.setObjectName("Ghost")
+        tools_row.addWidget(self.filter_combo)
+        tools_row.addStretch(1)
+        tools_row.addWidget(btn_copy)
+        tools_row.addWidget(btn_clear)
+        roww = QWidget()
+        roww.setLayout(tools_row)
+        v.addWidget(roww)
+
+        self.log_output = QTextEdit(readOnly=True)
+        self.log_output.setObjectName("Console")
+        # Explicitly enforce dark console
+        self.log_output.setStyleSheet("background:#10141C; color:#E6EAF2; border:1px solid #263042; border-radius:10px;")
+        v.addWidget(self.log_output, 1)
+
+        btn_copy.clicked.connect(self._copy_console)
+        btn_clear.clicked.connect(self._clear_console)
+
+        # Filter changes re-render the log
+        self.filter_combo.currentTextChanged.connect(self._render_log)
+
+        return w
+
+    def _build_bottom_bar(self) -> QWidget:
+        w = QFrame()
+        w.setObjectName("BottomBar")
+        h = QHBoxLayout(w)
+        h.setContentsMargins(16, 10, 16, 10)
+        h.setSpacing(12)
+
+        self.btn_start_queue = QPushButton("Start")
+        self.btn_start_queue.setObjectName("Primary")
+        self.btn_start_queue.setCursor(Qt.PointingHandCursor)
+
+        self.btn_pause_queue = QPushButton("Pause")
+        self.btn_pause_queue.setObjectName("Secondary")
+        self.btn_pause_queue.setCursor(Qt.PointingHandCursor)
+        self.btn_pause_queue.setEnabled(False)
+
+        self.btn_skip = QPushButton("Skip")
+        self.btn_skip.setObjectName("Ghost")
+        self.btn_skip.setCursor(Qt.PointingHandCursor)
+        self.btn_skip.setEnabled(False)
+
+        left = QHBoxLayout()
+        left.addWidget(self.btn_start_queue)
+        left.addWidget(self.btn_pause_queue)
+        left.addWidget(self.btn_skip)
+
+        self.global_progress = QProgressBar()
+        self.global_progress.setObjectName("Progress")
+        self.global_progress.setTextVisible(False)
+        self.global_progress.setMaximumHeight(6)
+        # Determinate by default
+        self.global_progress.setRange(0, 100)
+        self.global_progress.setValue(0)
+
+        # Right side: post-action + path
+        right = QHBoxLayout()
+        right.addWidget(QLabel("After:"))
+        self.post_action = QComboBox()
+        self.post_action.setObjectName("ChipCombo")
+        self.post_action.addItems(["Keep", "Shutdown", "Sleep", "Restart", "Close"])
+        self.post_action.setCurrentText(self.post_queue_action)
+        self.download_path_btn = QPushButton(str(self.settings.DOWNLOADS_DIR))
+        self.download_path_btn.setObjectName("Ghost")
+        self.download_path_btn.setCursor(Qt.PointingHandCursor)
+
+        right.addWidget(self.post_action)
+        right.addWidget(self.download_path_btn)
+
+        h.addLayout(left)
+        h.addStretch(1)
+        h.addWidget(self.global_progress, 1)
+        h.addLayout(right)
+
+        self.post_action.currentTextChanged.connect(self._set_post_queue_action)
+        self.download_path_btn.clicked.connect(lambda: webbrowser.open(self.settings.DOWNLOADS_DIR.as_uri()))
+
+        return w
 
     def _setup_connections(self):
         self.url_input.textChanged.connect(self._on_url_text_changed)
         self.url_input.returnPressed.connect(self._add_to_queue)
-        self.btn_add_queue.clicked.connect(self._add_to_queue)
+        self.btn_add_inline.clicked.connect(self._add_to_queue)
         self.btn_start_queue.clicked.connect(self._start_queue)
         self.btn_pause_queue.clicked.connect(self._pause_queue)
         self.btn_advanced.clicked.connect(self._show_advanced_options)
+        self.btn_skip.clicked.connect(self._skip_current)
 
     def _setup_menu(self):
         menubar: QMenuBar = self.menuBar()
-        menubar.setStyleSheet("QMenuBar { background-color: #333; } QMenu::item:selected { background-color: #555; }")
+        menubar.setStyleSheet(
+            "QMenuBar { background-color: #1C2230; color: #E6EAF2; } "
+            "QMenu::item:selected { background-color: #2A3550; }"
+        )
 
         # File
         m_file = menubar.addMenu("File")
-        m_file.addAction("Save Queue", self._save_queue_to_disk, "Ctrl+S")
-        m_file.addAction("Load Queue", self._load_queue_from_disk, "Ctrl+O")
+        m_file.addAction("Save Queue As...", self._save_queue_to_disk, "Ctrl+S")
+        m_file.addAction("Load Queue...", self._load_queue_from_disk, "Ctrl+O")
         m_file.addSeparator()
         m_file.addAction("Exit", self.close, "Ctrl+Q")
 
@@ -180,9 +735,13 @@ class MainWindow(QMainWindow):
         action_group = QActionGroup(self)
         action_group.setExclusive(True)
         actions = {
-            "Keep Running": "Keep", "Shutdown PC": "Shutdown",
-            "Sleep PC": "Sleep", "Restart PC": "Restart", "Close YTGet": "Close"
+            "Keep Running": "Keep",
+            "Shutdown PC": "Shutdown",
+            "Sleep PC": "Sleep",
+            "Restart PC": "Restart",
+            "Close YTGet": "Close",
         }
+        self.post_actions_map = {}
         for text, value in actions.items():
             act = QAction(text, self, checkable=True)
             if value == self.post_queue_action:
@@ -190,6 +749,7 @@ class MainWindow(QMainWindow):
             act.triggered.connect(lambda checked, v=value: self._set_post_queue_action(v))
             action_group.addAction(act)
             post_menu.addAction(act)
+            self.post_actions_map[value] = act
 
         # Help
         m_help = menubar.addMenu("Help")
@@ -197,48 +757,88 @@ class MainWindow(QMainWindow):
         m_help.addAction("Open Download Folder", lambda: webbrowser.open(self.settings.DOWNLOADS_DIR.as_uri()))
         m_help.addAction("About", self._show_about)
 
-    # ---------- Startup / Logging ----------
+    # ---------- Startup / Logging with filter ----------
 
     def _log_startup(self):
-        self.log("💡 Welcome to YTGet! Paste a URL to Begin.\n", AppStyles.INFO_COLOR)
-        self.log(f"📂 Download Folder: {self.settings.DOWNLOADS_DIR}\n", AppStyles.INFO_COLOR)
-        self.log(f"🔧 Using binaries from: {self.settings.FFMPEG_PATH.parent}\n", AppStyles.INFO_COLOR)
+        self.log("💡 Welcome to YTGet! Paste a URL to Begin.\n", AppStyles.INFO_COLOR, "Info")
+        self.log(f"📂 Download Folder: {self.settings.DOWNLOADS_DIR}\n", AppStyles.INFO_COLOR, "Info")
+        self.log(f"🔧 Using binaries from: {self.settings.FFMPEG_PATH.parent}\n", AppStyles.INFO_COLOR, "Info")
 
-        # Sanity hints (no hard failure to keep cross-platform friendly)
         if not self.settings.YT_DLP_PATH.exists():
-            self.log("⚠️ yt-dlp not found in app folder or PATH. Set it in Preferences or install system-wide.\n", AppStyles.WARNING_COLOR)
+            self.log("⚠️ yt-dlp not found in app folder or PATH. Set it in Preferences or install system-wide.\n", AppStyles.WARNING_COLOR, "Warning")
         if not self.settings.FFMPEG_PATH.exists() or not self.settings.FFPROBE_PATH.exists():
-            self.log("⚠️ ffmpeg/ffprobe not found in app folder or PATH. Set in Preferences or install system-wide.\n", AppStyles.WARNING_COLOR)
+            self.log("⚠️ ffmpeg/ffprobe not found in app folder or PATH. Set in Preferences or install system-wide.\n", AppStyles.WARNING_COLOR, "Warning")
 
-        # Log relevant toggles
         if self.settings.PROXY_URL:
-            self.log(f"🌐 Proxy: {self.settings.PROXY_URL}\n", AppStyles.INFO_COLOR)
+            self.log(f"🌐 Proxy: {self.settings.PROXY_URL}\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.SPONSORBLOCK_CATEGORIES:
-            self.log(f"⏩ SponsorBlock: {', '.join(self.settings.SPONSORBLOCK_CATEGORIES)}\n", AppStyles.INFO_COLOR)
+            self.log(f"⏩ SponsorBlock: {', '.join(self.settings.SPONSORBLOCK_CATEGORIES)}\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.CHAPTERS_MODE != "none":
-            self.log(f"📖 Chapters: {self.settings.CHAPTERS_MODE}\n", AppStyles.INFO_COLOR)
+            self.log(f"📖 Chapters: {self.settings.CHAPTERS_MODE}\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.WRITE_SUBS:
-            self.log(f"📝 Subtitles: {self.settings.SUB_LANGS}\n", AppStyles.INFO_COLOR)
+            self.log(f"📝 Subtitles: {self.settings.SUB_LANGS}\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.ENABLE_ARCHIVE:
-            self.log(f"📚 Archive: {self.settings.ARCHIVE_PATH}\n", AppStyles.INFO_COLOR)
+            self.log(f"📚 Archive: {self.settings.ARCHIVE_PATH}\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.PLAYLIST_REVERSE:
-            self.log("↩️ Playlist Reverse: On\n", AppStyles.INFO_COLOR)
+            self.log("↩️ Playlist Reverse: On\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.AUDIO_NORMALIZE:
-            self.log("🔊 Audio Normalize: On\n", AppStyles.INFO_COLOR)
+            self.log("🔊 Audio Normalize: On\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.LIMIT_RATE:
-            self.log(f"📉 Rate Limit: {self.settings.LIMIT_RATE}\n", AppStyles.INFO_COLOR)
+            self.log(f"📉 Rate Limit: {self.settings.LIMIT_RATE}\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.ORGANIZE_BY_UPLOADER:
-            self.log("🗂️ Organize by Uploader: On\n", AppStyles.INFO_COLOR)
+            self.log("🗂️ Organize by Uploader: On\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.DATEAFTER:
-            self.log(f"📅 Only After: {self.settings.DATEAFTER}\n", AppStyles.INFO_COLOR)
+            self.log(f"📅 Only After: {self.settings.DATEAFTER}\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.LIVE_FROM_START:
-            self.log("🔴 Live from Start: On\n", AppStyles.INFO_COLOR)
+            self.log("🔴 Live from Start: On\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.YT_MUSIC_METADATA:
-            self.log("🎵 Enhanced YouTube Music Metadata: On\n", AppStyles.INFO_COLOR)
+            self.log("🎵 Enhanced YouTube Music Metadata: On\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.CROP_AUDIO_COVERS:
-            self.log("🖼️ Will crop audio covers to 1:1 after queue.\n", AppStyles.INFO_COLOR)
+            self.log("🖼️ Will Crop Audio Covers to 1:1 After Queue.\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.CLIP_START and self.settings.CLIP_END:
-            self.log(f"⏱️ Clip: {self.settings.CLIP_START}-{self.settings.CLIP_END}\n", AppStyles.INFO_COLOR)
+            self.log(f"⏱️ Clip: {self.settings.CLIP_START}-{self.settings.CLIP_END}\n", AppStyles.INFO_COLOR, "Info")            
+            
+    def _copy_console(self):
+        QGuiApplication.clipboard().setText(self.log_output.toPlainText())
+
+    def _clear_console(self):
+        self._log_entries.clear()
+        self._render_log()
+
+    def _render_log(self):
+        target = self.filter_combo.currentText() if self.filter_combo else "All"
+        self.log_output.clear()
+        for text, color, level in self._log_entries:
+            if target == "All" or level == target:
+                self._append_to_console(text, color)
+
+    def _append_to_console(self, text: str, color: str):
+        self.log_output.setTextColor(QPalette().color(QPalette.Text))  # reset
+        cursor = self.log_output.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        fmt = self.log_output.currentCharFormat()
+        fmt.setForeground(QColor(color))
+        self.log_output.setCurrentCharFormat(fmt)
+        cursor.insertText(text)
+        self.log_output.ensureCursorVisible()
+
+    def log(self, text: str, color: str = AppStyles.TEXT_COLOR, level: str = "Info"):
+        # Normalize level based on color if caller didn't specify
+        if level == "Info":
+            if color == getattr(AppStyles, "ERROR_COLOR", "#ff6b6b"):
+                level = "Error"
+            elif color == getattr(AppStyles, "WARNING_COLOR", "#ffc857"):
+                level = "Warning"
+            else:
+                level = "Info"
+        self._log_entries.append((text, color, level))
+        self._render_log()
+
+    def _paste_into_url(self):
+        text = QGuiApplication.clipboard().text()
+        if text:
+            self.url_input.setText(text)
+            self.url_input.setCursorPosition(len(text))
 
     # ---------- Drag and drop ----------
 
@@ -252,10 +852,23 @@ class MainWindow(QMainWindow):
                 text = event.mimeData().text()
             if any("youtu" in t for t in text.split()):
                 event.acceptProposedAction()
+                self.queue_pane.setProperty("dropActive", True)
+                self.queue_pane.style().unpolish(self.queue_pane)
+                self.queue_pane.style().polish(self.queue_pane)
                 return
         super().dragEnterEvent(event)
 
+    def dragLeaveEvent(self, event):
+        self.queue_pane.setProperty("dropActive", False)
+        self.queue_pane.style().unpolish(self.queue_pane)
+        self.queue_pane.style().polish(self.queue_pane)
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event):
+        self.queue_pane.setProperty("dropActive", False)
+        self.queue_pane.style().unpolish(self.queue_pane)
+        self.queue_pane.style().polish(self.queue_pane)
+
         urls: List[str] = []
         if event.mimeData().hasUrls():
             urls = [u.toString() for u in event.mimeData().urls()]
@@ -267,26 +880,25 @@ class MainWindow(QMainWindow):
                 self._fetch_title(u)
                 added += 1
         if added == 0:
-            self.log("⚠️ No valid YouTube URLs detected in drop.\n", AppStyles.WARNING_COLOR)
+            self.log("⚠️ No valid YouTube URLs detected in drop.\n", AppStyles.WARNING_COLOR, "Warning")
         event.acceptProposedAction()
 
-    # ---------- Queue / Title ----------
+    # ---------- Queue / Title / Thumbnails ----------
 
     def _on_url_text_changed(self, text: str):
-        self.btn_add_queue.setEnabled(is_youtube_url(text))
+        self.btn_add_inline.setEnabled(is_youtube_url(text))
 
     def _add_to_queue(self):
         url = self.url_input.text().strip()
         if not is_youtube_url(url):
-            self.log("⚠️ Invalid YouTube URL format.\n", AppStyles.WARNING_COLOR)
+            self.log("⚠️ Invalid YouTube URL format.\n", AppStyles.WARNING_COLOR, "Warning")
             return
         self.url_input.clear()
-        self.btn_add_queue.setEnabled(False)
+        self.btn_add_inline.setEnabled(False)
         self._fetch_title(url)
 
     def _fetch_title(self, url: str):
-        self.log(f"🔎 Fetching title for: {url[:60]}...\n", AppStyles.INFO_COLOR)
-        # Clean up existing title thread if needed
+        self.log(f"🔎 Fetching title for: {url[:60]}...\n", AppStyles.INFO_COLOR, "Info")
         try:
             if self.title_fetch_thread and self.title_fetch_thread.isRunning():
                 self.title_fetch_thread.quit()
@@ -304,48 +916,206 @@ class MainWindow(QMainWindow):
         )
         self.title_fetcher.moveToThread(self.title_fetch_thread)
         self.title_fetch_thread.started.connect(self.title_fetcher.run)
-        self.title_fetcher.title_fetched.connect(self._on_title_fetched)
+
+        # Prefer rich metadata if available
+        if hasattr(self.title_fetcher, "metadata_fetched"):
+            try:
+                self.title_fetcher.metadata_fetched.connect(self._on_metadata_fetched)
+            except Exception:
+                # Fallback to legacy
+                self.title_fetcher.title_fetched.connect(self._on_title_fetched)
+        else:
+            self.title_fetcher.title_fetched.connect(self._on_title_fetched)
+
         self.title_fetcher.error.connect(self._on_title_error)
         self.title_fetcher.finished.connect(self.title_fetch_thread.quit)
         self.title_fetch_thread.finished.connect(self.title_fetcher.deleteLater)
         self.title_fetch_thread.finished.connect(self.title_fetch_thread.deleteLater)
         self.title_fetch_thread.start()
 
-    def _on_title_fetched(self, url: str, title: str):
+    def _on_metadata_fetched(self, url: str, title: str, video_id: str, thumb_url: str, is_playlist: bool):
         fmt_text = self.format_box.currentText()
-        item = {"url": url, "title": title, "format_code": self.settings.RESOLUTIONS[fmt_text]}
+        item = {
+            "url": url,
+            "title": title,
+            "format_code": self.settings.RESOLUTIONS[fmt_text],
+            "status": "Pending",
+            "progress": 0,
+            "video_id": video_id or "",
+            "thumbnail_url": thumb_url or "",
+            "thumb_path": "",
+            "is_playlist": bool(is_playlist),
+        }
         self.queue.append(item)
-        self.log(f"✅ Added to queue: {short(title)}\n", AppStyles.SUCCESS_COLOR)
+        self._save_queue_permanent()
+        self.log(f"✅ Added to queue: {short(title)}\n", AppStyles.SUCCESS_COLOR, "Info")
+
+        # Kick off thumbnail
+        self._ensure_thumbnail(item)
+
         self._refresh_queue_list()
         self._update_button_states()
+        self._update_global_progress_bar()
+
+    def _on_title_fetched(self, url: str, title: str):
+        # Legacy path (no id/thumbnail provided)
+        fmt_text = self.format_box.currentText()
+        item = {
+            "url": url,
+            "title": title,
+            "format_code": self.settings.RESOLUTIONS[fmt_text],
+            "status": "Pending",
+            "progress": 0,
+            "video_id": "",
+            "thumbnail_url": "",
+            "thumb_path": "",
+            "is_playlist": False,
+        }
+        self.queue.append(item)
+        self._save_queue_permanent()
+        self.log(f"✅ Added to queue: {short(title)}\n", AppStyles.SUCCESS_COLOR, "Info")
+
+        self._refresh_queue_list()
+        self._update_button_states()
+        self._update_global_progress_bar()
 
     def _on_title_error(self, url: str, msg: str):
-        self.log(f"❌ Error fetching title for {url[:60]}: {msg}\n", AppStyles.ERROR_COLOR)
-        self.btn_add_queue.setEnabled(True)
+        self.log(f"❌ Error fetching title for {url[:60]}: {msg}\n", AppStyles.ERROR_COLOR, "Error")
+        self.btn_add_inline.setEnabled(True)
+
+    def _thumb_path_for_item(self, it: Dict[str, Any]) -> Path:
+        vid = (it or {}).get("video_id") or ""
+        if not vid:
+            # fallback name derived from URL to still benefit from cache
+            key = (it.get("url", "").split("v=")[-1].split("&")[0]) or "unknown"
+            return (self.thumb_cache_dir / f"{key}.jpg")
+        return self.thumb_cache_dir / f"{vid}.jpg"
+
+    def _ensure_thumbnail(self, it: Dict[str, Any]):
+        # Optionally skip playlist thumbs; remove this guard if you want a preview anyway
+        if it.get("is_playlist"):
+            return
+
+        vid = it.get("video_id") or ""
+        dest = self._thumb_path_for_item(it)
+
+        # If cached already, use it
+        if dest.exists() and dest.stat().st_size > 0:
+            it["thumb_path"] = str(dest)
+            self._save_queue_permanent()
+            self._update_card_thumbnail(it)
+            return
+
+        # Download asynchronously
+        try:
+            # Lazy import to avoid hard dependency at module import time
+            from ytget.workers.thumb_fetcher import ThumbFetcher
+        except Exception as e:
+            self.log(f"⚠️ Thumbnail worker missing: {e}\n", AppStyles.WARNING_COLOR, "Warning")
+            return
+
+        if not vid and not it.get("thumbnail_url"):
+            # Attempt a best-effort: if URL has a v= param, use that pattern
+            url = it.get("url", "")
+            if "v=" in url:
+                vid = url.split("v=")[-1].split("&")[0]
+                it["video_id"] = vid
+
+        if not vid and not it.get("thumbnail_url"):
+            return  
+
+        if not hasattr(self, "_thumb_jobs"):
+            self._thumb_jobs = {}
+
+        if vid in self._thumb_jobs:
+            return 
+
+        t = QThread()
+        worker = ThumbFetcher(
+            vid or it.get("video_id", ""),
+            it.get("thumbnail_url", ""),
+            dest,
+            proxy_url=self.settings.PROXY_URL,
+        )
+        worker.moveToThread(t)
+        t.started.connect(worker.run)
+        worker.finished.connect(lambda video_id, path: self._on_thumb_saved(it, video_id, path))
+        worker.error.connect(lambda video_id, msg: self._on_thumb_error(it, video_id, msg))
+        worker.finished.connect(t.quit)
+        t.finished.connect(worker.deleteLater)
+        t.finished.connect(t.deleteLater)
+
+        self._thumb_jobs[vid or it.get("video_id", "")] = t
+        t.start()
+
+    def _on_thumb_saved(self, it: Dict[str, Any], video_id: str, path: str):
+        if hasattr(self, "_thumb_jobs"):
+            self._thumb_jobs.pop(video_id, None)
+        it["thumb_path"] = path
+        self._save_queue_permanent()
+        self._update_card_thumbnail(it)
+
+    def _on_thumb_error(self, it: Dict[str, Any], video_id: str, msg: str):
+        if hasattr(self, "_thumb_jobs"):
+            self._thumb_jobs.pop(video_id, None)
+        self.log(f"⚠️ Failed to fetch thumbnail ({video_id}): {msg}\n", AppStyles.WARNING_COLOR, "Warning")
+
+    def _update_card_thumbnail(self, it: Dict[str, Any]):
+        path = it.get("thumb_path")
+        if not path or not Path(path).exists():
+            return
+        pix = QPixmap(path)
+        if pix.isNull():
+            return
+
+        # Find the widget for this item and set the pixmap
+        for i in range(self.queue_list.count()):
+            lw_item = self.queue_list.item(i)
+            data = lw_item.data(Qt.UserRole)
+            if data is it:
+                w = self.queue_list.itemWidget(lw_item)
+                if isinstance(w, QueueCard) and hasattr(w, "set_thumbnail_pixmap"):
+                    try:
+                        w.set_thumbnail_pixmap(pix)
+                    except Exception:
+                        pass
+                break
 
     # ---------- Queue control ----------
 
     def _start_queue(self):
         if self.is_downloading and not self.queue_paused:
-            self.log("ℹ️ Queue is already running.\n", AppStyles.INFO_COLOR)
+            self.log("ℹ️ Queue is already running.\n", AppStyles.INFO_COLOR, "Info")
             return
         if not self.queue:
-            self.log("⚠️ Queue is empty. Add items to start.\n", AppStyles.WARNING_COLOR)
+            self.log("⚠️ Queue is empty. Add items to start.\n", AppStyles.WARNING_COLOR, "Warning")
             return
 
         self.queue_paused = False
-        self.log(("▶️ Resuming" if self.is_downloading else "▶️ Starting") + " queue processing...\n", AppStyles.SUCCESS_COLOR)
+        if not self.is_downloading:
+            self._initial_queue_len = len(self.queue)
+        self.log(("▶️ Resuming" if self.is_downloading else "▶️ Starting") + " queue processing...\n", AppStyles.SUCCESS_COLOR, "Info")
+        # Mark first item as downloading (and persist)
+        if self.queue and (self.current_download_item is None):
+            self.queue[0]["status"] = "Downloading"
+            self._save_queue_permanent()
+        self._update_global_progress_bar()
         self._download_next()
         self._update_button_states()
 
     def _pause_queue(self):
         if not self.is_downloading:
-            self.log("ℹ️ Queue is not running.\n", AppStyles.INFO_COLOR)
+            self.log("ℹ️ Queue is not running.\n", AppStyles.INFO_COLOR, "Info")
             return
         self.queue_paused = True
         if self.download_worker:
             self.download_worker.cancel()
         self._update_button_states()
+
+    def _skip_current(self):
+        if self.is_downloading and self.download_worker:
+            self.log("⏭️ Skipping current item...\n", AppStyles.INFO_COLOR, "Info")
+            self.download_worker.cancel()
 
     def _download_next(self):
         if self.queue_paused or self.is_downloading or not self.queue:
@@ -355,10 +1125,12 @@ class MainWindow(QMainWindow):
 
         self.is_downloading = True
         self.current_download_item = self.queue[0]
+        self.current_download_item["status"] = "Downloading"
+        self.current_download_item["progress"] = 0
+        self._save_queue_permanent()
         self._refresh_queue_list()
         self._update_button_states()
 
-        # Clean up previous download thread
         try:
             if self.download_thread and self.download_thread.isRunning():
                 self.download_thread.quit()
@@ -370,33 +1142,69 @@ class MainWindow(QMainWindow):
         self.download_worker = DownloadWorker(self.current_download_item, self.settings)
         self.download_worker.moveToThread(self.download_thread)
         self.download_thread.started.connect(self.download_worker.run)
+
+        # Logs and errors
         self.download_worker.log.connect(self.log)
-        self.download_worker.error.connect(lambda m: self.log(f"❌ {m}\n", AppStyles.ERROR_COLOR))
+        self.download_worker.error.connect(lambda m: self.log(f"❌ {m}\n", AppStyles.ERROR_COLOR, "Error"))
+
+        if hasattr(self.download_worker, "status"):
+            try:
+                self.download_worker.status.connect(self._on_download_status)
+            except Exception:
+                pass
+
+        # Finish
         self.download_worker.finished.connect(self._on_download_finished)
         self.download_worker.finished.connect(self.download_thread.quit)
         self.download_thread.finished.connect(self.download_worker.deleteLater)
         self.download_thread.finished.connect(self.download_thread.deleteLater)
         self.download_thread.start()
 
+    def _on_download_status(self, status: str):
+        if self.current_download_item is None:
+            return
+        self.current_download_item["status"] = status
+        self._save_queue_permanent()
+        if self.queue_list.count() > 0:
+            w = self.queue_list.itemWidget(self.queue_list.item(0))
+            if isinstance(w, QueueCard):
+                w.set_status(status)
+
     def _on_download_finished(self, exit_code: int):
         self.is_downloading = False
-        self.current_download_item = None
+        if self.current_download_item is not None:
+            self.current_download_item["status"] = "Completed" if exit_code == 0 else "Error"
+            self.current_download_item["progress"] = 100 if exit_code == 0 else 0
+            self._save_queue_permanent()
         if exit_code == 0 and self.queue:
             self.queue.pop(0)
+            self._save_queue_permanent()
+        self.current_download_item = None
+
         self._refresh_queue_list()
         self._update_button_states()
+        self._update_global_progress_bar()
 
         if not self.queue_paused and self.queue:
             self._download_next()
         elif not self.queue:
             self._on_queue_finished()
 
+    def _update_global_progress_bar(self):
+        # Determinate, based on items completed
+        total = max(1, self._initial_queue_len if self._initial_queue_len else len(self.queue))
+        done = (self._initial_queue_len - len(self.queue)) if self._initial_queue_len else 0
+        percent = int((done / total) * 100) if total else 0
+        self.global_progress.setRange(0, 100)
+        self.global_progress.setValue(percent)
+
     def _on_queue_finished(self):
-        self.log(f"🏁 Queue complete! Action: {self.post_queue_action}.\n", AppStyles.SUCCESS_COLOR)
+        self.log(f"🏁 Queue complete! Action: {self.post_queue_action}.\n", AppStyles.SUCCESS_COLOR, "Info")
+        self._initial_queue_len = 0
+        self._update_global_progress_bar()
 
         if getattr(self.settings, "CROP_AUDIO_COVERS", False):
-            self.log("🖼️ Cropping audio covers to 1:1. This may take a moment...\n", AppStyles.INFO_COLOR)
-            # Clean cover thread if needed
+            self.log("🖼️ Cropping audio covers to 1:1. This may take a moment...\n", AppStyles.INFO_COLOR, "Info")
             try:
                 if self.cover_thread and self.cover_thread.isRunning():
                     self.cover_thread.quit()
@@ -423,7 +1231,7 @@ class MainWindow(QMainWindow):
             return
 
         if sys.platform != "win32":
-            self.log(f"⚠️ '{action}' is only supported on Windows.\n", AppStyles.WARNING_COLOR)
+            self.log(f"⚠️ '{action}' is only supported on Windows.\n", AppStyles.WARNING_COLOR, "Warning")
             return
 
         if action == "Shutdown":
@@ -433,159 +1241,381 @@ class MainWindow(QMainWindow):
         elif action == "Restart":
             os.system("shutdown /r /t 60")
 
-    # ---------- UI helpers ----------
+    # ---------- Queue pane helpers (sort, filter, drag-reorder, bulk) ----------
+
+    def _on_rows_moved(self, src_parent, src_start, src_end, dst_parent, dst_row):
+        # Keep self.queue in sync with visual reorder (single-row move)
+        if src_end != src_start:
+            return
+        if not (0 <= src_start < len(self.queue)):
+            return
+        item = self.queue.pop(src_start)
+        insert_at = dst_row if dst_row <= len(self.queue) else len(self.queue)
+        self.queue.insert(insert_at, item)
+        self._save_queue_permanent()
+        self._update_button_states()
+
+    def _on_selection_changed(self):
+        count = len(self.queue_list.selectedIndexes())
+        self.bulk_bar.setVisible(count > 0)
+        self.bulk_label.setText(f"{count} selected")
+
+    def _apply_queue_sort(self, key: str):
+        if not self.queue:
+            return
+        if key == "Title":
+            self.queue.sort(key=lambda x: x.get("title", "").lower())
+        elif key == "Status":
+            order = {"Downloading": 0, "Pending": 1, "Queued": 2, "Completed": 3, "Error": 4}
+            self.queue.sort(key=lambda x: order.get(x.get("status", "Pending"), 99))
+        else:
+            # "Added" keeps current order
+            pass
+        self._save_queue_permanent()
+        self._refresh_queue_list()
+
+    def _apply_queue_filter(self, text: str):
+        t = (text or "").strip().lower()
+        for i in range(self.queue_list.count()):
+            lw_item = self.queue_list.item(i)
+            data = lw_item.data(Qt.UserRole) or {}
+            title = str(data.get("title", "")).lower()
+            meta = f"{data.get('status','')}".lower()
+            visible = True
+            if t:
+                visible = (t in title) or (t in meta)
+            lw_item.setHidden(not visible)
 
     def _refresh_queue_list(self):
         self.queue_list.clear()
-        for i, item in enumerate(self.queue):
-            widget = QueueItemWidget(item["title"], item["url"])
-            list_item = QListWidgetItem()
-            list_item.setSizeHint(widget.sizeHint())
-            widget.btn_delete.clicked.connect(lambda checked=False, idx=i: self._remove_queue_item(idx))
-            widget.btn_up.clicked.connect(lambda checked=False, idx=i: self._move_queue_item(idx, -1))
-            widget.btn_down.clicked.connect(lambda checked=False, idx=i: self._move_queue_item(idx, 1))
-            if item == self.current_download_item:
-                widget.set_active(True)
-            self.queue_list.addItem(list_item)
-            self.queue_list.setItemWidget(list_item, widget)
 
-    def _remove_queue_item(self, index: int):
-        if not (0 <= index < len(self.queue)):
+        # Update header chip and empty state
+        count = len(self.queue)
+        self.count_chip.setText(str(count))
+        self.queue_empty_state.setVisible(count == 0)
+
+        for item in self.queue:
+            lw = QListWidgetItem()
+            lw.setSizeHint(QSize(0, 92))  # card height
+            lw.setData(Qt.UserRole, item)    # store data for search/sort
+
+            card = self._make_queue_card_widget(item)
+            self.queue_list.addItem(lw)
+            self.queue_list.setItemWidget(lw, card)
+
+        # Re-apply any active filter
+        self._apply_queue_filter(self.search_box.text())
+
+    def _make_queue_card_widget(self, item: Dict[str, Any]) -> QWidget:
+        # Prefer external QueueCard with correct signature
+        try:
+            card = QueueCard(
+                item.get("title", "(title pending)"),
+                item.get("url", ""),
+                item.get("status", "Pending"),
+                int(item.get("progress", 0)),
+                show_thumbnail=True,
+            )
+        except Exception:
+            card = None
+
+        if card:
+            card.setObjectName("QueueCard")
+
+            # Hide micro progress (we use global progress)
+            try:
+                card.progress.setVisible(False)
+                card.percent_lbl.setVisible(False)
+            except Exception:
+                pass
+
+            # Context actions
+            def _open_in_browser():
+                webbrowser.open(item.get("url", ""))
+            def _copy_url():
+                QGuiApplication.clipboard().setText(item.get("url", ""))
+
+            try:
+                card.set_context_actions([
+                    ("Open in browser", _open_in_browser),
+                    ("Copy URL", _copy_url),
+                    ("Remove", lambda: self._remove_item_by_id(item)),
+                ])
+            except Exception:
+                pass
+
+            # Initial thumbnail if cached
+            tp = item.get("thumb_path")
+            if tp and Path(tp).exists():
+                try:
+                    pix = QPixmap(tp)
+                    if not pix.isNull():
+                        card.set_thumbnail_pixmap(pix)
+                except Exception:
+                    pass
+            else:
+                # Try to fetch
+                self._ensure_thumbnail(item)
+
+            # Wire removal
+            try:
+                card.removed.connect(lambda: self._remove_item_by_id(item))
+            except Exception:
+                pass
+
+            return card
+
+        # Fallback simple, progress-free card
+        frame = QFrame()
+        frame.setObjectName("QueueCard")
+        lay = QHBoxLayout(frame)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(10)
+
+        # Left: thumbnail placeholder
+        thumb = QFrame()
+        thumb.setObjectName("Thumb")
+        thumb.setFixedSize(120, 68)
+        lay.addWidget(thumb)
+
+        # Middle: title + meta
+        mid = QVBoxLayout()
+        title_lbl = QLabel(item.get("title", "(title pending)"))
+        title_lbl.setObjectName("CardTitle")
+        meta_lbl = QLabel(f"{item.get('status','Pending')} • {item.get('format_code','')}")
+        meta_lbl.setObjectName("CardMeta")
+        mid.addWidget(title_lbl)
+        mid.addWidget(meta_lbl)
+        mid.addStretch(1)
+        lay.addLayout(mid, 1)
+
+        # Right: actions (no per-item progress)
+        btn_del = QPushButton("Remove")
+        btn_del.setObjectName("IconBtn")
+        btn_del.setCursor(Qt.PointingHandCursor)
+        btn_del.clicked.connect(lambda: self._remove_item_by_id(item))
+        lay.addWidget(btn_del)
+
+        # expose for filter
+        frame.title_lbl = title_lbl
+        frame.meta_lbl = meta_lbl
+        return frame
+
+    def _remove_item_by_id(self, it: Dict[str, Any]):
+        try:
+            idx = self.queue.index(it)
+        except ValueError:
             return
-        if self.is_downloading and self.queue[index] == self.current_download_item:
-            self.log("⚠️ Cannot remove an active download. Pause the queue first.\n", AppStyles.WARNING_COLOR)
-            return
-        item = self.queue.pop(index)
-        self.log(f"🗑️ Removed from queue: {short(item['title'])}\n", AppStyles.INFO_COLOR)
+        # If removing current downloading item, cancel worker
+        if self.is_downloading and self.current_download_item is it and self.download_worker:
+            self.download_worker.cancel()
+
+        # Delete cached thumbnail
+        try:
+            p = self._thumb_path_for_item(it)
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
+
+        self.queue.pop(idx)
+        self._save_queue_permanent()
         self._refresh_queue_list()
         self._update_button_states()
+        self._update_global_progress_bar()
 
-    def _move_queue_item(self, index: int, step: int):
-        new_index = index + step
-        if not (0 <= index < len(self.queue) and 0 <= new_index < len(self.queue)):
-            return
-        if self.is_downloading and (self.queue[index] == self.current_download_item or self.queue[new_index] == self.current_download_item):
-            self.log("⚠️ Cannot move an active download.\n", AppStyles.WARNING_COLOR)
-            return
-        self.queue.insert(new_index, self.queue.pop(index))
+    def _update_item_status(self, it: Dict[str, Any], status: str):
+        it["status"] = status
+        self._save_queue_permanent()
         self._refresh_queue_list()
 
-    def _update_button_states(self):
-        has_items = bool(self.queue)
-        self.btn_start_queue.setEnabled(has_items and (self.queue_paused or not self.is_downloading))
-        self.btn_pause_queue.setEnabled(self.is_downloading and not self.queue_paused)
-        self.btn_add_queue.setEnabled(not self.is_downloading or self.queue_paused)
-
-    def log(self, text: str, color: str = AppStyles.TEXT_COLOR):
-        self.log_output.setTextColor(QPalette().color(QPalette.Text))  # reset
-        cursor = self.log_output.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        fmt = self.log_output.currentCharFormat()
-        fmt.setForeground(QColor(color))
-        self.log_output.setCurrentCharFormat(fmt)
-        cursor.insertText(text)
-        self.log_output.ensureCursorVisible()
-
-    # ---------- Menu actions ----------
-
-    def _save_queue_to_disk(self):
-        if not self.queue:
-            self.log("⚠️ Queue is empty, nothing to save.\n", AppStyles.WARNING_COLOR)
+    def _bulk_remove_selected(self):
+        rows = sorted({i.row() for i in self.queue_list.selectedIndexes()}, reverse=True)
+        if not rows:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save Queue", str(self.settings.BASE_DIR / "queue.json"), "JSON Files (*.json)")
-        if path:
-            try:
-                import json
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(self.queue, f, indent=2)
-                self.log(f"💾 Queue saved to {path}\n", AppStyles.SUCCESS_COLOR)
-                self._refresh_queue_list()
-            except Exception as e:
-                self.log(f"❌ Failed to save queue: {e}\n", AppStyles.ERROR_COLOR)
+        # Cancel if current is being removed
+        if self.is_downloading and rows and 0 in rows and self.download_worker:
+            self.download_worker.cancel()
 
-    def _load_queue_from_disk(self):
-        if self.is_downloading:
-            self.log("⚠️ Cannot load a new queue while a download is active.\n", AppStyles.WARNING_COLOR)
+        for r in rows:
+            if 0 <= r < len(self.queue):
+                it = self.queue[r]
+                # delete cached thumbnail
+                try:
+                    p = self._thumb_path_for_item(it)
+                    if p.exists():
+                        p.unlink()
+                except Exception:
+                    pass
+                self.queue.pop(r)
+
+        self._save_queue_permanent()
+        self._refresh_queue_list()
+        self._update_button_states()
+        self._update_global_progress_bar()
+
+    def _bulk_move_selected(self, top: bool = False, bottom: bool = False):
+        rows = sorted({i.row() for i in self.queue_list.selectedIndexes()})
+        if not rows:
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Load Queue", str(self.settings.BASE_DIR), "JSON Files (*.json)")
-        if path:
+        items = [self.queue[r] for r in rows]
+        # Remove from end to preserve indices
+        for r in reversed(rows):
+            self.queue.pop(r)
+        if top:
+            self.queue = items + self.queue
+        elif bottom:
+            self.queue.extend(items)
+        self._save_queue_permanent()
+        self._refresh_queue_list()
+        # Reselect moved
+        self.queue_list.clearSelection()
+        if top:
+            tgt_rows = list(range(len(items)))
+        elif bottom:
+            base = len(self.queue) - len(items)
+            tgt_rows = list(range(base, base + len(items)))
+        else:
+            tgt_rows = []
+        for r in tgt_rows:
+            it = self.queue_list.item(r)
+            it.setSelected(True)
+
+    def _bulk_clear_completed(self):
+        before = len(self.queue)
+        keep = []
+        for it in self.queue:
+            if it.get("status") == "Completed":
+                try:
+                    p = self._thumb_path_for_item(it)
+                    if p.exists():
+                        p.unlink()
+                except Exception:
+                    pass
+            else:
+                keep.append(it)
+        self.queue = keep
+        if len(self.queue) != before:
+            self._save_queue_permanent()
+            self._refresh_queue_list()
+            self._update_button_states()
+            self._update_global_progress_bar()
+
+    # ---------- Settings, dialogs, and helpers ----------
+
+    def _refresh_format_box(self):
+        # Safely rebuild resolutions combo in case settings changed
+        current = self.format_box.currentText() if self.format_box.count() else None
+        self.format_box.blockSignals(True)
+        self.format_box.clear()
+        for k in self.settings.RESOLUTIONS.keys():
+            self.format_box.addItem(k)
+        # try restore previous selection
+        if current and current in self.settings.RESOLUTIONS:
+            self.format_box.setCurrentText(current)
+        elif self.format_box.count():
+            self.format_box.setCurrentIndex(0)
+        self.format_box.blockSignals(False)
+
+    def _apply_settings_dict(self, cfg: Dict[str, Any]):
+        # Apply keys from dialog dict onto settings if they exist
+        for k, v in (cfg or {}).items():
+            if hasattr(self.settings, k):
+                try:
+                    setattr(self.settings, k, v)
+                except Exception:
+                    pass
+
+    def _persist_settings(self):
+        # Support both new and old settings APIs
+        if hasattr(self.settings, "save") and callable(getattr(self.settings, "save")):
             try:
-                import json
-                with open(path, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if not isinstance(loaded, list):
-                    raise ValueError("Invalid queue file format.")
-                self.queue = loaded
-                self._refresh_queue_list()
-                self._update_button_states()
-                self.log(f"📂 Queue loaded from {path}\n", AppStyles.SUCCESS_COLOR)
-            except Exception as e:
-                self.log(f"❌ Failed to load queue: {e}\n", AppStyles.ERROR_COLOR)
-
-    def _set_download_path(self):
-        path_str = QFileDialog.getExistingDirectory(self, "Select Download Folder", str(self.settings.DOWNLOADS_DIR))
-        if path_str:
-            self.settings.set_download_path(Path(path_str))
-            self.log(f"📥 Download folder set to: {path_str}\n", AppStyles.INFO_COLOR)
-
-    def _set_cookies_path(self):
-        path_str, _ = QFileDialog.getOpenFileName(self, "Select Cookies File", str(self.settings.BASE_DIR), "Text Files (*.txt);;All Files (*)")
-        if path_str:
-            self.settings.COOKIES_PATH = Path(path_str)
-            self.settings.save_config()
-            self.log(f"🍪 Cookies path set to: {path_str}\n", AppStyles.INFO_COLOR)
-
-    def _set_post_queue_action(self, action: str):
-        self.post_queue_action = action
-        self.log(f"⚙️ Post-queue action set to: {action}\n", AppStyles.INFO_COLOR)
+                self.settings.save()
+                return
+            except Exception:
+                pass
+        if hasattr(self.settings, "save_config") and callable(getattr(self.settings, "save_config")):
+            try:
+                self.settings.save_config()
+            except Exception:
+                pass
 
     def _show_preferences(self):
-        dlg = PreferencesDialog(self, self.settings)
-        if dlg.exec():
-            new = dlg.get_settings()
-            self.settings.PROXY_URL = new["PROXY_URL"]
-            self.settings.COOKIES_PATH = new["COOKIES_PATH"]
-            self.settings.COOKIES_FROM_BROWSER = new["COOKIES_FROM_BROWSER"]
-            self.settings.SPONSORBLOCK_CATEGORIES = new["SPONSORBLOCK_CATEGORIES"]
-            self.settings.CHAPTERS_MODE = new["CHAPTERS_MODE"]
-            self.settings.WRITE_SUBS = new["WRITE_SUBS"]
-            self.settings.SUB_LANGS = new["SUB_LANGS"]
-            self.settings.WRITE_AUTO_SUBS = new["WRITE_AUTO_SUBS"]
-            self.settings.CONVERT_SUBS_TO_SRT = new["CONVERT_SUBS_TO_SRT"]
-            self.settings.ENABLE_ARCHIVE = new["ENABLE_ARCHIVE"]
-            self.settings.ARCHIVE_PATH = new["ARCHIVE_PATH"]
-            self.settings.PLAYLIST_REVERSE = new["PLAYLIST_REVERSE"]
-            self.settings.PLAYLIST_ITEMS = new["PLAYLIST_ITEMS"]
-            self.settings.AUDIO_NORMALIZE = new["AUDIO_NORMALIZE"]
-            self.settings.ADD_METADATA = new["ADD_METADATA"]
-            self.settings.CROP_AUDIO_COVERS = new["CROP_AUDIO_COVERS"]
-            self.settings.CUSTOM_FFMPEG_ARGS = new["CUSTOM_FFMPEG_ARGS"]
-            self.settings.ORGANIZE_BY_UPLOADER = new["ORGANIZE_BY_UPLOADER"]
-            self.settings.DATEAFTER = new["DATEAFTER"]
-            self.settings.LIVE_FROM_START = new["LIVE_FROM_START"]
-            self.settings.YT_MUSIC_METADATA = new["YT_MUSIC_METADATA"]
-            self.settings.LIMIT_RATE = new["LIMIT_RATE"]
-            self.settings.RETRIES = new["RETRIES"]
-            self.settings.save_config()
-            self.log("⚙️ Settings Updated and Saved.\n", AppStyles.INFO_COLOR)
-            self._log_startup()
+        try:
+            dlg = PreferencesDialog(self, self.settings)  # parent first
+            if dlg.exec():
+                # 1) If dialog exposes apply(), use it (preferred modern flow)
+                if hasattr(dlg, "apply") and callable(getattr(dlg, "apply")):
+                    try:
+                        dlg.apply()
+                    except Exception:
+                        pass
+                # 2) Else, if dialog exposes get_settings(), merge into AppSettings
+                elif hasattr(dlg, "get_settings") and callable(getattr(dlg, "get_settings")):
+                    try:
+                        new_cfg = dlg.get_settings()
+                        self._apply_settings_dict(new_cfg)
+                    except Exception:
+                        pass
+                # 3) Else assume dialog mutated self.settings directly
+
+                # Persist and refresh UI
+                self._persist_settings()
+                self.download_path_btn.setText(str(self.settings.DOWNLOADS_DIR))
+                self._refresh_format_box()
+                self.log("✅ Preferences saved.\n", AppStyles.SUCCESS_COLOR, "Info")
+
+                # Re-log toggles so user sees active config
+                self._log_startup()
+        except Exception as e:
+            QMessageBox.warning(self, "Preferences", f"Couldn't open Preferences:\n{e}")
 
     def _show_advanced_options(self):
-        dlg = AdvancedOptionsDialog(self, self.settings)
-        if dlg.exec():
-            o = dlg.get_options()
-            self.settings.CLIP_START = o["CLIP_START"]
-            self.settings.CLIP_END = o["CLIP_END"]
-            self.settings.PLAYLIST_ITEMS = o["PLAYLIST_ITEMS"]
-            self.settings.PLAYLIST_REVERSE = o["PLAYLIST_REVERSE"]
-            self.settings.save_config()
-            self.log("⚙️ Advanced Options Updated.\n", AppStyles.INFO_COLOR)
-            if self.settings.CLIP_START and self.settings.CLIP_END:
-                self.log(f"⏱️ Clip Extraction Set: {self.settings.CLIP_START}-{self.settings.CLIP_END}\n", AppStyles.INFO_COLOR)
-            if self.settings.PLAYLIST_ITEMS:
-                self.log(f"🎬 Playlist Items Set: {self.settings.PLAYLIST_ITEMS}\n", AppStyles.INFO_COLOR)
-            if self.settings.PLAYLIST_REVERSE:
-                self.log("↩️ Playlist Reverse Order Enabled.\n", AppStyles.INFO_COLOR)
+        try:
+            dlg = AdvancedOptionsDialog(self, self.settings)  # parent first
+            if dlg.exec():
+                # Similar compatibility handling
+                if hasattr(dlg, "apply") and callable(getattr(dlg, "apply")):
+                    try:
+                        dlg.apply()
+                    except Exception:
+                        pass
+                elif hasattr(dlg, "get_options") and callable(getattr(dlg, "get_options")):
+                    try:
+                        o = dlg.get_options()
+                        self._apply_settings_dict(o)
+                    except Exception:
+                        pass
+                # Persist and reflect
+                self._persist_settings()
+                self.log("✅ Advanced options applied.\n", AppStyles.SUCCESS_COLOR, "Info")
+                # Re-log a few fields that commonly change
+                if self.settings.CLIP_START and self.settings.CLIP_END:
+                    self.log(f"⏱️ Clip: {self.settings.CLIP_START}-{self.settings.CLIP_END}\n", AppStyles.INFO_COLOR, "Info")
+                if getattr(self.settings, "PLAYLIST_ITEMS", ""):
+                    self.log(f"🎬 Playlist Items: {self.settings.PLAYLIST_ITEMS}\n", AppStyles.INFO_COLOR, "Info")
+                if getattr(self.settings, "PLAYLIST_REVERSE", False):
+                    self.log("↩️ Playlist Reverse: On\n", AppStyles.INFO_COLOR, "Info")
+        except Exception as e:
+            QMessageBox.warning(self, "Advanced Options", f"Couldn't open Advanced Options:\n{e}")
+
+    def _show_about(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("About")
+
+        text = (
+            f"<h2>{self.settings.APP_NAME} {self.settings.VERSION}</h2>"
+            "A Simple Yet Powerful GUI For yt-dlp.\n\n"
+        )
+        box.setText(text)
+
+        if self._app_icon:
+            box.setIconPixmap(self._app_icon.pixmap(64, 64))  # show .ico in dialog
+        else:
+            box.setIcon(QMessageBox.Information)
+
+        box.setStandardButtons(QMessageBox.Ok)
+        box.exec()
 
     def _check_for_updates(self):
         self.log("🌐 Checking for Updates...\n", AppStyles.INFO_COLOR)
@@ -608,70 +1638,170 @@ class MainWindow(QMainWindow):
         except requests.RequestException as e:
             QMessageBox.warning(self, "Update Check Failed", f"Could Not Check For Updates: {e}")
 
-    def _show_about(self):
-        QMessageBox.about(self, "About YTGet",
-                          f"<h2>{self.settings.APP_NAME} {self.settings.VERSION}</h2>"
-                          "<p>A Simple Yet Powerful GUI For yt-dlp.</p>"
-                          "<p>Built with Python and PySide6.</p>"
-                          f"<p><a href='{self.settings.GITHUB_URL}'>Visit on GitHub</a></p>")
+    def _set_download_path(self):
+        path = QFileDialog.getExistingDirectory(self, "Select Download Folder", str(self.settings.DOWNLOADS_DIR))
+        if path:
+            try:
+                self.settings.DOWNLOADS_DIR = Path(path)
+                self.download_path_btn.setText(str(self.settings.DOWNLOADS_DIR))
+                self.log(f"📂 Download folder set to: {path}\n", AppStyles.INFO_COLOR, "Info")
+            finally:
+                self._persist_settings()
+
+    def _set_cookies_path(self):
+        file, _ = QFileDialog.getOpenFileName(self, "Select Cookies File", str(self.settings.BASE_DIR), "Cookies (*.txt *.json);;All Files (*)")
+        if file:
+            self.settings.COOKIES_PATH = Path(file)
+            self.log(f"🍪 Cookies file set to: {file}\n", AppStyles.INFO_COLOR, "Info")
+            self._persist_settings()
+
+    def _set_post_queue_action(self, value: str):
+        self.post_queue_action = value
+        self.post_action.setCurrentText(value)
+
+        # Sync the ComboBox
+        if self.post_action.currentText() != value:
+            self.post_action.setCurrentText(value)
+
+        # Sync the menu actions
+        for k, act in self.post_actions_map.items():
+            act.setChecked(k == value)
+
+    def _update_button_states(self):
+        has_items = len(self.queue) > 0
+        self.btn_start_queue.setEnabled(has_items and (self.queue_paused or not self.is_downloading))
+        self.btn_pause_queue.setEnabled(self.is_downloading and not self.queue_paused)
+        self.btn_skip.setEnabled(self.is_downloading)
+
+    # ---------- Persistent queue (auto-save to queue.json) ----------
+
+    def _save_queue_permanent(self):
+        try:
+            self.queue_file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.queue_file_path, "w", encoding="utf-8") as f:
+                json.dump(self.queue, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            self.log(f"❌ Failed to save queue.json: {e}\n", AppStyles.ERROR_COLOR, "Error")
+
+    def _load_permanent_queue(self):
+        try:
+            if self.queue_file_path.exists():
+                with open(self.queue_file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        cleaned = []
+                        for it in data:
+                            if not isinstance(it, dict):
+                                continue
+                            cleaned.append({
+                                "url": it.get("url", ""),
+                                "title": it.get("title", ""),
+                                "format_code": it.get("format_code", self.settings.RESOLUTIONS.get(self.format_box.currentText(), "")),
+                                "status": it.get("status", "Pending"),
+                                "progress": 0,
+                                "video_id": it.get("video_id", ""),
+                                "thumbnail_url": it.get("thumbnail_url", ""),
+                                "thumb_path": it.get("thumb_path", ""),
+                                "is_playlist": bool(it.get("is_playlist", False)),
+                            })
+                        self.queue = cleaned
+                    else:
+                        self.queue = []
+            else:
+                self.queue = []
+                # Create an empty file to make it "permanent"
+                self._save_queue_permanent()
+
+            self._refresh_queue_list()
+            # Re-ensure thumbnails for items loaded from disk
+            for it in self.queue:
+                # If thumb_path missing or file gone, try again
+                tp = it.get("thumb_path")
+                if not tp or not Path(tp).exists():
+                    self._ensure_thumbnail(it)
+
+            self._update_button_states()
+            self._update_global_progress_bar()
+        except Exception as e:
+            self.queue = []
+            self.log(f"❌ Failed to load queue.json: {e}\n", AppStyles.ERROR_COLOR, "Error")
+
+    def _save_queue_to_disk(self):
+        file, _ = QFileDialog.getSaveFileName(self, "Save Queue As", str(self.queue_file_path), "JSON (*.json)")
+        if not file:
+            return
+        try:
+            with open(file, "w", encoding="utf-8") as f:
+                json.dump(self.queue, f, indent=2, ensure_ascii=False)
+            self.log(f"💾 Queue saved to {file}\n", AppStyles.SUCCESS_COLOR, "Info")
+        except Exception as e:
+            self.log(f"❌ Couldn't save queue: {e}\n", AppStyles.ERROR_COLOR, "Error")
+
+    def _load_queue_from_disk(self):
+        file, _ = QFileDialog.getOpenFileName(self, "Load Queue", str(self.queue_file_path.parent), "JSON (*.json)")
+        if not file:
+            return
+        try:
+            with open(file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    self.queue = data
+                    self._save_queue_permanent()
+                    self._refresh_queue_list()
+                    # Re-ensure thumbs
+                    for it in self.queue:
+                        tp = it.get("thumb_path")
+                        if not tp or not Path(tp).exists():
+                            self._ensure_thumbnail(it)
+                    self._update_button_states()
+                    self._update_global_progress_bar()
+                    self.log(f"📥 Queue loaded from {file}\n", AppStyles.SUCCESS_COLOR, "Info")
+                else:
+                    raise ValueError("Invalid queue file format.")
+        except Exception as e:
+            self.log(f"❌ Couldn't load queue: {e}\n", AppStyles.ERROR_COLOR, "Error")
 
     # ---------- Window state ----------
 
     def _restore_window(self):
-        qs = QSettings("YTGet", "YTGet")
-        geom = qs.value("geometry")
-        state = qs.value("windowState")
-        if geom:
-            self.restoreGeometry(geom)
+        settings = QSettings(self.settings.APP_NAME, self.settings.APP_NAME)
+        geo = settings.value("main/geometry")
+        state = settings.value("main/windowState")
+        if geo:
+            self.restoreGeometry(geo)
         if state:
             self.restoreState(state)
-
-    def _save_window(self):
-        qs = QSettings("YTGet", "YTGet")
-        qs.setValue("geometry", self.saveGeometry())
-        qs.setValue("windowState", self.saveState())
+        sizes = settings.value("main/splitSizes")
+        if sizes:
+            try:
+                self.main_split.setSizes([int(s) for s in sizes])
+            except Exception:
+                pass
 
     def closeEvent(self, event):
-        # Stop threads
+        # Save window state and queue
+        settings = QSettings(self.settings.APP_NAME, self.settings.APP_NAME)
+        settings.setValue("main/geometry", self.saveGeometry())
+        settings.setValue("main/windowState", self.saveState())
+        settings.setValue("main/splitSizes", self.main_split.sizes())
         try:
-            if self.download_thread and self.download_thread.isRunning():
-                if self.download_worker:
-                    self.download_worker.cancel()
-                self.download_thread.quit()
-                self.download_thread.wait()
-        except RuntimeError:
+            settings.sync()
+        except Exception:
             pass
 
+        # Persist queue one last time
+        self._save_queue_permanent()
+
+        # Cancel any workers gracefully
+        try:
+            if self.download_worker:
+                self.download_worker.cancel()
+        except Exception:
+            pass
         try:
             if self.title_fetch_thread and self.title_fetch_thread.isRunning():
                 self.title_fetch_thread.quit()
-                self.title_fetch_thread.wait()
-        except RuntimeError:
+        except Exception:
             pass
 
-        try:
-            if self.cover_thread and self.cover_thread.isRunning():
-                self.cover_thread.quit()
-                self.cover_thread.wait()
-        except RuntimeError:
-            pass
-
-        # Ask to save queue if not empty
-        if self.queue:
-            reply = QMessageBox.question(
-                self, "Exit Confirmation",
-                "You have Items in your Queue. Do you Want to Save the Queue Before Exiting?",
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
-            )
-            if reply == QMessageBox.Save:
-                self._save_queue_to_disk()
-                self._save_window()
-                event.accept()
-            elif reply == QMessageBox.Discard:
-                self._save_window()
-                event.accept()
-            else:
-                event.ignore()
-        else:
-            self._save_window()
-            event.accept()
+        super().closeEvent(event)
