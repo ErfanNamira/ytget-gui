@@ -58,6 +58,7 @@ class TitleFetcher(QObject):
                 "--skip-download",
                 "--print-json",
                 "--ignore-errors",
+                "--flat-playlist",
                 self.url,
             ]
 
