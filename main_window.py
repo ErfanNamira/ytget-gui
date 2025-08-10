@@ -19,7 +19,7 @@ from PySide6.QtGui import (
     QTextCursor,
     QColor,
     QFont,
-    QPixmap,  # added
+    QPixmap,
 )
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -1805,3 +1805,4 @@ class MainWindow(QMainWindow):
             pass
 
         super().closeEvent(event)
+
