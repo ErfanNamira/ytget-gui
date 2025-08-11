@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from PySide6.QtCore import Qt, QThread, QTimer, QSettings, QSize
+from PySide6.QtCore import Qt, QThread, QTimer, QSettings, QSize, Signal, Slot
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -46,10 +46,10 @@ from ytget.styles import AppStyles
 from ytget.utils.validators import is_youtube_url
 from ytget.dialogs.preferences import PreferencesDialog
 from ytget.dialogs.advanced import AdvancedOptionsDialog
-from ytget.workers.title_fetcher import TitleFetcher
 from ytget.workers.download_worker import DownloadWorker
 from ytget.workers.cover_crop_worker import CoverCropWorker
 from ytget.widgets.queue_card import QueueCard
+from ytget.workers.title_fetch_manager import TitleFetchQueue
 
 
 def short(text: str, n: int = 35) -> str:
@@ -310,6 +310,10 @@ QScrollBar::handle:hover { background: #36436A; }
 
 
 class MainWindow(QMainWindow):
+    # Signals to marshal work into the title-fetch worker thread
+    enqueue_title = Signal(str)
+    enqueue_titles = Signal(list)
+
     def __init__(self):
         super().__init__()
         self.settings = AppSettings()
@@ -332,10 +336,12 @@ class MainWindow(QMainWindow):
         # Threads
         self.download_thread: Optional[QThread] = None
         self.download_worker: Optional[DownloadWorker] = None
-        self.title_fetch_thread: Optional[QThread] = None
-        self.title_fetcher: Optional[TitleFetcher] = None
         self.cover_thread: Optional[QThread] = None
         self.cover_worker: Optional[CoverCropWorker] = None
+
+        # Title fetch queue manager (single worker thread)
+        self.title_queue_thread: Optional[QThread] = None
+        self.title_queue: Optional[TitleFetchQueue] = None
 
         # Logging store for filter
         self._log_entries: List[Tuple[str, str, str]] = []  # (text, color, level)
@@ -373,6 +379,10 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_connections()
         self._setup_menu()
+
+        # Start the title-fetch worker thread
+        self._setup_title_fetch_queue()
+
         self._load_permanent_queue()
         self._restore_window()
         self._log_startup()
@@ -757,6 +767,23 @@ class MainWindow(QMainWindow):
         m_help.addAction("Open Download Folder", lambda: webbrowser.open(self.settings.DOWNLOADS_DIR.as_uri()))
         m_help.addAction("About", self._show_about)
 
+    def _setup_title_fetch_queue(self):
+        # Create a single worker thread that serializes title fetches
+        self.title_queue_thread = QThread(self)
+        self.title_queue = TitleFetchQueue(self.settings)
+        self.title_queue.moveToThread(self.title_queue_thread)
+
+        # Inputs into worker (queued)
+        self.enqueue_title.connect(self.title_queue.enqueue, Qt.QueuedConnection)
+        self.enqueue_titles.connect(self.title_queue.enqueue_many, Qt.QueuedConnection)
+
+        # Results to UI (run in GUI thread)
+        self.title_queue.metadata_fetched.connect(self._on_metadata_fetched)
+        self.title_queue.error.connect(self._on_title_error)
+        self.title_queue.started_one.connect(self._on_title_started)
+
+        self.title_queue_thread.start()
+
     # ---------- Startup / Logging with filter ----------
 
     def _log_startup(self):
@@ -796,8 +823,8 @@ class MainWindow(QMainWindow):
         if self.settings.CROP_AUDIO_COVERS:
             self.log("🖼️ Will Crop Audio Covers to 1:1 After Queue.\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.CLIP_START and self.settings.CLIP_END:
-            self.log(f"⏱️ Clip: {self.settings.CLIP_START}-{self.settings.CLIP_END}\n", AppStyles.INFO_COLOR, "Info")            
-            
+            self.log(f"⏱️ Clip: {self.settings.CLIP_START}-{self.settings.CLIP_END}\n", AppStyles.INFO_COLOR, "Info")
+
     def _copy_console(self):
         QGuiApplication.clipboard().setText(self.log_output.toPlainText())
 
@@ -874,14 +901,17 @@ class MainWindow(QMainWindow):
             urls = [u.toString() for u in event.mimeData().urls()]
         elif event.mimeData().hasText():
             urls = [t for t in event.mimeData().text().split()]
-        added = 0
-        for u in urls:
-            if is_youtube_url(u):
-                self._fetch_title(u)
-                added += 1
-        if added == 0:
+
+        valid = [u for u in urls if is_youtube_url(u)]
+        if valid:
+            for u in valid:
+                self.log(f"🧾 Queued for fetch: {u[:60]}...\n", AppStyles.INFO_COLOR, "Info")
+            if self.title_queue:
+                self.enqueue_titles.emit(valid)  # queued call
+            event.acceptProposedAction()
+        else:
             self.log("⚠️ No valid YouTube URLs detected in drop.\n", AppStyles.WARNING_COLOR, "Warning")
-        event.acceptProposedAction()
+            event.ignore()
 
     # ---------- Queue / Title / Thumbnails ----------
 
@@ -893,45 +923,26 @@ class MainWindow(QMainWindow):
         if not is_youtube_url(url):
             self.log("⚠️ Invalid YouTube URL format.\n", AppStyles.WARNING_COLOR, "Warning")
             return
+
+        # Prevent duplicates already in download queue
+        if any(it.get("url") == url for it in self.queue):
+            self.log("ℹ️ Already in queue.\n", AppStyles.INFO_COLOR, "Info")
+            self.url_input.clear()
+            self.btn_add_inline.setEnabled(False)
+            return
+
         self.url_input.clear()
         self.btn_add_inline.setEnabled(False)
         self._fetch_title(url)
 
     def _fetch_title(self, url: str):
+        # Non-blocking: just enqueue into the dedicated title-fetch worker via queued signal
+        if self.title_queue:
+            self.enqueue_title.emit(url)
+
+    @Slot(str)
+    def _on_title_started(self, url: str):
         self.log(f"🔎 Fetching title for: {url[:60]}...\n", AppStyles.INFO_COLOR, "Info")
-        try:
-            if self.title_fetch_thread and self.title_fetch_thread.isRunning():
-                self.title_fetch_thread.quit()
-                self.title_fetch_thread.wait()
-        except RuntimeError:
-            pass
-
-        self.title_fetch_thread = QThread()
-        self.title_fetcher = TitleFetcher(
-            url=url,
-            yt_dlp_path=self.settings.YT_DLP_PATH,
-            ffmpeg_dir=self.settings.FFMPEG_PATH.parent,
-            cookies_path=self.settings.COOKIES_PATH,
-            proxy_url=self.settings.PROXY_URL,
-        )
-        self.title_fetcher.moveToThread(self.title_fetch_thread)
-        self.title_fetch_thread.started.connect(self.title_fetcher.run)
-
-        # Prefer rich metadata if available
-        if hasattr(self.title_fetcher, "metadata_fetched"):
-            try:
-                self.title_fetcher.metadata_fetched.connect(self._on_metadata_fetched)
-            except Exception:
-                # Fallback to legacy
-                self.title_fetcher.title_fetched.connect(self._on_title_fetched)
-        else:
-            self.title_fetcher.title_fetched.connect(self._on_title_fetched)
-
-        self.title_fetcher.error.connect(self._on_title_error)
-        self.title_fetcher.finished.connect(self.title_fetch_thread.quit)
-        self.title_fetch_thread.finished.connect(self.title_fetcher.deleteLater)
-        self.title_fetch_thread.finished.connect(self.title_fetch_thread.deleteLater)
-        self.title_fetch_thread.start()
 
     def _on_metadata_fetched(self, url: str, title: str, video_id: str, thumb_url: str, is_playlist: bool):
         fmt_text = self.format_box.currentText()
@@ -988,11 +999,11 @@ class MainWindow(QMainWindow):
         if not vid:
             # fallback name derived from URL to still benefit from cache
             key = (it.get("url", "").split("v=")[-1].split("&")[0]) or "unknown"
-            return (self.thumb_cache_dir / f"{key}.jpg")
+            return self.thumb_cache_dir / f"{key}.jpg"
         return self.thumb_cache_dir / f"{vid}.jpg"
 
     def _ensure_thumbnail(self, it: Dict[str, Any]):
-        # Optionally skip playlist thumbs; remove this guard if you want a preview anyway
+        # Optionally skip playlist thumbs
         if it.get("is_playlist"):
             return
 
@@ -1008,7 +1019,6 @@ class MainWindow(QMainWindow):
 
         # Download asynchronously
         try:
-            # Lazy import to avoid hard dependency at module import time
             from ytget.workers.thumb_fetcher import ThumbFetcher
         except Exception as e:
             self.log(f"⚠️ Thumbnail worker missing: {e}\n", AppStyles.WARNING_COLOR, "Warning")
@@ -1022,40 +1032,66 @@ class MainWindow(QMainWindow):
                 it["video_id"] = vid
 
         if not vid and not it.get("thumbnail_url"):
-            return  
+            return
 
         if not hasattr(self, "_thumb_jobs"):
             self._thumb_jobs = {}
 
-        if vid in self._thumb_jobs:
-            return 
+        video_id_key = vid or it.get("video_id", "")
+        if video_id_key in self._thumb_jobs:
+            return
 
         t = QThread()
         worker = ThumbFetcher(
-            vid or it.get("video_id", ""),
+            video_id_key,
             it.get("thumbnail_url", ""),
             dest,
             proxy_url=self.settings.PROXY_URL,
         )
         worker.moveToThread(t)
         t.started.connect(worker.run)
-        worker.finished.connect(lambda video_id, path: self._on_thumb_saved(it, video_id, path))
-        worker.error.connect(lambda video_id, msg: self._on_thumb_error(it, video_id, msg))
+        # Connect without lambdas; match worker signal signature: (video_id: str, path: str) and (video_id: str, msg: str)
+        try:
+            worker.finished.connect(self._on_thumb_saved)  # (video_id, path)
+        except Exception:
+            pass
+        try:
+            worker.error.connect(self._on_thumb_error)  # (video_id, msg)
+        except Exception:
+            pass
         worker.finished.connect(t.quit)
         t.finished.connect(worker.deleteLater)
         t.finished.connect(t.deleteLater)
 
-        self._thumb_jobs[vid or it.get("video_id", "")] = t
+        self._thumb_jobs[video_id_key] = t
         t.start()
 
-    def _on_thumb_saved(self, it: Dict[str, Any], video_id: str, path: str):
+    def _find_item_by_video_id(self, video_id: str) -> Optional[Dict[str, Any]]:
+        if not video_id:
+            return None
+        for it in self.queue:
+            if it.get("video_id") == video_id:
+                return it
+        # Fallback: try URL param match
+        for it in self.queue:
+            url = it.get("url", "")
+            if "v=" in url and url.split("v=")[-1].split("&")[0] == video_id:
+                return it
+        return None
+
+    @Slot(str, str)
+    def _on_thumb_saved(self, video_id: str, path: str):
         if hasattr(self, "_thumb_jobs"):
             self._thumb_jobs.pop(video_id, None)
+        it = self._find_item_by_video_id(video_id)
+        if not it:
+            return
         it["thumb_path"] = path
         self._save_queue_permanent()
         self._update_card_thumbnail(it)
 
-    def _on_thumb_error(self, it: Dict[str, Any], video_id: str, msg: str):
+    @Slot(str, str)
+    def _on_thumb_error(self, video_id: str, msg: str):
         if hasattr(self, "_thumb_jobs"):
             self._thumb_jobs.pop(video_id, None)
         self.log(f"⚠️ Failed to fetch thumbnail ({video_id}): {msg}\n", AppStyles.WARNING_COLOR, "Warning")
@@ -1295,15 +1331,15 @@ class MainWindow(QMainWindow):
         self.queue_empty_state.setVisible(count == 0)
 
         for item in self.queue:
-            lw = QListWidgetItem()
-            lw.setSizeHint(QSize(0, 92))  # card height
-            lw.setData(Qt.UserRole, item)    # store data for search/sort
+            lw_item = QListWidgetItem()
+            lw_item.setSizeHint(QSize(0, 92))  # height of each queue card
+            lw_item.setData(Qt.UserRole, item)  # store the data for filtering/sorting
 
             card = self._make_queue_card_widget(item)
-            self.queue_list.addItem(lw)
-            self.queue_list.setItemWidget(lw, card)
-
-        # Re-apply any active filter
+            self.queue_list.addItem(lw_item)
+            self.queue_list.setItemWidget(lw_item, card)
+    
+        # Apply current filter after rebuilding the list
         self._apply_queue_filter(self.search_box.text())
 
     def _make_queue_card_widget(self, item: Dict[str, Any]) -> QWidget:
@@ -1792,17 +1828,29 @@ class MainWindow(QMainWindow):
         # Persist queue one last time
         self._save_queue_permanent()
 
-        # Cancel any workers gracefully
+        # Cancel download worker gracefully
         try:
             if self.download_worker:
                 self.download_worker.cancel()
         except Exception:
             pass
+
+        # Stop title-fetch queue thread cleanly
         try:
-            if self.title_fetch_thread and self.title_fetch_thread.isRunning():
-                self.title_fetch_thread.quit()
+            if self.title_queue:
+                self.title_queue.stop()
+            if self.title_queue_thread:
+                self.title_queue_thread.quit()
+                self.title_queue_thread.wait(2000)
+        except Exception:
+            pass
+
+        # Stop cover worker if running
+        try:
+            if self.cover_thread and self.cover_thread.isRunning():
+                self.cover_thread.quit()
+                self.cover_thread.wait(2000)
         except Exception:
             pass
 
         super().closeEvent(event)
-
