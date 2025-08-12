@@ -98,6 +98,51 @@ class DownloadWorker(QObject):
         format_code = self.item["format_code"]
         return format_code in ("bestaudio", "playlist_mp3", "youtube_music")
 
+    def _should_force_title(self, is_playlist: bool) -> bool:
+        """
+        Use the prefetched title as a literal filename when:
+        - No cookies are used (neither file nor from-browser), and
+        - This is not a playlist download (single entry).
+        """
+        s = self.settings
+        no_cookie_file = not (s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0)
+        no_browser_cookies = not bool(s.COOKIES_FROM_BROWSER)
+        return (not is_playlist) and no_cookie_file and no_browser_cookies
+
+    def _safe_filename(self, name: str) -> str:
+        """
+        Sanitize a string for use as a filename across platforms without extra deps.
+        """
+        if not name:
+            return "Unknown"
+
+        # Remove control chars
+        name = "".join(ch for ch in name if ord(ch) >= 32)
+
+        # Replace forbidden characters on Windows/macOS/Linux
+        name = re.sub(r'[\\/:*?"<>|]', " ", name)
+
+        # Collapse whitespace and trim
+        name = re.sub(r"\s+", " ", name).strip()
+
+        # Remove trailing dots/spaces (Windows)
+        name = name.rstrip(" .")
+
+        # Avoid reserved Windows names
+        reserved = {
+            "CON", "PRN", "AUX", "NUL",
+            *(f"COM{i}" for i in range(1, 10)),
+            *(f"LPT{i}" for i in range(1, 10)),
+        }
+        if name.upper() in reserved:
+            name = f"{name}_"
+
+        # Limit length to keep path safe
+        if len(name) > 180:
+            name = name[:180].rstrip(" .")
+
+        return name or "Unknown"
+
     def _build_command(self) -> List[str]:
         s = self.settings
         it = self.item
@@ -141,30 +186,32 @@ class DownloadWorker(QObject):
         if s.CLIP_START and s.CLIP_END:
             cmd.extend(["--download-sections", f"*{s.CLIP_START}-{s.CLIP_END}"])
 
-        # Output template
-        fallback_template = "%(artist)s - %(title)s.%(ext)s" if s.YT_MUSIC_METADATA else "%(title)s.%(ext)s"
-
+        # Decide output base directory
+        # Start with downloads dir, optionally add playlist and uploader subdirs
         if is_playlist:
-            template = str(s.DOWNLOADS_DIR / "%(playlist_title)s" / fallback_template)
+            base_dir = Path(s.DOWNLOADS_DIR) / "%(playlist_title)s"
+            if s.ORGANIZE_BY_UPLOADER:
+                base_dir = base_dir / "%(uploader)s"
+        else:
+            base_dir = Path(s.DOWNLOADS_DIR)
+            if s.ORGANIZE_BY_UPLOADER:
+                base_dir = base_dir / "%(uploader)s"
+
+        # Choose filename template
+        fallback_template = "%(artist)s - %(title)s.%(ext)s" if s.YT_MUSIC_METADATA else "%(title)s.%(ext)s"
+        if self._should_force_title(is_playlist):
+            # Force the pre-fetched title as filename for single items without cookies
+            safe_title = self._safe_filename(it.get("title") or "Unknown")
+            filename_template = f"{safe_title}.%(ext)s"
+        else:
+            filename_template = fallback_template
+
+        # Build final -o template
+        template = str(Path(base_dir) / filename_template)
+        if is_playlist:
             cmd.extend(["--yes-playlist", "-o", template])
         else:
-            template = str(s.DOWNLOADS_DIR / fallback_template)
             cmd.extend(["-o", template])
-
-        # Organize by uploader
-        if s.ORGANIZE_BY_UPLOADER:
-            if is_playlist:
-                template = str(Path(s.DOWNLOADS_DIR) / "%(playlist_title)s" / "%(uploader)s" / fallback_template)
-            else:
-                template = str(Path(s.DOWNLOADS_DIR) / "%(uploader)s" / fallback_template)
-            # Replace the value that follows "-o"
-            try:
-                o_index = cmd.index("-o")
-                cmd[o_index + 1] = template
-            except ValueError:
-                if is_playlist and "--yes-playlist" not in cmd:
-                    cmd.append("--yes-playlist")
-                cmd.extend(["-o", template])
 
         # Formats and post-processing
         if is_audio:
@@ -180,8 +227,8 @@ class DownloadWorker(QObject):
             if format_code == "youtube_music" and s.YT_MUSIC_METADATA:
                 cmd.extend([
                     "--parse-metadata", "description:(?s)(?P<meta_comment>.+)",
-                    "--parse-metadata", "%(meta_comment)s:(?P<artist>[^\\n]+)",
-                    "--parse-metadata", "%(meta_comment)s:.+ - (?P<title>[^\\n]+)",
+                    "--parse-metadata", "%(meta_comment)s:(?P<artist>[^\n]+)",
+                    "--parse-metadata", "%(meta_comment)s:.+ - (?P<title>[^\n]+)",
                 ])
             if s.AUDIO_NORMALIZE:
                 cmd.append("--audio-normalize")
@@ -190,7 +237,7 @@ class DownloadWorker(QObject):
             if s.ADD_METADATA:
                 cmd.append("--add-metadata")
 
-        # SponsorBlock
+        # SponsorBlock (skip Shorts to avoid false-positive cut)
         if s.SPONSORBLOCK_CATEGORIES and not self.is_short_video(it["url"]):
             cmd.extend(["--sponsorblock-remove", ",".join(s.SPONSORBLOCK_CATEGORIES)])
             cmd.extend(["--sleep-requests", "1", "--sleep-subtitles", "1"])
