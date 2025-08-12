@@ -18,7 +18,7 @@ from ytget.utils.paths import (
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.4.2"
+    VERSION: str = "2.4.3"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/YTGet"
 
@@ -54,6 +54,7 @@ class AppSettings:
             "🎬 720p (HD)":  "251+247/bestvideo[height<=720]+bestaudio",
             "🎬 480p (SD)":  "251+244/bestvideo[height<=480]+bestaudio",
             "🎵 Single Audio (MP3)": "bestaudio",
+            "🎵 Single Audio (FLAC)": "audio_flac",
             "🎵 Audio Playlist (MP3 – YouTube)": "playlist_mp3",
             "🎵 Audio Playlist (MP3 – YouTube Music)": "youtube_music",
         }
@@ -263,3 +264,4 @@ class AppSettings:
 
         except Exception as e:
             print(f"Error loading config: {e}")
+
