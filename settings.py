@@ -33,11 +33,12 @@ class AppSettings:
     ))
 
     RESOLUTIONS: Dict[str, str] = field(default_factory=lambda: {
-        "🎬 2160p (4K)": "251+313/bestvideo[height<=2160]+bestaudio",
-        "🎬 1440p (QHD)": "251+271/bestvideo[height<=1440]+bestaudio",
-        "🎬 1080p (FHD)": "251+248/bestvideo[height<=1080]+bestaudio",
-        "🎬 720p (HD)": "251+247/bestvideo[height<=720]+bestaudio",
-        "🎬 480p (SD)": "251+244/bestvideo[height<=480]+bestaudio",
+        "🎬 4320p (8K)": "bestvideo[height<=4320][vcodec*=av01]+bestaudio/bestvideo[height<=4320]+bestaudio",
+        "🎬 2160p (4K)": "bestvideo[height<=2160][vcodec*=av01]+bestaudio/bestvideo[height<=2160]+bestaudio",
+        "🎬 1440p (QHD)": "bestvideo[height<=1440][vcodec*=av01]+bestaudio/bestvideo[height<=1440]+bestaudio",
+        "🎬 1080p (FHD)": "bestvideo[height<=1080][vcodec*=av01]+bestaudio/bestvideo[height<=1080]+bestaudio",
+        "🎬 720p (HD)": "bestvideo[height<=720][vcodec*=av01]+bestaudio/bestvideo[height<=720]+bestaudio",
+        "🎬 480p (SD)": "bestvideo[height<=480][vcodec*=av01]+bestaudio/bestvideo[height<=480]+bestaudio",
         "🎵 Single Audio (MP3)": "bestaudio",
         "🎵 Audio Playlist (MP3 – YouTube)": "playlist_mp3",
         "🎵 Audio Playlist (MP3 – YouTube Music)": "youtube_music",
@@ -191,4 +192,5 @@ class AppSettings:
         except Exception as e:
 
             print(f"Error loading config: {e}")
+
 
