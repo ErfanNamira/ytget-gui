@@ -2,15 +2,23 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Pattern
 
-from ytget.utils.paths import get_base_path, executable_name, which_or_path, default_downloads_dir, is_windows
+from ytget.utils.paths import (
+    get_base_path,
+    executable_name,
+    which_or_path,
+    default_downloads_dir,
+    is_windows,
+)
+
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.4.1"
+    VERSION: str = "2.4.2"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/YTGet"
 
@@ -28,21 +36,28 @@ class AppSettings:
     OUTPUT_TEMPLATE: str = field(init=False)
     PLAYLIST_TEMPLATE: str = field(init=False)
 
-    YOUTUBE_URL_PATTERN: Pattern = field(default_factory=lambda: __import__("re").compile(
-        r"^(https?://)?(www\.|m\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/.+", __import__("re").IGNORECASE
-    ))
+    YOUTUBE_URL_PATTERN: Pattern = field(
+        default_factory=lambda: re.compile(
+            r"^(https?://)?(www\.|m\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/.+",
+            re.IGNORECASE,
+        )
+    )
 
-    RESOLUTIONS: Dict[str, str] = field(default_factory=lambda: {
-        "🎬 4320p (8K)": "bestvideo[height<=4320][vcodec*=av01]+bestaudio/bestvideo[height<=4320]+bestaudio",
-        "🎬 2160p (4K)": "bestvideo[height<=2160][vcodec*=av01]+bestaudio/bestvideo[height<=2160]+bestaudio",
-        "🎬 1440p (QHD)": "bestvideo[height<=1440][vcodec*=av01]+bestaudio/bestvideo[height<=1440]+bestaudio",
-        "🎬 1080p (FHD)": "bestvideo[height<=1080][vcodec*=av01]+bestaudio/bestvideo[height<=1080]+bestaudio",
-        "🎬 720p (HD)": "bestvideo[height<=720][vcodec*=av01]+bestaudio/bestvideo[height<=720]+bestaudio",
-        "🎬 480p (SD)": "bestvideo[height<=480][vcodec*=av01]+bestaudio/bestvideo[height<=480]+bestaudio",
-        "🎵 Single Audio (MP3)": "bestaudio",
-        "🎵 Audio Playlist (MP3 – YouTube)": "playlist_mp3",
-        "🎵 Audio Playlist (MP3 – YouTube Music)": "youtube_music",
-    })
+    # VP9-first mappings for non-AV1 fallback, plus 8K.
+    # Each value may also include a graceful generic fallback for robustness.
+    RESOLUTIONS: Dict[str, str] = field(
+        default_factory=lambda: {
+            "🎬 4320p (8K)": "bestvideo[height=4320][vcodec=vp9]+bestaudio/bestvideo[height<=4320]+bestaudio",
+            "🎬 2160p (4K)": "251+313/bestvideo[height<=2160]+bestaudio",
+            "🎬 1440p (QHD)": "251+271/bestvideo[height<=1440]+bestaudio",
+            "🎬 1080p (FHD)": "251+248/bestvideo[height<=1080]+bestaudio",
+            "🎬 720p (HD)":  "251+247/bestvideo[height<=720]+bestaudio",
+            "🎬 480p (SD)":  "251+244/bestvideo[height<=480]+bestaudio",
+            "🎵 Single Audio (MP3)": "bestaudio",
+            "🎵 Audio Playlist (MP3 – YouTube)": "playlist_mp3",
+            "🎵 Audio Playlist (MP3 – YouTube Music)": "youtube_music",
+        }
+    )
 
     PROXY_URL: str = ""
     SPONSORBLOCK_CATEGORIES: List[str] = field(default_factory=list)
@@ -98,7 +113,59 @@ class AppSettings:
         # Load config last to override any defaults
         self.load_config()
 
-    # Persistence
+    # -------- Format selection (AV1 -> VP9 map -> best) --------
+
+    def get_format_for_resolution(self, height: int, audio: str = "bestaudio") -> str:
+        """
+        Build a yt-dlp format string that:
+        1) Prefers AV1 at the target height,
+        2) Falls back to VP9 mapping,
+        3) Falls back to best available at or below that height,
+        4) Finally, generic best as a last resort.
+
+        Uses yt-dlp's slash-separated fallback selection.
+        """
+        label = self._label_for_height(height)
+
+        # 1) AV1-first candidate at exact height
+        av1 = f"bestvideo[height={height}][vcodec=av01]+{audio}"
+
+        # 2) VP9 (or your configured mapping) for that label, if available
+        vp9_map = self.RESOLUTIONS.get(label, "")
+
+        # 3) Generic best at-or-below the requested height
+        best_at_or_below = f"bestvideo[height<={height}]+{audio}"
+
+        # 4) Absolute generic fallbacks
+        generic_best = f"bestvideo+{audio}"
+        ultimate = "best"
+
+        # Build chain and dedupe to avoid repeating segments
+        chain = "/".join([av1, vp9_map, best_at_or_below, generic_best, ultimate])
+        return self._dedupe_format_chain(chain)
+
+    def _label_for_height(self, height: int) -> str:
+        return {
+            4320: "🎬 4320p (8K)",
+            2160: "🎬 2160p (4K)",
+            1440: "🎬 1440p (QHD)",
+            1080: "🎬 1080p (FHD)",
+            720:  "🎬 720p (HD)",
+            480:  "🎬 480p (SD)",
+        }.get(height, f"🎬 {height}p")
+
+    def _dedupe_format_chain(self, chain: str) -> str:
+        """Remove duplicate segments while preserving order."""
+        seen = set()
+        parts: List[str] = []
+        for seg in (s.strip() for s in chain.split("/") if s.strip()):
+            if seg not in seen:
+                parts.append(seg)
+                seen.add(seg)
+        return "/".join(parts)
+
+    # ---------------------- Persistence ----------------------
+
     def set_download_path(self, path: Path):
         self.DOWNLOADS_DIR = path.resolve()
         self.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -183,14 +250,16 @@ class AppSettings:
             p = config.get("FFPROBE_PATH")
             c = config.get("COOKIES_PATH")
             a = config.get("ARCHIVE_PATH")
-            if y: self.YT_DLP_PATH = Path(y)
-            if f: self.FFMPEG_PATH = Path(f)
-            if p: self.FFPROBE_PATH = Path(p)
-            if c: self.COOKIES_PATH = Path(c)
-            if a: self.ARCHIVE_PATH = Path(a)
+            if y:
+                self.YT_DLP_PATH = Path(y)
+            if f:
+                self.FFMPEG_PATH = Path(f)
+            if p:
+                self.FFPROBE_PATH = Path(p)
+            if c:
+                self.COOKIES_PATH = Path(c)
+            if a:
+                self.ARCHIVE_PATH = Path(a)
 
         except Exception as e:
-
             print(f"Error loading config: {e}")
-
-
