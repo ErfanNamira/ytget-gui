@@ -96,7 +96,7 @@ class DownloadWorker(QObject):
 
     def _is_audio_download(self) -> bool:
         format_code = self.item["format_code"]
-        return format_code in ("bestaudio", "playlist_mp3", "youtube_music")
+        return format_code in ("bestaudio", "playlist_mp3", "youtube_music", "audio_flac")
 
     def _should_force_title(self, is_playlist: bool) -> bool:
         """
@@ -158,6 +158,7 @@ class DownloadWorker(QObject):
         format_code = it["format_code"]
         is_playlist = "list=" in it["url"] or format_code in ("playlist_mp3", "youtube_music")
         is_audio = self._is_audio_download()
+        is_flac = (format_code == "audio_flac")
 
         # Auth/network
         if s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0:
@@ -218,20 +219,26 @@ class DownloadWorker(QObject):
             cmd.extend([
                 "-f", "bestaudio",
                 "--extract-audio",
-                "--audio-format", "mp3",
-                "--audio-quality", "0",
+                "--audio-format", "flac" if is_flac else "mp3",
                 "--embed-thumbnail",
             ])
             if s.ADD_METADATA:
                 cmd.append("--add-metadata")
+
+            # Only for MP3: keep highest VBR quality
+            if not is_flac:
+                cmd.extend(["--audio-quality", "0"])
+
+            # Only for FLAC: set high compression (level 8)
+            if is_flac:
+                cmd.extend(["--postprocessor-args", "ffmpeg:-compression_level 12 -sample_fmt s16"])
+
             if format_code == "youtube_music" and s.YT_MUSIC_METADATA:
                 cmd.extend([
                     "--parse-metadata", "description:(?s)(?P<meta_comment>.+)",
-                    "--parse-metadata", "%(meta_comment)s:(?P<artist>[^\n]+)",
-                    "--parse-metadata", "%(meta_comment)s:.+ - (?P<title>[^\n]+)",
+                    "--parse-metadata", "%(meta_comment)s:(?P<artist>[^\\n]+)",
+                    "--parse-metadata", "%(meta_comment)s:.+ - (?P<title>[^\\n]+)",
                 ])
-            if s.AUDIO_NORMALIZE:
-                cmd.append("--audio-normalize")
         else:
             cmd.extend(["-f", format_code, "--merge-output-format", "mkv"])
             if s.ADD_METADATA:
