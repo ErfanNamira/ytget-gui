@@ -20,7 +20,7 @@
 - 🔒 **Offline Capable** — No need for Python or external installations
 
 ### 📥 Download Options
-- 📹 **Multiple Formats** — Download in resolutions from 480p to 4K
+- 📹 **Multiple Formats** — Download in resolutions from 480p to 8K
 - 🎵 **MP3 Mode** — High-quality audio extraction with embedded thumbnails and metadata
 - 📄 **Subtitles** — Auto-fetch subtitles (multiple languages supported)
 - 📂 **Playlist Support** — Download entire playlists in audio or video mode
