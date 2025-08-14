@@ -251,17 +251,23 @@ class AppSettings:
             p = config.get("FFPROBE_PATH")
             c = config.get("COOKIES_PATH")
             a = config.get("ARCHIVE_PATH")
-            if y:
+
+            if y and Path(y).exists():
                 self.YT_DLP_PATH = Path(y)
-            if f:
+
+            if f and Path(f).exists():
                 self.FFMPEG_PATH = Path(f)
-            if p:
+
+            if p and Path(p).exists():
                 self.FFPROBE_PATH = Path(p)
-            if c:
+
+            if c and Path(c).exists():
                 self.COOKIES_PATH = Path(c)
-            if a:
+
+            if a and Path(a).exists():
                 self.ARCHIVE_PATH = Path(a)
 
         except Exception as e:
             print(f"Error loading config: {e}")
+
 
