@@ -1,9 +1,7 @@
-# File: ytget/workers/download_worker.py
-
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-from PySide6.QtCore import QObject, Signal, QProcess
+from PySide6.QtCore import QObject, Signal, QProcess, QTimer
 import os
 import re
 from pathlib import Path
@@ -24,17 +22,27 @@ class DownloadWorker(QObject):
     finished = Signal(int)
     error = Signal(str)
 
-    def __init__(self, item: Dict[str, Any], settings: AppSettings):
+    def __init__(self, item: Dict[str, Any], settings: AppSettings, log_flush_ms: int = 500):
         super().__init__()
         self.item = item
         self.settings = settings
         self.process: Optional[QProcess] = None
         self._cancel_requested = False
 
+        # --- Optimisation: log batching ---
+        self._log_buffer: list[tuple[str, str]] = []
+        self._log_timer = QTimer(self)
+        self._log_timer.setInterval(log_flush_ms)
+        self._log_timer.timeout.connect(self._flush_logs)
+        self._log_timer.start()
+
+        # --- Precompile error detection regex ---
+        self._error_regex = re.compile(r"error", re.IGNORECASE)
+
     def run(self):
         try:
             cmd = self._build_command()
-            self.log.emit(f"🚀 Starting download for: {self._short(self.item['title'])}\n", AppStyles.INFO_COLOR)
+            self._add_log(f"🚀 Starting download for: {self._short(self.item['title'])}\n", AppStyles.INFO_COLOR)
             self.process = QProcess()
             self.process.setProcessChannelMode(QProcess.MergedChannels)
             self.process.readyReadStandardOutput.connect(self._on_read)
@@ -51,7 +59,7 @@ class DownloadWorker(QObject):
     def cancel(self):
         self._cancel_requested = True
         if self.process and self.process.state() == QProcess.Running:
-            self.log.emit("⏹️ Cancelling download...\n", AppStyles.WARNING_COLOR)
+            self._add_log("⏹️ Cancelling download...\n", AppStyles.WARNING_COLOR)
             self.process.terminate()
             if not self.process.waitForFinished(3000):
                 self.process.kill()
@@ -60,32 +68,35 @@ class DownloadWorker(QObject):
         if not self.process:
             return
         text = self.process.readAllStandardOutput().data().decode(errors="ignore")
-        color = AppStyles.ERROR_COLOR if "error" in text.lower() else AppStyles.TEXT_COLOR
-        self.log.emit(text, color)
+        color = AppStyles.ERROR_COLOR if self._error_regex.search(text) else AppStyles.TEXT_COLOR
+        self._add_log(text, color)
 
     def _on_error(self, _code):
-        self.log.emit("❌ yt-dlp encountered an error.\n", AppStyles.ERROR_COLOR)
+        self._add_log("❌ yt-dlp encountered an error.\n", AppStyles.ERROR_COLOR)
 
     def _on_finished(self, exit_code: int, _status):
         if self._cancel_requested:
-            self.log.emit("⏹️ Download cancelled by user.\n", AppStyles.WARNING_COLOR)
+            self._add_log("⏹️ Download cancelled by user.\n", AppStyles.WARNING_COLOR)
             self.finished.emit(-1)
         elif exit_code == 0:
-            self.log.emit("✅ Download finished successfully.\n", AppStyles.SUCCESS_COLOR)
+            self._add_log("✅ Download finished successfully.\n", AppStyles.SUCCESS_COLOR)
 
-            # Post-step: clean tags from audio filenames
-            try:
-                if self._is_audio_download():
-                    cleaned = self._clean_music_video_tags()
-                    if cleaned > 0:
-                        self.log.emit(f"✨ Cleaned {cleaned} filename(s).\n", AppStyles.SUCCESS_COLOR)
-            except Exception as e:
-                self.log.emit(f"⚠️ Filename cleanup failed: {e}\n", AppStyles.WARNING_COLOR)
+            # Optimisation: defer post-step to let UI queue next item promptly
+            QTimer.singleShot(0, self._post_finish_cleanup)
 
             self.finished.emit(0)
         else:
-            self.log.emit(f"❌ yt-dlp exited with code {exit_code}.\n", AppStyles.ERROR_COLOR)
+            self._add_log(f"❌ yt-dlp exited with code {exit_code}.\n", AppStyles.ERROR_COLOR)
             self.finished.emit(exit_code)
+
+    def _post_finish_cleanup(self):
+        try:
+            if self._is_audio_download():
+                cleaned = self._clean_music_video_tags()
+                if cleaned > 0:
+                    self._add_log(f"✨ Cleaned {cleaned} filename(s).\n", AppStyles.SUCCESS_COLOR)
+        except Exception as e:
+            self._add_log(f"⚠️ Filename cleanup failed: {e}\n", AppStyles.WARNING_COLOR)
 
     def _short(self, title: str) -> str:
         return title[:35] + "..." if len(title) > 35 else title
@@ -99,36 +110,18 @@ class DownloadWorker(QObject):
         return format_code in ("bestaudio", "playlist_mp3", "youtube_music", "audio_flac")
 
     def _should_force_title(self, is_playlist: bool) -> bool:
-        """
-        Use the prefetched title as a literal filename when:
-        - No cookies are used (neither file nor from-browser), and
-        - This is not a playlist download (single entry).
-        """
         s = self.settings
         no_cookie_file = not (s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0)
         no_browser_cookies = not bool(s.COOKIES_FROM_BROWSER)
         return (not is_playlist) and no_cookie_file and no_browser_cookies
 
     def _safe_filename(self, name: str) -> str:
-        """
-        Sanitize a string for use as a filename across platforms without extra deps.
-        """
         if not name:
             return "Unknown"
-
-        # Remove control chars
         name = "".join(ch for ch in name if ord(ch) >= 32)
-
-        # Replace forbidden characters on Windows/macOS/Linux
         name = re.sub(r'[\\/:*?"<>|]', " ", name)
-
-        # Collapse whitespace and trim
         name = re.sub(r"\s+", " ", name).strip()
-
-        # Remove trailing dots/spaces (Windows)
         name = name.rstrip(" .")
-
-        # Avoid reserved Windows names
         reserved = {
             "CON", "PRN", "AUX", "NUL",
             *(f"COM{i}" for i in range(1, 10)),
@@ -136,11 +129,8 @@ class DownloadWorker(QObject):
         }
         if name.upper() in reserved:
             name = f"{name}_"
-
-        # Limit length to keep path safe
         if len(name) > 180:
             name = name[:180].rstrip(" .")
-
         return name or "Unknown"
 
     def _build_command(self) -> List[str]:
@@ -240,7 +230,12 @@ class DownloadWorker(QObject):
                     "--parse-metadata", "%(meta_comment)s:.+ - (?P<title>[^\\n]+)",
                 ])
         else:
-            cmd.extend(["-f", format_code, "--merge-output-format", "mkv"])
+            # Decide container based on preferences
+            preferred = (s.VIDEO_FORMAT.lstrip(".") if getattr(s, "VIDEO_FORMAT", ".mkv") else "mkv").lower()
+            if preferred not in {"mkv", "mp4", "webm"}:
+                preferred = "mkv"
+
+            cmd.extend(["-f", format_code, "--merge-output-format", preferred])
             if s.ADD_METADATA:
                 cmd.append("--add-metadata")
 
@@ -276,10 +271,7 @@ class DownloadWorker(QObject):
         downloads_root: Path = Path(self.settings.DOWNLOADS_DIR)
         if not downloads_root.exists():
             return 0
-
         audio_exts = {".mp3"}
-
-        # Store literal tag texts and escape them for regex
         tag_texts = [
             "(music video)",
             "(official video)",
@@ -313,7 +305,6 @@ class DownloadWorker(QObject):
         ]
         escaped_alts = "|".join(re.escape(t) for t in tag_texts)
         combined_regex = re.compile(r"\s*(?:" + escaped_alts + r")", re.IGNORECASE)
-
         renamed_count = 0
         for root, _dirs, files in os.walk(downloads_root):
             for fname in files:
@@ -322,16 +313,12 @@ class DownloadWorker(QObject):
                     continue
                 if not combined_regex.search(fname):
                     continue
-
                 new_stem = combined_regex.sub("", p.stem)
                 new_stem = re.sub(r"\s{2,}", " ", new_stem).strip(" -_.,")
                 if not new_stem:
-                    # Keep at least original stem if everything was stripped
                     new_stem = p.stem
-
                 new_name = f"{new_stem}{p.suffix}"
                 new_path = p.with_name(new_name)
-
                 if new_path == p:
                     continue
                 if new_path.exists():
@@ -342,12 +329,27 @@ class DownloadWorker(QObject):
                             new_path = candidate
                             break
                         i += 1
-
                 try:
                     p.rename(new_path)
                     renamed_count += 1
-                    self.log.emit(f"🧹 Renamed: {p.name} → {new_path.name}\n", AppStyles.INFO_COLOR)
+                    self._add_log(f"🧹 Renamed: {p.name} → {new_path.name}\n", AppStyles.INFO_COLOR)
                 except Exception as e:
-                    self.log.emit(f"⚠️ Could not rename {p.name}: {e}\n", AppStyles.WARNING_COLOR)
-
+                    self._add_log(f"⚠️ Could not rename {p.name}: {e}\n", AppStyles.WARNING_COLOR)
         return renamed_count
+
+    # --- Optimisation helpers ---
+    def _add_log(self, text: str, color: str):
+        """
+        Collect log entries in a buffer instead of emitting immediately.
+        """
+        self._log_buffer.append((text, color))
+
+    def _flush_logs(self):
+        """
+        Emit any buffered log entries to connected slots.
+        """
+        if not self._log_buffer:
+            return
+        for text, color in self._log_buffer:
+            self.log.emit(text, color)
+        self._log_buffer.clear()
