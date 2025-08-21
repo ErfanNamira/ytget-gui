@@ -645,6 +645,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.crop_covers.setAccessibleName("Crop audio covers to square")
         self.crop_covers.setEnabled(True)
         fl.addWidget(self._form_row("Covers", self.crop_covers, "Crop artwork to a 1:1 aspect ratio"))
+        
+        self.video_format_combo = QtWidgets.QComboBox()
+        self.video_format_combo.setObjectName("combo")
+        self.video_format_combo.addItems([".mkv", ".mp4", ".webm"])
+        self.video_format_combo.setAccessibleName("Preferred video format")
+        fl.addWidget(self._form_row("Video format", self.video_format_combo, "Choose output container"))
 
         self.custom_ffmpeg = self._line_edit(
             placeholder="-c:v libx265 -crf 23",
@@ -1124,6 +1130,7 @@ class PreferencesDialog(QtWidgets.QDialog):
             self.add_metadata,
             self.crop_covers,
             self.custom_ffmpeg,
+            self.video_format_combo,
             # Output
             self.organize_uploader,
             self.date_after,
@@ -1306,6 +1313,10 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.add_metadata.setChecked(bool(getattr(self.settings, "ADD_METADATA", False)))
         self.crop_covers.setChecked(bool(getattr(self.settings, "CROP_AUDIO_COVERS", False)))
         self.custom_ffmpeg.setText(getattr(self.settings, "CUSTOM_FFMPEG_ARGS", "") or "")
+        vf = getattr(self.settings, "VIDEO_FORMAT", ".mkv") or ".mkv"
+        if vf not in (".mkv", ".mp4", ".webm"):
+            vf = ".mkv"
+        self.video_format_combo.setCurrentText(vf)
 
         # Output
         self.organize_uploader.setChecked(bool(getattr(self.settings, "ORGANIZE_BY_UPLOADER", False)))
@@ -1356,6 +1367,10 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.add_metadata.setChecked(bool(data.get("ADD_METADATA", False)))
         self.crop_covers.setChecked(bool(data.get("CROP_AUDIO_COVERS", False)))
         self.custom_ffmpeg.setText(data.get("CUSTOM_FFMPEG_ARGS", ""))
+        vf = data.get("VIDEO_FORMAT", ".mkv") or ".mkv"
+        if vf not in (".mkv", ".mp4", ".webm"):
+            vf = ".mkv"
+        self.video_format_combo.setCurrentText(vf)
 
         # Output
         self.organize_uploader.setChecked(bool(data.get("ORGANIZE_BY_UPLOADER", False)))
@@ -1394,6 +1409,7 @@ class PreferencesDialog(QtWidgets.QDialog):
             "ADD_METADATA": self.add_metadata.isChecked(),
             "CROP_AUDIO_COVERS": self.crop_covers.isChecked(),
             "CUSTOM_FFMPEG_ARGS": self.custom_ffmpeg.text().strip(),
+            "VIDEO_FORMAT": self.video_format_combo.currentText(),
             "ORGANIZE_BY_UPLOADER": self.organize_uploader.isChecked(),
             "DATEAFTER": self.date_after.text().strip(),
             "LIVE_FROM_START": self.live_stream.isChecked(),
