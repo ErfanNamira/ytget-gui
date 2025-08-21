@@ -83,6 +83,7 @@ class AppSettings:
     CLIP_END: str = ""
     CUSTOM_FFMPEG_ARGS: str = ""
     CROP_AUDIO_COVERS: bool = True
+    VIDEO_FORMAT: str = ".mkv"
 
     def __post_init__(self):
         self.INTERNAL_DIR = (self.BASE_DIR / "_internal").resolve()
@@ -199,6 +200,7 @@ class AppSettings:
             "CLIP_END": self.CLIP_END,
             "CUSTOM_FFMPEG_ARGS": self.CUSTOM_FFMPEG_ARGS,
             "CROP_AUDIO_COVERS": self.CROP_AUDIO_COVERS,
+            "VIDEO_FORMAT": self.VIDEO_FORMAT,
             "DOWNLOADS_DIR": str(self.DOWNLOADS_DIR),
             "YT_DLP_PATH": str(self.YT_DLP_PATH),
             "FFMPEG_PATH": str(self.FFMPEG_PATH),
@@ -237,6 +239,7 @@ class AppSettings:
             self.CLIP_END = config.get("CLIP_END", self.CLIP_END)
             self.CUSTOM_FFMPEG_ARGS = config.get("CUSTOM_FFMPEG_ARGS", self.CUSTOM_FFMPEG_ARGS)
             self.CROP_AUDIO_COVERS = config.get("CROP_AUDIO_COVERS", self.CROP_AUDIO_COVERS)
+            self.VIDEO_FORMAT = config.get("VIDEO_FORMAT", self.VIDEO_FORMAT)
 
             # Paths (allow user to override)
             dl_dir = config.get("DOWNLOADS_DIR")
@@ -269,7 +272,3 @@ class AppSettings:
 
         except Exception as e:
             print(f"Error loading config: {e}")
-
-
-
-
