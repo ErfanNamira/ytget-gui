@@ -46,11 +46,11 @@ from ytget.styles import AppStyles
 from ytget.utils.validators import is_youtube_url
 from ytget.dialogs.preferences import PreferencesDialog
 from ytget.dialogs.advanced import AdvancedOptionsDialog
+from ytget.dialogs.update_manager import UpdateManager
 from ytget.workers.download_worker import DownloadWorker
 from ytget.workers.cover_crop_worker import CoverCropWorker
 from ytget.widgets.queue_card import QueueCard
 from ytget.workers.title_fetch_manager import TitleFetchQueue
-
 
 def short(text: str, n: int = 35) -> str:
     return text[:n] + "..." if len(text) > n else text
@@ -1854,3 +1854,4 @@ class MainWindow(QMainWindow):
             pass
 
         super().closeEvent(event)
+
