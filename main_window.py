@@ -826,11 +826,20 @@ class MainWindow(QMainWindow):
         self.log(f"📂 Download Folder: {self.settings.DOWNLOADS_DIR}\n", AppStyles.INFO_COLOR, "Info")
         self.log(f"🔧 Using binaries from: {self.settings.FFMPEG_PATH.parent}\n", AppStyles.INFO_COLOR, "Info")
 
-        if not self.settings.YT_DLP_PATH.exists():
-            self.log("⚠️ yt-dlp not found in app folder or PATH. Download it via Menu Bar → Help → Check yt-dlp Update.\n", AppStyles.WARNING_COLOR, "Warning")
-        if not self.settings.FFMPEG_PATH.exists() or not self.settings.FFPROBE_PATH.exists():
-            self.log("⚠️ ffmpeg/ffprobe not found in app folder or PATH. Download and place it in the _internal directory or install it system-wide.\n", AppStyles.WARNING_COLOR, "Warning")
+		if not self.settings.YT_DLP_PATH.exists():
+			self.log(
+				"⚠️ yt-dlp not found in app folder or PATH. Download it via Menu Bar → Help → Check yt-dlp Update.\n",
+				AppStyles.ERROR_COLOR,
+				"Error"
+			)
 
+		if not self.settings.FFMPEG_PATH.exists() or not self.settings.FFPROBE_PATH.exists():
+			self.log(
+				"⚠️ ffmpeg/ffprobe not found in app folder or PATH. Download and place it in the _internal directory or install it system-wide.\n",
+				AppStyles.ERROR_COLOR,
+				"Error"
+			)
+        
         if self.settings.PROXY_URL:
             self.log(f"🌐 Proxy: {self.settings.PROXY_URL}\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.SPONSORBLOCK_CATEGORIES:
@@ -1920,4 +1929,5 @@ class MainWindow(QMainWindow):
             pass
 
         super().closeEvent(event)
+
 
