@@ -319,6 +319,9 @@ class MainWindow(QMainWindow):
         self.settings = AppSettings()
         self.styles = AppStyles()
 
+        # Update Manager
+        self.updater = UpdateManager(self.settings, log_callback=self.log, parent=self)
+
         # Thumbnail cache folder and async jobs
         self.thumb_cache_dir: Path = self.settings.BASE_DIR / "cache" / "thumbs"
         self.thumb_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -763,7 +766,8 @@ class MainWindow(QMainWindow):
 
         # Help
         m_help = menubar.addMenu("Help")
-        m_help.addAction("Check for Updates", self._check_for_updates)
+        m_help.addAction("Check YTGet Update", self.updater.check_ytget_update)
+        m_help.addAction("Check yt-dlp Update", self.updater.check_ytdlp_update)
         m_help.addAction("Open Download Folder", lambda: webbrowser.open(self.settings.DOWNLOADS_DIR.as_uri()))
         m_help.addAction("About", self._show_about)
 
@@ -1653,27 +1657,6 @@ class MainWindow(QMainWindow):
         box.setStandardButtons(QMessageBox.Ok)
         box.exec()
 
-    def _check_for_updates(self):
-        self.log("🌐 Checking for Updates...\n", AppStyles.INFO_COLOR)
-        try:
-            r = requests.head(f"{self.settings.GITHUB_URL}/releases/latest", allow_redirects=True, timeout=6)
-            r.raise_for_status()
-            latest_tag = r.url.rstrip("/").split("/")[-1].lstrip("v")
-            if latest_tag > self.settings.VERSION:
-                reply = QMessageBox.information(
-                    self, "Update Available",
-                    f"A New Version ({latest_tag}) is Available!\n"
-                    f"You are Using Version {self.settings.VERSION}.\n\n"
-                    "Open the Releases Page?",
-                    QMessageBox.Yes | QMessageBox.No,
-                )
-                if reply == QMessageBox.Yes:
-                    webbrowser.open(f"{self.settings.GITHUB_URL}/releases")
-            else:
-                QMessageBox.information(self, "Up to Date", "You are Using the Latest Version.")
-        except requests.RequestException as e:
-            QMessageBox.warning(self, "Update Check Failed", f"Could Not Check For Updates: {e}")
-
     def _set_download_path(self):
         path = QFileDialog.getExistingDirectory(self, "Select Download Folder", str(self.settings.DOWNLOADS_DIR))
         if path:
@@ -1854,4 +1837,5 @@ class MainWindow(QMainWindow):
             pass
 
         super().closeEvent(event)
+
 
