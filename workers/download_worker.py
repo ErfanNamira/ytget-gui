@@ -189,7 +189,12 @@ class DownloadWorker(QObject):
                 base_dir = base_dir / "%(uploader)s"
 
         # Choose filename template
-        fallback_template = "%(artist)s - %(title)s.%(ext)s" if s.YT_MUSIC_METADATA else "%(title)s.%(ext)s"
+        # Only apply YT_MUSIC_METADATA template for audio or playlists
+        if s.YT_MUSIC_METADATA and (is_audio or is_playlist):
+            fallback_template = "%(artist)s - %(title)s.%(ext)s"
+        else:
+            fallback_template = "%(title)s.%(ext)s"
+
         if self._should_force_title(is_playlist):
             # Force the pre-fetched title as filename for single items without cookies
             safe_title = self._safe_filename(it.get("title") or "Unknown")
