@@ -6,7 +6,6 @@ import sys
 import shutil
 import tempfile
 import subprocess
-import webbrowser  
 from pathlib import Path
 
 import requests
@@ -19,8 +18,8 @@ from ytget.utils.paths import is_windows
 
 class UpdateManager(QObject):
     """
-    Update manager:
-      - Does NOT touch UI (no QMessageBox/webbrowser here)
+    Thread-friendly update manager:
+      - Does NOT touch UI directly (no QMessageBox/webbrowser here)
       - Emits signals so the main thread can show dialogs
     """
 
@@ -44,9 +43,7 @@ class UpdateManager(QObject):
     def __init__(self, settings, log_callback=None, parent=None):
         super().__init__(parent)
         self.settings = settings
-        # Ignore direct GUI logger when running in a worker thread; use signal instead
         self._log_cb = log_callback
-        self.parent = parent
 
         # APIs
         owner_repo = "/".join(self.settings.GITHUB_URL.rstrip("/").split("/")[-2:])
@@ -56,7 +53,10 @@ class UpdateManager(QObject):
         # Optional proxy
         self.session = requests.Session()
         if getattr(self.settings, "PROXY_URL", ""):
-            self.session.proxies.update({"http": self.settings.PROXY_URL, "https": self.settings.PROXY_URL})
+            self.session.proxies.update({
+                "http": self.settings.PROXY_URL,
+                "https": self.settings.PROXY_URL
+            })
 
     # -------- Public entry points --------
 
@@ -94,7 +94,13 @@ class UpdateManager(QObject):
             if not asset:
                 raise ValueError("No suitable yt-dlp binary found for this platform.")
 
-            current_ver = self._get_ytdlp_version(exe_path) if exe_path.exists() else "0.0.0"
+            current_ver = self._get_ytdlp_version(exe_path)
+
+            if not current_ver:
+                # No local yt-dlp at the expected path
+                self.ytdlp_ready.emit(latest, "Not installed", asset["browser_download_url"])
+                return
+
             if version.parse(latest) > version.parse(current_ver):
                 self.ytdlp_ready.emit(latest, current_ver, asset["browser_download_url"])
             else:
@@ -109,7 +115,7 @@ class UpdateManager(QObject):
         try:
             exe_path = Path(self.settings.YT_DLP_PATH)
             self._download_and_replace(url, exe_path, label="yt-dlp")
-            self._log(f"✅ yt-dlp updated successfully.\n", AppStyles.SUCCESS_COLOR, "Info")
+            self._log("✅ yt-dlp updated successfully.\n", AppStyles.SUCCESS_COLOR, "Info")
             self.ytdlp_download_success.emit()
         except Exception as e:
             self.ytdlp_download_failed.emit(str(e))
@@ -117,7 +123,6 @@ class UpdateManager(QObject):
     # -------- Internal helpers (no UI) --------
 
     def _select_ytdlp_asset(self, assets):
-        names = [a.get("name", "") for a in assets]
         if is_windows():
             target_names = ["yt-dlp.exe"]
         elif sys.platform == "darwin":
@@ -131,13 +136,22 @@ class UpdateManager(QObject):
                     return a
         return None
 
-    def _get_ytdlp_version(self, exe_path: Path) -> str:
+    def _get_ytdlp_version(self, exe_path: Path) -> str | None:
+        """
+        Returns the version string if the binary exists and runs successfully.
+        Returns None if not installed or cannot be executed.
+        """
+        if not exe_path.exists():
+            return None
         try:
-            result = subprocess.run([str(exe_path), "--version"], capture_output=True, text=True, timeout=6)
+            result = subprocess.run(
+                [str(exe_path), "--version"],
+                capture_output=True, text=True, timeout=6
+            )
             out = (result.stdout or "").strip()
-            return out if out else "0.0.0"
+            return out if out else None
         except Exception:
-            return "0.0.0"
+            return None
 
     def _download_and_replace(self, url: str, dest_path: Path, label: str):
         self._log(f"⬇️ Downloading latest {label}...\n", AppStyles.INFO_COLOR, "Info")
@@ -168,7 +182,6 @@ class UpdateManager(QObject):
     # -------- Logging helper --------
 
     def _log(self, text: str, color: str, level: str):
-        # Only emit the signal; do not touch UI directly from a worker thread
         try:
             self.log_signal.emit(text, color, level)
         except Exception:
