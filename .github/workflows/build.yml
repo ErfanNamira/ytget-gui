@@ -1,13 +1,15 @@
 name: Build YTGet
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:        
   push:
     tags:
-      - 'v*'
+      - 'v*'                 
+  release:
+    types: [published]       
 
 permissions:
-  contents: write
+  contents: write            
 
 jobs:
   build:
