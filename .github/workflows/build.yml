@@ -4,7 +4,7 @@ on:
   workflow_dispatch:   
   push:
     tags:
-      - 'v*'          
+      - 'v*'           
 
 jobs:
   build:
@@ -73,17 +73,11 @@ jobs:
           --add-data "workers;workers/" `
           "main.py"
 
-    - name: Rename dist folder to YTGet
-      shell: pwsh
-      run: |
-        if (Test-Path YTGet) { Remove-Item -Recurse -Force YTGet }
-        Rename-Item -Path "dist/YTGet" -NewName "YTGet"
-
     - name: Create ZIP with maximum compression
       shell: pwsh
       run: |
         if (Test-Path YTGet.zip) { Remove-Item YTGet.zip }
-        Compress-Archive -Path YTGet -DestinationPath YTGet.zip -CompressionLevel Optimal
+        Compress-Archive -Path "dist/YTGet" -DestinationPath YTGet.zip -CompressionLevel Optimal
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
