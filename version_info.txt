@@ -1,0 +1,35 @@
+# UTF-8
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(2, 4, 5, 0),           # File version tuple
+    prodvers=(2, 4, 5, 0),           # Product version tuple
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,                      # Windows NT
+    fileType=0x1,                    # Application
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',  # U.S. English, Unicode
+        [
+          StringStruct('CompanyName', 'Namira'),
+          StringStruct('FileDescription', 'YTGet — YouTube Downloader'),
+          StringStruct('FileVersion', '2.4.6'),
+          StringStruct('InternalName', 'YTGet'),
+          StringStruct('LegalCopyright', '© 2025 Namira'),
+          StringStruct('OriginalFilename', 'YTGet.exe'),
+          StringStruct('ProductName', 'YTGet'),
+          StringStruct('ProductVersion', '2.4.6'),
+          StringStruct('Comments', 'A GUI-based YouTube downloader for Windows, powered by yt-dlp'),
+          StringStruct('Website', 'https://github.com/ErfanNamira/ytget')
+        ]
+      )
+    ]),
+    VarFileInfo([
+      VarStruct('Translation', [1033, 1200])  # Locale: English (U.S.), Codepage: Unicode
+    ])
+  ]
+)
