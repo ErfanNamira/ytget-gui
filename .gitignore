@@ -68,6 +68,7 @@ queue.json
 
 # Generated media (thumbnails, etc.)
 cache/thumbs/
+Images/
 
 # =========================
 # Ignore bundled binaries
