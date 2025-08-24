@@ -1,10 +1,10 @@
 name: Build YTGet
 
 on:
-  workflow_dispatch:   
+  workflow_dispatch:
   push:
     tags:
-      - 'v*'           
+      - 'v*'
 
 jobs:
   build:
@@ -73,8 +73,13 @@ jobs:
           --add-data "workers;workers/" `
           "main.py"
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
+    - name: Zip build
+      shell: pwsh
+      run: Compress-Archive -Path dist/YTGet -DestinationPath YTGet.zip -CompressionLevel Optimal
+
+    - name: Upload to existing GitHub Release
+      uses: softprops/action-gh-release@v2
       with:
-        name: YTGet
-        path: dist/YTGet
+        files: YTGet.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
