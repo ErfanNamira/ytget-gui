@@ -11,29 +11,21 @@
 ![GitHub forks](https://img.shields.io/github/forks/ErfanNamira/ytget?style=for-the-badge&logo=github)
 ![GitHub watchers](https://img.shields.io/github/watchers/ErfanNamira/ytget?style=for-the-badge&logo=github)
 
----
-
 ### 🐛 Issues & 🔀 Pull Requests
 ![GitHub issues](https://img.shields.io/github/issues/ErfanNamira/ytget?style=for-the-badge)
 ![GitHub closed issues](https://img.shields.io/github/issues-closed/ErfanNamira/ytget?style=for-the-badge)
 ![GitHub pull requests](https://img.shields.io/github/issues-pr/ErfanNamira/ytget?style=for-the-badge)
 ![GitHub closed PRs](https://img.shields.io/github/issues-pr-closed/ErfanNamira/ytget?style=for-the-badge)
 
----
-
 ### 📥 Downloads
 ![GitHub all releases](https://img.shields.io/github/downloads/ErfanNamira/ytget/total?label=Total%20Downloads&style=for-the-badge)
 ![GitHub release (latest by date)](https://img.shields.io/github/downloads/ErfanNamira/ytget/latest/total?label=Latest%20Release&style=for-the-badge)
-
----
 
 ### 💻 Codebase
 ![GitHub repo size](https://img.shields.io/github/repo-size/ErfanNamira/ytget?style=for-the-badge)
 ![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/ErfanNamira/ytget?style=for-the-badge)
 ![GitHub language count](https://img.shields.io/github/languages/count/ErfanNamira/ytget?style=for-the-badge)
 ![GitHub top language](https://img.shields.io/github/languages/top/ErfanNamira/ytget?style=for-the-badge)
-
----
 
 ### ⏱️ Activity
 ![GitHub last commit](https://img.shields.io/github/last-commit/ErfanNamira/ytget?style=for-the-badge)
