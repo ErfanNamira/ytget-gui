@@ -72,6 +72,7 @@ jobs:
           --add-data "LICENSE;." `
           --add-data "main_window.py;." `
           --add-data "README.md;." `
+          --add-data "RELEASE_NOTES.md;." `
           --add-data "settings.py;." `
           --add-data "styles.py;." `
           --add-data "yt-dlp.exe;." `
