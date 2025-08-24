@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 4, 5, 0),           # File version tuple
-    prodvers=(2, 4, 5, 0),           # Product version tuple
+    filevers=(2, 4, 6, 0),           # File version tuple
+    prodvers=(2, 4, 6, 0),           # Product version tuple
     mask=0x3f,
     flags=0x0,
     OS=0x40004,                      # Windows NT
@@ -19,7 +19,7 @@ VSVersionInfo(
           StringStruct('FileDescription', 'YTGet — YouTube Downloader'),
           StringStruct('FileVersion', '2.4.6'),
           StringStruct('InternalName', 'YTGet'),
-          StringStruct('LegalCopyright', '© 2025 Namira'),
+          StringStruct('LegalCopyright', '© 2025 Namira (MIT License)'),
           StringStruct('OriginalFilename', 'YTGet.exe'),
           StringStruct('ProductName', 'YTGet'),
           StringStruct('ProductVersion', '2.4.6'),
