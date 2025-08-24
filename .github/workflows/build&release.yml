@@ -65,6 +65,7 @@ jobs:
           --hidden-import "mutagen.id3" `
           --hidden-import "mutagen.flac" `
           --add-data "__init__.py;." `
+          --add-data "__main__.py;." `
           --add-data "ffmpeg.exe;." `
           --add-data "ffprobe.exe;." `
           --add-data "icon.ico;." `
