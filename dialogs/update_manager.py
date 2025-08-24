@@ -50,7 +50,7 @@ class UpdateManager(QObject):
     def __init__(self, settings, log_callback=None, parent=None):
         super().__init__(parent)
         self.settings = settings
-        self._log_cb = log_callback  # kept for compatibility
+        self._log_cb = log_callback
 
         # API endpoints
         owner_repo = "/".join(self.settings.GITHUB_URL.rstrip("/").split("/")[-2:])
@@ -155,9 +155,14 @@ class UpdateManager(QObject):
         if not exe_path.exists():
             return None
         try:
+            kwargs = {}
+            if sys.platform == "win32":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
             result = subprocess.run(
                 [str(exe_path), "--version"],
-                capture_output=True, text=True, timeout=6
+                capture_output=True, text=True, timeout=6,
+                **kwargs
             )
             out = (result.stdout or "").strip()
             return out if out else None
