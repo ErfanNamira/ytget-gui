@@ -1,64 +1,80 @@
-name: Build YTGet Executable
+name: Build YTGet
 
 on:
+  workflow_dispatch:   
   push:
     tags:
-      - '*'
-  workflow_dispatch:
+      - 'v*'           
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
+    - name: Set up latest Python 3
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.13.5'
+        python-version: '3.x'
 
-    - name: Install PyInstaller
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install -r requirements.txt
         pip install pyinstaller
 
-    - name: Download and extract FFmpeg
+    - name: Download latest yt-dlp.exe
+      shell: pwsh
       run: |
-        Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip"
-        Expand-Archive ffmpeg.zip -DestinationPath "ffmpeg"
-        New-Item -ItemType Directory -Force -Path "_internal"
-        Copy-Item -Path (Get-ChildItem -Path ffmpeg\ffmpeg-* -Recurse -Filter ffmpeg.exe).FullName -Destination "_internal\"
-        Copy-Item -Path (Get-ChildItem -Path ffmpeg\ffmpeg-* -Recurse -Filter ffprobe.exe).FullName -Destination "_internal\"
+        curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+
+    - name: Download ffmpeg & ffprobe
+      shell: pwsh
+      run: |
+        curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+        tar -xf ffmpeg.zip
+        $ffmpegPath = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+        $ffprobePath = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
+        Copy-Item $ffmpegPath.FullName .
+        Copy-Item $ffprobePath.FullName .
 
     - name: Build with PyInstaller
       shell: pwsh
       run: |
-        pyinstaller ytget.pyw `
-          --onedir `
-          --name YTGet `
-          --noconfirm `
-          --icon=icon.ico `
-          --add-data "_internal\\ffmpeg.exe;." `
-          --add-data "_internal\\ffprobe.exe;." `
-          --add-data "cookies.txt;." `
-          --add-data "icon.ico;."
-
-    - name: Compress with 7z maximum compression
-      run: |
-        & 'C:\Program Files\7-Zip\7z.exe' a -tzip YTGet.zip dist\YTGet\* -mx=9
+        pyinstaller --noconfirm --onedir --windowed `
+          --icon "icon.ico" `
+          --name "YTGet" `
+          --clean --noupx `
+          --version-file "version_info.txt" `
+          --hidden-import "PySide6.QtCore" `
+          --hidden-import "PySide6.QtGui" `
+          --hidden-import "PySide6.QtWidgets" `
+          --hidden-import "requests" `
+          --hidden-import "mutagen" `
+          --hidden-import "PIL" `
+          --hidden-import "webbrowser" `
+          --hidden-import "mutagen.id3" `
+          --hidden-import "mutagen.flac" `
+          --add-data "__init__.py;." `
+          --add-data "ffmpeg.exe;." `
+          --add-data "ffprobe.exe;." `
+          --add-data "icon.ico;." `
+          --add-data "LICENSE;." `
+          --add-data "main_window.py;." `
+          --add-data "README.md;." `
+          --add-data "settings.py;." `
+          --add-data "styles.py;." `
+          --add-data "yt-dlp.exe;." `
+          --add-data "dialogs;dialogs/" `
+          --add-data "utils;utils/" `
+          --add-data "widgets;widgets/" `
+          --add-data "workers;workers/" `
+          "main.py"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: YTGet-Build
-        path: YTGet.zip
-
-    - name: Upload to GitHub Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: YTGet.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        name: YTGet
+        path: dist/YTGet

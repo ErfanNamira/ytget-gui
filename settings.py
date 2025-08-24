@@ -18,7 +18,7 @@ from ytget.utils.paths import (
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.4.5"
+    VERSION: str = "2.4.6"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/YTGet"
 
@@ -272,3 +272,4 @@ class AppSettings:
 
         except Exception as e:
             print(f"Error loading config: {e}")
+

@@ -46,13 +46,13 @@ from ytget.styles import AppStyles
 from ytget.utils.validators import is_youtube_url
 from ytget.dialogs.preferences import PreferencesDialog
 from ytget.dialogs.advanced import AdvancedOptionsDialog
+from ytget.dialogs.update_manager import UpdateManager
 from ytget.workers.download_worker import DownloadWorker
 from ytget.workers.cover_crop_worker import CoverCropWorker
 from ytget.widgets.queue_card import QueueCard
 from ytget.workers.title_fetch_manager import TitleFetchQueue
 
-
-def short(text: str, n: int = 35) -> str:
+def short(text: str, n: int = 50) -> str:
     return text[:n] + "..." if len(text) > n else text
 
 
@@ -313,11 +313,45 @@ class MainWindow(QMainWindow):
     # Signals to marshal work into the title-fetch worker thread
     enqueue_title = Signal(str)
     enqueue_titles = Signal(list)
+    
+    # Signals to marshal update checks into updater thread
+    request_check_ytget = Signal()
+    request_check_ytdlp = Signal()
+    request_download_ytdlp = Signal(str)    
 
     def __init__(self):
         super().__init__()
         self.settings = AppSettings()
         self.styles = AppStyles()
+
+        # Update Manager
+        self.updater = UpdateManager(self.settings, log_callback=None, parent=None)
+        self.update_thread = QThread(self)
+        self.updater.moveToThread(self.update_thread)
+
+        # Requests routed into updater thread
+        self.request_check_ytget.connect(self.updater.check_ytget_update, Qt.QueuedConnection)
+        self.request_check_ytdlp.connect(self.updater.check_ytdlp_update, Qt.QueuedConnection)
+        self.request_download_ytdlp.connect(self.updater.download_ytdlp, Qt.QueuedConnection)
+
+        # Logs from updater to console (executed in GUI thread)
+        self.updater.log_signal.connect(self.log)
+
+        # YTGet update results
+        self.updater.ytget_ready.connect(self._on_ytget_ready)
+        self.updater.ytget_uptodate.connect(self._on_ytget_uptodate)
+        self.updater.ytget_error.connect(self._on_ytget_error)
+
+        # yt-dlp update results
+        self.updater.ytdlp_ready.connect(self._on_ytdlp_ready)
+        self.updater.ytdlp_uptodate.connect(self._on_ytdlp_uptodate)
+        self.updater.ytdlp_error.connect(self._on_ytdlp_error)
+
+        # yt-dlp download outcome
+        self.updater.ytdlp_download_success.connect(self._on_ytdlp_download_success)
+        self.updater.ytdlp_download_failed.connect(self._on_ytdlp_download_failed)
+
+        self.update_thread.start()
 
         # Thumbnail cache folder and async jobs
         self.thumb_cache_dir: Path = self.settings.BASE_DIR / "cache" / "thumbs"
@@ -763,7 +797,8 @@ class MainWindow(QMainWindow):
 
         # Help
         m_help = menubar.addMenu("Help")
-        m_help.addAction("Check for Updates", self._check_for_updates)
+        m_help.addAction("Check YTGet Update", lambda: self.request_check_ytget.emit())
+        m_help.addAction("Check yt-dlp Update", lambda: self.request_check_ytdlp.emit())
         m_help.addAction("Open Download Folder", lambda: webbrowser.open(self.settings.DOWNLOADS_DIR.as_uri()))
         m_help.addAction("About", self._show_about)
 
@@ -790,12 +825,12 @@ class MainWindow(QMainWindow):
         self.log("💡 Welcome to YTGet! Paste a URL to Begin.\n", AppStyles.INFO_COLOR, "Info")
         self.log(f"📂 Download Folder: {self.settings.DOWNLOADS_DIR}\n", AppStyles.INFO_COLOR, "Info")
         self.log(f"🔧 Using binaries from: {self.settings.FFMPEG_PATH.parent}\n", AppStyles.INFO_COLOR, "Info")
-
+	    
         if not self.settings.YT_DLP_PATH.exists():
-            self.log("⚠️ yt-dlp not found in app folder or PATH. Set it in Preferences or install system-wide.\n", AppStyles.WARNING_COLOR, "Warning")
+            self.log("⚠️ yt-dlp not found in app folder or PATH. Download it via Menu Bar → Help → Check yt-dlp Update.\n", AppStyles.WARNING_COLOR, "Warning")
         if not self.settings.FFMPEG_PATH.exists() or not self.settings.FFPROBE_PATH.exists():
-            self.log("⚠️ ffmpeg/ffprobe not found in app folder or PATH. Set in Preferences or install system-wide.\n", AppStyles.WARNING_COLOR, "Warning")
-
+            self.log("⚠️ ffmpeg/ffprobe not found in app folder or PATH. Download and place it in the _internal directory or install it system-wide.\n", AppStyles.WARNING_COLOR, "Warning")
+		
         if self.settings.PROXY_URL:
             self.log(f"🌐 Proxy: {self.settings.PROXY_URL}\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.SPONSORBLOCK_CATEGORIES:
@@ -1536,6 +1571,50 @@ class MainWindow(QMainWindow):
             self._refresh_queue_list()
             self._update_button_states()
             self._update_global_progress_bar()
+            
+    # ----- Updater UI handlers (GUI thread) -----
+
+    def _on_ytget_ready(self, latest: str):
+        reply = QMessageBox.information(
+            self,
+            f"{self.settings.APP_NAME} Update Available",
+            f"A new version ({latest}) is available.\n"
+            f"You are using {self.settings.VERSION}.\n\n"
+            "Open the releases page?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            webbrowser.open(f"{self.settings.GITHUB_URL}/releases/latest")
+
+    def _on_ytget_uptodate(self):
+        QMessageBox.information(self, "Up to Date", f"{self.settings.APP_NAME} is up to date.")
+
+    def _on_ytget_error(self, msg: str):
+        QMessageBox.warning(self, "Update Check Failed", f"Could not check {self.settings.APP_NAME} updates:\n{msg}")
+
+    def _on_ytdlp_ready(self, latest: str, current: str, asset_url: str):
+        reply = QMessageBox.question(
+            self,
+            "yt-dlp Update Available",
+            f"A new yt-dlp version ({latest}) is available.\n"
+            f"Current version: {current}\n\n"
+            "Download and replace it now?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.request_download_ytdlp.emit(asset_url)
+
+    def _on_ytdlp_uptodate(self, current: str):
+        QMessageBox.information(self, "Up to Date", f"yt-dlp is up to date (current: {current}).")
+
+    def _on_ytdlp_error(self, msg: str):
+        QMessageBox.warning(self, "yt-dlp Update Check Failed", f"Could not check yt-dlp updates:\n{msg}")
+
+    def _on_ytdlp_download_success(self):
+        QMessageBox.information(self, "yt-dlp Updated", "yt-dlp has been updated successfully.")
+
+    def _on_ytdlp_download_failed(self, msg: str):
+        QMessageBox.critical(self, "yt-dlp Update Failed", f"Could not update yt-dlp:\n{msg}")
 
     # ---------- Settings, dialogs, and helpers ----------
 
@@ -1652,27 +1731,6 @@ class MainWindow(QMainWindow):
 
         box.setStandardButtons(QMessageBox.Ok)
         box.exec()
-
-    def _check_for_updates(self):
-        self.log("🌐 Checking for Updates...\n", AppStyles.INFO_COLOR)
-        try:
-            r = requests.head(f"{self.settings.GITHUB_URL}/releases/latest", allow_redirects=True, timeout=6)
-            r.raise_for_status()
-            latest_tag = r.url.rstrip("/").split("/")[-1].lstrip("v")
-            if latest_tag > self.settings.VERSION:
-                reply = QMessageBox.information(
-                    self, "Update Available",
-                    f"A New Version ({latest_tag}) is Available!\n"
-                    f"You are Using Version {self.settings.VERSION}.\n\n"
-                    "Open the Releases Page?",
-                    QMessageBox.Yes | QMessageBox.No,
-                )
-                if reply == QMessageBox.Yes:
-                    webbrowser.open(f"{self.settings.GITHUB_URL}/releases")
-            else:
-                QMessageBox.information(self, "Up to Date", "You are Using the Latest Version.")
-        except requests.RequestException as e:
-            QMessageBox.warning(self, "Update Check Failed", f"Could Not Check For Updates: {e}")
 
     def _set_download_path(self):
         path = QFileDialog.getExistingDirectory(self, "Select Download Folder", str(self.settings.DOWNLOADS_DIR))
@@ -1853,4 +1911,14 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # Stop updater thread
+        try:
+            if hasattr(self, "update_thread") and self.update_thread and self.update_thread.isRunning():
+                self.update_thread.quit()
+                self.update_thread.wait(2000)
+        except Exception:
+            pass
+
         super().closeEvent(event)
+
+

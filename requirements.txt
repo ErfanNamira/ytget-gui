@@ -3,3 +3,4 @@ PySide6
 requests
 mutagen
 Pillow
+packaging
