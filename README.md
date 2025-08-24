@@ -22,8 +22,8 @@
 ---
 
 ### 📥 Downloads
-![GitHub all releases](https://img.shields.io/github/downloads/ErfanNamira/ytget/total?label=Total%20Downloads&style=for-the-badge)
-![GitHub release (latest by date)](https://img.shields.io/github/downloads/ErfanNamira/ytget/latest/total?label=Latest%20Release&style=for-the-badge)
+![GitHub all releases](https://img.shields.io/github/downloads/ErfanNamira/ytget/total.svg?style=for-the-badge&label=Total%20Downloads&color=blue&logo=github&logoColor=white&longCache=true)
+![GitHub release (latest by date)](https://img.shields.io/github/downloads/ErfanNamira/ytget/latest/total.svg?style=for-the-badge&label=Latest%20Release&color=blue&logo=github&logoColor=white&longCache=true)
 
 ---
 
