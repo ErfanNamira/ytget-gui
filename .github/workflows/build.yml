@@ -4,7 +4,7 @@ on:
   workflow_dispatch:   
   push:
     tags:
-      - 'v*'           
+      - 'v*'          
 
 jobs:
   build:
@@ -26,56 +26,64 @@ jobs:
         pip install pyinstaller
 
     - name: Download latest yt-dlp.exe
+      shell: pwsh
       run: |
         curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
 
     - name: Download ffmpeg & ffprobe
+      shell: pwsh
       run: |
         curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
         tar -xf ffmpeg.zip
-        for /r %%i in (ffmpeg.exe) do copy "%%i" .
-        for /r %%i in (ffprobe.exe) do copy "%%i" .
+        $ffmpegPath = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+        $ffprobePath = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
+        Copy-Item $ffmpegPath.FullName .
+        Copy-Item $ffprobePath.FullName .
 
     - name: Build with PyInstaller
+      shell: pwsh
       run: |
-        pyinstaller --noconfirm --onedir --windowed ^
-          --icon "icon.ico" ^
-          --name "YTGet" ^
-          --clean --noupx ^
-          --version-file "version_info.txt" ^
-          --hidden-import "PySide6.QtCore" ^
-          --hidden-import "PySide6.QtGui" ^
-          --hidden-import "PySide6.QtWidgets" ^
-          --hidden-import "requests" ^
-          --hidden-import "mutagen" ^
-          --hidden-import "PIL" ^
-          --hidden-import "webbrowser" ^
-          --hidden-import "mutagen.id3" ^
-          --hidden-import "mutagen.flac" ^
-          --add-data "__init__.py;." ^
-          --add-data "ffmpeg.exe;." ^
-          --add-data "ffprobe.exe;." ^
-          --add-data "icon.ico;." ^
-          --add-data "LICENSE;." ^
-          --add-data "main_window.py;." ^
-          --add-data "README.md;." ^
-          --add-data "settings.py;." ^
-          --add-data "styles.py;." ^
-          --add-data "yt-dlp.exe;." ^
-          --add-data "dialogs;dialogs/" ^
-          --add-data "utils;utils/" ^
-          --add-data "widgets;widgets/" ^
-          --add-data "workers;workers/" ^
+        pyinstaller --noconfirm --onedir --windowed `
+          --icon "icon.ico" `
+          --name "YTGet" `
+          --clean --noupx `
+          --version-file "version_info.txt" `
+          --hidden-import "PySide6.QtCore" `
+          --hidden-import "PySide6.QtGui" `
+          --hidden-import "PySide6.QtWidgets" `
+          --hidden-import "requests" `
+          --hidden-import "mutagen" `
+          --hidden-import "PIL" `
+          --hidden-import "webbrowser" `
+          --hidden-import "mutagen.id3" `
+          --hidden-import "mutagen.flac" `
+          --add-data "__init__.py;." `
+          --add-data "ffmpeg.exe;." `
+          --add-data "ffprobe.exe;." `
+          --add-data "icon.ico;." `
+          --add-data "LICENSE;." `
+          --add-data "main_window.py;." `
+          --add-data "README.md;." `
+          --add-data "settings.py;." `
+          --add-data "styles.py;." `
+          --add-data "yt-dlp.exe;." `
+          --add-data "dialogs;dialogs/" `
+          --add-data "utils;utils/" `
+          --add-data "widgets;widgets/" `
+          --add-data "workers;workers/" `
           "main.py"
 
     - name: Rename dist folder to YTGet
+      shell: pwsh
       run: |
-        rmdir /S /Q YTGet || echo "No old folder"
-        ren dist\YTGet YTGet
+        if (Test-Path YTGet) { Remove-Item -Recurse -Force YTGet }
+        Rename-Item -Path "dist/YTGet" -NewName "YTGet"
 
     - name: Create ZIP with maximum compression
+      shell: pwsh
       run: |
-        powershell Compress-Archive -Path YTGet -DestinationPath YTGet.zip -CompressionLevel Optimal
+        if (Test-Path YTGet.zip) { Remove-Item YTGet.zip }
+        Compress-Archive -Path YTGet -DestinationPath YTGet.zip -CompressionLevel Optimal
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
