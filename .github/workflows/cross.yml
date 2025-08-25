@@ -25,40 +25,58 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
 
-    # Download yt-dlp
-    - name: Download latest yt-dlp
+    # -------------------------
+    # Download yt-dlp per OS
+    # -------------------------
+    - name: Download yt-dlp (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
       run: |
-        if [[ "$RUNNER_OS" == "Windows" ]]; then
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
-        else
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
-          chmod +x yt-dlp
-        fi
-      shell: bash
+        curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
 
-    # Download ffmpeg & ffprobe
-    - name: Download ffmpeg & ffprobe
+    - name: Download yt-dlp (Linux/macOS)
+      if: matrix.os != 'windows-latest'
+      shell: bash
       run: |
-        if [[ "$RUNNER_OS" == "Windows" ]]; then
-          curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-          tar -xf ffmpeg.zip
-          ffmpegPath=$(find . -name ffmpeg.exe | head -n 1)
-          ffprobePath=$(find . -name ffprobe.exe | head -n 1)
-          cp "$ffmpegPath" .
-          cp "$ffprobePath" .
-        elif [[ "$RUNNER_OS" == "Linux" ]]; then
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          cp "$(which ffmpeg)" .
-          cp "$(which ffprobe)" .
-        elif [[ "$RUNNER_OS" == "macOS" ]]; then
-          brew install ffmpeg
-          cp "$(which ffmpeg)" .
-          cp "$(which ffprobe)" .
-        fi
-      shell: bash
+        curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+        chmod +x yt-dlp
 
+    # -------------------------
+    # Download ffmpeg & ffprobe per OS
+    # -------------------------
+    - name: Download ffmpeg (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+        Expand-Archive -Path ffmpeg.zip -DestinationPath .
+        $ffmpegPath = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+        $ffprobePath = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
+        Copy-Item $ffmpegPath.FullName .
+        Copy-Item $ffprobePath.FullName .
+
+    - name: Install ffmpeg (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        cp "$(which ffmpeg)" .
+        cp "$(which ffprobe)" .
+
+    - name: Install ffmpeg (macOS)
+      if: matrix.os == 'macos-latest'
+      shell: bash
+      run: |
+        brew install ffmpeg
+        cp "$(which ffmpeg)" .
+        cp "$(which ffprobe)" .
+
+    # -------------------------
+    # Build with PyInstaller
+    # -------------------------
     - name: Build with PyInstaller
+      shell: bash
       run: |
         pyinstaller --noconfirm --onedir --windowed \
           --icon "icon.ico" \
@@ -91,19 +109,24 @@ jobs:
           --add-data "widgets:widgets/" \
           --add-data "workers:workers/" \
           "main.py"
-      shell: bash
 
+    # -------------------------
+    # Package build
+    # -------------------------
     - name: Zip build
+      shell: bash
       run: |
         cd dist
         zip -r ../YTGet-${{ matrix.os }}.zip YTGet
-      shell: bash
 
     - name: Generate SHA-256 checksum
+      shell: bash
       run: |
         shasum -a 256 YTGet-${{ matrix.os }}.zip > YTGet-${{ matrix.os }}.zip.sha256
-      shell: bash
 
+    # -------------------------
+    # Upload artifacts
+    # -------------------------
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
