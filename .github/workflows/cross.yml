@@ -85,93 +85,92 @@ jobs:
           --noconfirm
           --onedir
           --windowed
-          --icon "icon.ico"
-          --name "$APP_NAME"
+          --icon=icon.ico
+          --name="$APP_NAME"
           --clean
           --noupx
-          --version-file "version_info.txt"
-          --hidden-import "PySide6.QtCore"
-          --hidden-import "PySide6.QtGui"
-          --hidden-import "PySide6.QtWidgets"
-          --hidden-import "requests"
-          --hidden-import "mutagen"
-          --hidden-import "PIL"
-          --hidden-import "webbrowser"
-          --hidden-import "mutagen.id3"
-          --hidden-import "mutagen.flac"
+          --version-file=version_info.txt
+          --hidden-import=PySide6.QtCore
+          --hidden-import=PySide6.QtGui
+          --hidden-import=PySide6.QtWidgets
+          --hidden-import=requests
+          --hidden-import=mutagen
+          --hidden-import=PIL
+          --hidden-import=webbrowser
+          --hidden-import=mutagen.id3
+          --hidden-import=mutagen.flac
         )
 
         # OS-specific add-data syntax
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           args+=(
-            --add-data "__init__.py;."
-            --add-data "__main__.py;."
-            --add-data "ffmpeg.exe;."
-            --add-data "ffprobe.exe;."
+            --add-data="__init__.py;."
+            --add-data="__main__.py;."
+            --add-data="ffmpeg.exe;."
+            --add-data="ffprobe.exe;."
           )
         else
           args+=(
-            --add-data "__init__.py:."
-            --add-data "__main__.py:."
-            --add-data "ffmpeg:."
-            --add-data "ffprobe:."
+            --add-data="__init__.py:."
+            --add-data="__main__.py:."
+            --add-data="ffmpeg:."
+            --add-data="ffprobe:."
           )
         fi
 
         # Common add-data entries
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          SEP=";"
+        else
+          SEP=":"
+        fi
+
         args+=(
-          --add-data "icon.ico;."
-          --add-data "LICENSE;."
-          --add-data "main_window.py;."
-          --add-data "README.md;."
-          --add-data "RELEASE_NOTES.md;."
-          --add-data "settings.py;."
-          --add-data "styles.py;."
-          --add-data "${YTDLP_FILE};."
-          --add-data "dialogs;dialogs/"
-          --add-data "utils;utils/"
-          --add-data "widgets;widgets/"
-          --add-data "workers;workers/"
-          "main.py"
+          --add-data="icon.ico${SEP}."
+          --add-data="LICENSE${SEP}."
+          --add-data="main_window.py${SEP}."
+          --add-data="README.md${SEP}."
+          --add-data="RELEASE_NOTES.md${SEP}."
+          --add-data="settings.py${SEP}."
+          --add-data="styles.py${SEP}."
+          --add-data="${YTDLP_FILE}${SEP}."
+          --add-data="dialogs${SEP}dialogs/"
+          --add-data="utils${SEP}utils/"
+          --add-data="widgets${SEP}widgets/"
+          --add-data="workers${SEP}workers/"
+          main.py
         )
 
-        # Run PyInstaller
         pyinstaller "${args[@]}"
 
     - name: Package build
       shell: bash
       run: |
         if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-          TAR_NAME="${APP_NAME}-${{ matrix.os }}.tar.gz"
-          tar -czvf "$TAR_NAME" -C dist "${APP_NAME}"
+          FILE_NAME="${APP_NAME}-${{ matrix.os }}.tar.gz"
+          tar -czvf "$FILE_NAME" -C dist "${APP_NAME}"
         elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          ZIP_NAME="${APP_NAME}-${{ matrix.os }}.zip"
-          pwsh -c "Compress-Archive -Path dist/${APP_NAME} -DestinationPath $ZIP_NAME -CompressionLevel Optimal"
+          FILE_NAME="${APP_NAME}-${{ matrix.os }}.zip"
+          pwsh -c "Compress-Archive -Path dist/${APP_NAME} -DestinationPath $FILE_NAME -CompressionLevel Optimal"
         else
-          ZIP_NAME="${APP_NAME}-${{ matrix.os }}.zip"
-          zip -r "$ZIP_NAME" "dist/${APP_NAME}"
+          FILE_NAME="${APP_NAME}-${{ matrix.os }}.zip"
+          zip -r "$FILE_NAME" "dist/${APP_NAME}"
         fi
+        echo "PACKAGE_FILE=$FILE_NAME" >> $GITHUB_ENV
 
     - name: Compute SHA-256 checksum
       shell: bash
       run: |
-        if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-          FILE_NAME="${APP_NAME}-${{ matrix.os }}.tar.gz"
-          sha256sum "$FILE_NAME" > "$FILE_NAME.sha256"
-        elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          FILE_NAME="${APP_NAME}-${{ matrix.os }}.zip"
-          pwsh -c "\$h = Get-FileHash -Algorithm SHA256 $FILE_NAME; \"\$($h.Hash)  $FILE_NAME\" | Out-File -Encoding ASCII -NoNewline $FILE_NAME.sha256"
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          pwsh -c "\$h = Get-FileHash -Algorithm SHA256 $PACKAGE_FILE; \"\$($h.Hash)  $PACKAGE_FILE\" | Out-File -Encoding ASCII -NoNewline $PACKAGE_FILE.sha256"
         else
-          FILE_NAME="${APP_NAME}-${{ matrix.os }}.zip"
-          sha256sum "$FILE_NAME" > "$FILE_NAME.sha256"
+          sha256sum "$PACKAGE_FILE" > "$PACKAGE_FILE.sha256"
         fi
 
-    - name: Upload build artifacts
+    - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.APP_NAME }}-${{ matrix.os }}
         path: |
-          ${{ env.APP_NAME }}-${{ matrix.os }}.zip
-          ${{ env.APP_NAME }}-${{ matrix.os }}.zip.sha256
-          ${{ env.APP_NAME }}-${{ matrix.os }}.tar.gz
-          ${{ env.APP_NAME }}-${{ matrix.os }}.tar.gz.sha256
+          ${{ env.PACKAGE_FILE }}
+          ${{ env.PACKAGE_FILE }}.sha256
