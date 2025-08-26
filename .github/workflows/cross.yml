@@ -7,190 +7,167 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-
+  build-windows:
+    runs-on: windows-latest
     env:
       APP_NAME: YTGet
-
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
+      - run: curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+      - run: |
+          curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+          tar -xf ffmpeg.zip
+          $f = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $p = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          Copy-Item $f.FullName .
+          Copy-Item $p.FullName .
+        shell: pwsh
+      - run: rm -rf build dist *.spec
+        shell: bash
+      - run: |
+          pyinstaller --noconfirm --onedir --windowed \
+            --icon=icon.ico --name="$APP_NAME" --clean --noupx \
+            --version-file=version_info.txt \
+            --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui \
+            --hidden-import=PySide6.QtWidgets --hidden-import=requests \
+            --hidden-import=mutagen --hidden-import=PIL --hidden-import=webbrowser \
+            --hidden-import=mutagen.id3 --hidden-import=mutagen.flac \
+            --add-data="__init__.py;." --add-data="__main__.py;." \
+            --add-data="ffmpeg.exe;." --add-data="ffprobe.exe;." \
+            --add-data="icon.ico;." --add-data="LICENSE;." \
+            --add-data="main_window.py;." --add-data="README.md;." \
+            --add-data="RELEASE_NOTES.md;." --add-data="settings.py;." \
+            --add-data="styles.py;." --add-data="yt-dlp.exe;." \
+            --add-data="dialogs;dialogs/" --add-data="utils;utils/" \
+            --add-data="widgets;widgets/" --add-data="workers;workers/" \
+            main.py
+        shell: bash
+      - run: pwsh -c "Compress-Archive -Path dist/${env:APP_NAME}/* -DestinationPath ${env:APP_NAME}-windows-x86_64.zip -CompressionLevel Optimal"
+      - run: pwsh -c "\$h = Get-FileHash -Algorithm SHA256 YTGet-windows-x86_64.zip; \"\$($h.Hash)  YTGet-windows-x86_64.zip\" | Out-File -Encoding ASCII -NoNewline YTGet-windows-x86_64.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTGet-windows-x86_64
+          path: |
+            YTGet-windows-x86_64.zip
+            YTGet-windows-x86_64.zip.sha256
 
-    - name: Checkout repository
-      uses: actions/checkout@v4
+  build-linux:
+    runs-on: ubuntu-latest
+    env:
+      APP_NAME: YTGet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
+      - run: curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp && chmod +x yt-dlp
+      - run: rm -rf build dist *.spec
+      - run: |
+          pyinstaller --noconfirm --onedir --windowed \
+            --icon=icon.ico --name="$APP_NAME" --clean --noupx \
+            --version-file=version_info.txt \
+            --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui \
+            --hidden-import=PySide6.QtWidgets --hidden-import=requests \
+            --hidden-import=mutagen --hidden-import=PIL --hidden-import=webbrowser \
+            --hidden-import=mutagen.id3 --hidden-import=mutagen.flac \
+            --add-data="__init__.py:." --add-data="__main__.py:." \
+            --add-data="ffmpeg:." --add-data="ffprobe:." \
+            --add-data="icon.ico:." --add-data="LICENSE:." \
+            --add-data="main_window.py:." --add-data="README.md:." \
+            --add-data="RELEASE_NOTES.md:." --add-data="settings.py:." \
+            --add-data="styles.py:." --add-data="yt-dlp:." \
+            --add-data="dialogs:dialogs/" --add-data="utils:utils/" \
+            --add-data="widgets:widgets/" --add-data="workers:workers/" \
+            main.py
+      - run: tar -czvf YTGet-linux-x86_64.tar.gz -C dist/YTGet .
+      - run: sha256sum YTGet-linux-x86_64.tar.gz > YTGet-linux-x86_64.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTGet-linux-x86_64
+          path: |
+            YTGet-linux-x86_64.tar.gz
+            YTGet-linux-x86_64.tar.gz.sha256
 
-    - name: Set up Python 3.x
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.x'
+  build-macos-arm64:
+    runs-on: macos-latest
+    env:
+      APP_NAME: YTGet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: brew update && brew install ffmpeg
+      - run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
+      - run: curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp && chmod +x yt-dlp
+      - run: rm -rf build dist *.spec
+      - run: |
+          pyinstaller --noconfirm --onedir --windowed \
+            --icon=icon.ico --name="$APP_NAME" --clean --noupx \
+            --version-file=version_info.txt \
+            --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui \
+            --hidden-import=PySide6.QtWidgets --hidden-import=requests \
+            --hidden-import=mutagen --hidden-import=PIL --hidden-import=webbrowser \
+            --hidden-import=mutagen.id3 --hidden-import=mutagen.flac \
+            --add-data="__init__.py:." --add-data="__main__.py:." \
+            --add-data="ffmpeg:." --add-data="ffprobe:." \
+            --add-data="icon.ico:." --add-data="LICENSE:." \
+            --add-data="main_window.py:." --add-data="README.md:." \
+            --add-data="RELEASE_NOTES.md:." --add-data="settings.py:." \
+            --add-data="styles.py:." --add-data="yt-dlp:." \
+            --add-data="dialogs:dialogs/" --add-data="utils:utils/" \
+            --add-data="widgets:widgets/" --add-data="workers:workers/" \
+            main.py
+      - run: tar -czvf YTGet-macos-arm64.tar.gz -C dist/YTGet .
+      - run: shasum -a 256 YTGet-macos-arm64.tar.gz > YTGet-macos-arm64.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YTGet-macos-arm64
+          path: |
+            YTGet-macos-arm64.tar.gz
+            YTGet-macos-arm64.tar.gz.sha256
 
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt pyinstaller
-
-    - name: Fetch yt-dlp (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
-
-    - name: Fetch yt-dlp (Linux/macOS)
-      if: runner.os != 'Windows'
-      run: |
-        curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
-        chmod +x yt-dlp
-
-    - name: Install FFmpeg & FFprobe (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-        tar -xf ffmpeg.zip
-        $f = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-        $p = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
-        Copy-Item $f.FullName .
-        Copy-Item $p.FullName .
-
-    - name: Install FFmpeg & FFprobe (Ubuntu)
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
-        cp /usr/bin/ffmpeg .
-        cp /usr/bin/ffprobe .
-
-    - name: Install FFmpeg & FFprobe (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        brew update
-        brew install ffmpeg
-        if [[ -x "/opt/homebrew/bin/ffmpeg" ]]; then
-          cp /opt/homebrew/bin/ffmpeg .
-          cp /opt/homebrew/bin/ffprobe .
-        else
-          cp /usr/local/bin/ffmpeg .
-          cp /usr/local/bin/ffprobe .
-        fi
-
-    - name: Clean previous build artifacts
-      shell: bash
-      run: |
-        rm -rf build dist *.spec
-
-    - name: Build with PyInstaller
-      shell: bash
-      run: |
-        if [[ "$RUNNER_OS" == "Windows" ]]; then
-          YTDLP_FILE="yt-dlp.exe"
-          SEP=";"
-        else
-          YTDLP_FILE="yt-dlp"
-          SEP=":"
-        fi
-
-        args=(
-          --noconfirm
-          --onedir
-          --windowed
-          --icon=icon.ico
-          --name="$APP_NAME"
-          --clean
-          --noupx
-          --version-file=version_info.txt
-          --hidden-import=PySide6.QtCore
-          --hidden-import=PySide6.QtGui
-          --hidden-import=PySide6.QtWidgets
-          --hidden-import=requests
-          --hidden-import=mutagen
-          --hidden-import=PIL
-          --hidden-import=webbrowser
-          --hidden-import=mutagen.id3
-          --hidden-import=mutagen.flac
-        )
-
-        if [[ "$RUNNER_OS" == "Windows" ]]; then
-          args+=(
-            --add-data="__init__.py;."
-            --add-data="__main__.py;."
-            --add-data="ffmpeg.exe;."
-            --add-data="ffprobe.exe;."
-          )
-        else
-          args+=(
-            --add-data="__init__.py:."
-            --add-data="__main__.py:."
-            --add-data="ffmpeg:."
-            --add-data="ffprobe:."
-          )
-        fi
-
-        args+=(
-          --add-data="icon.ico${SEP}."
-          --add-data="LICENSE${SEP}."
-          --add-data="main_window.py${SEP}."
-          --add-data="README.md${SEP}."
-          --add-data="RELEASE_NOTES.md${SEP}."
-          --add-data="settings.py${SEP}."
-          --add-data="styles.py${SEP}."
-          --add-data="${YTDLP_FILE}${SEP}."
-          --add-data="dialogs${SEP}dialogs/"
-          --add-data="utils${SEP}utils/"
-          --add-data="widgets${SEP}widgets/"
-          --add-data="workers${SEP}workers/"
-          main.py
-        )
-
-        # Make macOS build universal
-        if [[ "$RUNNER_OS" == "macOS" ]]; then
-          args+=(--target-architecture universal2)
-        fi
-
-        pyinstaller "${args[@]}"
-
-    - name: Smoke test built app
-      shell: bash
-      run: |
-        echo "Running smoke test..."
-        if [[ "$RUNNER_OS" == "Windows" ]]; then
-          ./dist/${APP_NAME}/${APP_NAME}.exe --version || echo "Launch OK"
-        elif [[ "$RUNNER_OS" == "macOS" ]]; then
-          ./dist/${APP_NAME}/${APP_NAME}.app/Contents/MacOS/${APP_NAME} --version || echo "Launch OK"
-        else
-          ./dist/${APP_NAME}/${APP_NAME} --version || echo "Launch OK"
-        fi
-
-    - name: Package build
-      shell: bash
-      run: |
-        ARCH=$(uname -m)
-        if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-          FILE_NAME="${APP_NAME}-linux-${ARCH}.tar.gz"
-          tar -czvf "$FILE_NAME" -C "dist/${APP_NAME}" .
-        elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          FILE_NAME="${APP_NAME}-windows-${ARCH}.zip"
-          pwsh -c "Compress-Archive -Path dist/${APP_NAME}/* -DestinationPath $FILE_NAME -CompressionLevel Optimal"
-        else
-          FILE_NAME="${APP_NAME}-macos-universal.tar.gz"
-          tar -czvf "$FILE_NAME" -C "dist/${APP_NAME}" .
-        fi
-        echo "PACKAGE_FILE=$FILE_NAME" >> $GITHUB_ENV
-
-    - name: Compute SHA-256 checksum
-      shell: bash
-      run: |
-        if [[ "$RUNNER_OS" == "Windows" ]]; then
-          pwsh -c "\$h = Get-FileHash -Algorithm SHA256 $PACKAGE_FILE; \"\$($h.Hash)  $PACKAGE_FILE\" | Out-File -Encoding ASCII -NoNewline $PACKAGE_FILE.sha256"
-        else
-          sha256sum "$PACKAGE_FILE" > "$PACKAGE_FILE.sha256"
-        fi
-
-    - name: Upload build artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.APP_NAME }}-${{ matrix.os }}-${{ env.ARCH || 'universal' }}
-        path: |
-          ${{ env.PACKAGE_FILE }}
-          ${{ env.PACKAGE_FILE }}.sha256
+  build-macos-x86_64:
+    runs-on: macos-13
+    env:
+      APP_NAME: YTGet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: brew update && brew install ffmpeg
+      - run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
+      - run: curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp && chmod +x yt-dlp
+      - run: rm -rf build dist *.spec
+      - run: |
+          pyinstaller --noconfirm --onedir --windowed \
+            --icon=icon.ico --name="$APP_NAME" --clean --noupx \
+            --version-file=version_info.txt \
+            --hidden-import=PySide6.QtCore --hidden-import=PySide6.QtGui \
+            --hidden-import=PySide6.QtWidgets --hidden-import=requests \
+            --hidden-import=mutagen --hidden-import=PIL --hidden-import=webbrowser \
+            --hidden-import=mutagen.id3 --hidden-import=mutagen.flac \
+            --add-data="__init__.py:." --add-data="__main__.py:." \
+            --add-data="ffmpeg:." --add-data="ffprobe:." \
+            --add-data="icon.ico:." --add-data="LICENSE:." \
+            --add-data="main_window.py:." --add-data="README.md:." \
+            --add-data="RELEASE_NOTES.md:." --add-data="settings.py:." \
+            --add-data="styles.py:." --add-data="yt-dlp:." \
+            --add-data="dialogs:dialogs/" --add-data="utils:utils/" \
+            --add-data="widgets:widgets/" --add-data="workers:workers/" \
+            main.py
+      - run: tar -czvf ${APP_NAME}-macos-x86_64.tar.gz -C dist/${APP_NAME} .
+      - run: shasum -a 256 ${APP_NAME}-macos-x86_64.tar.gz > ${APP_NAME}-macos-x86_64.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-macos-x86_64
+          path: |
+            ${{ env.APP_NAME }}-macos-x86_64.tar.gz
+            ${{ env.APP_NAME }}-macos-x86_64.tar.gz.sha256
