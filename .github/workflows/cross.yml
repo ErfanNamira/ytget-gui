@@ -73,7 +73,14 @@ jobs:
     - name: Build with PyInstaller
       shell: bash
       run: |
-        # 1) Common PyInstaller flags
+        # Decide yt-dlp filename based on OS
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          YTDLP_FILE="yt-dlp.exe"
+        else
+          YTDLP_FILE="yt-dlp"
+        fi
+
+        # Common PyInstaller flags
         args=(
           --noconfirm
           --onedir
@@ -94,7 +101,7 @@ jobs:
           --hidden-import "mutagen.flac"
         )
 
-        # 2) OS-specific data syntax
+        # OS-specific add-data syntax
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           args+=(
             --add-data "__init__.py;."
@@ -111,7 +118,7 @@ jobs:
           )
         fi
 
-        # 3) Common add-data entries + entry point
+        # Common add-data entries
         args+=(
           --add-data "icon.ico;."
           --add-data "LICENSE;."
@@ -120,7 +127,7 @@ jobs:
           --add-data "RELEASE_NOTES.md;."
           --add-data "settings.py;."
           --add-data "styles.py;."
-          --add-data "yt-dlp${RUNNER_OS==Windows && echo '.exe'};."
+          --add-data "${YTDLP_FILE};."
           --add-data "dialogs;dialogs/"
           --add-data "utils;utils/"
           --add-data "widgets;widgets/"
@@ -128,27 +135,35 @@ jobs:
           "main.py"
         )
 
-        # 4) Run PyInstaller
+        # Run PyInstaller
         pyinstaller "${args[@]}"
 
-    - name: Package build into ZIP
+    - name: Package build
       shell: bash
       run: |
-        ZIP_NAME="${APP_NAME}-${{ matrix.os }}.zip"
-        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+        if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+          TAR_NAME="${APP_NAME}-${{ matrix.os }}.tar.gz"
+          tar -czvf "$TAR_NAME" -C dist "${APP_NAME}"
+        elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          ZIP_NAME="${APP_NAME}-${{ matrix.os }}.zip"
           pwsh -c "Compress-Archive -Path dist/${APP_NAME} -DestinationPath $ZIP_NAME -CompressionLevel Optimal"
         else
+          ZIP_NAME="${APP_NAME}-${{ matrix.os }}.zip"
           zip -r "$ZIP_NAME" "dist/${APP_NAME}"
         fi
 
     - name: Compute SHA-256 checksum
       shell: bash
       run: |
-        ZIP_NAME="${APP_NAME}-${{ matrix.os }}.zip"
-        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          pwsh -c "\$h = Get-FileHash -Algorithm SHA256 $ZIP_NAME; \"\$($h.Hash)  $ZIP_NAME\" | Out-File -Encoding ASCII -NoNewline $ZIP_NAME.sha256"
+        if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+          FILE_NAME="${APP_NAME}-${{ matrix.os }}.tar.gz"
+          sha256sum "$FILE_NAME" > "$FILE_NAME.sha256"
+        elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          FILE_NAME="${APP_NAME}-${{ matrix.os }}.zip"
+          pwsh -c "\$h = Get-FileHash -Algorithm SHA256 $FILE_NAME; \"\$($h.Hash)  $FILE_NAME\" | Out-File -Encoding ASCII -NoNewline $FILE_NAME.sha256"
         else
-          sha256sum "$ZIP_NAME" > "$ZIP_NAME.sha256"
+          FILE_NAME="${APP_NAME}-${{ matrix.os }}.zip"
+          sha256sum "$FILE_NAME" > "$FILE_NAME.sha256"
         fi
 
     - name: Upload build artifacts
@@ -158,3 +173,5 @@ jobs:
         path: |
           ${{ env.APP_NAME }}-${{ matrix.os }}.zip
           ${{ env.APP_NAME }}-${{ matrix.os }}.zip.sha256
+          ${{ env.APP_NAME }}-${{ matrix.os }}.tar.gz
+          ${{ env.APP_NAME }}-${{ matrix.os }}.tar.gz.sha256
