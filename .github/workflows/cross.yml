@@ -17,7 +17,6 @@ jobs:
       APP_NAME: YTGet
 
     steps:
-
     - name: Checkout repository
       uses: actions/checkout@v4
 
@@ -31,11 +30,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt pyinstaller
 
+    # yt-dlp
     - name: Fetch yt-dlp (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
-      run: |
-        curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+      run: curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
 
     - name: Fetch yt-dlp (Linux/macOS)
       if: runner.os != 'Windows'
@@ -43,6 +42,7 @@ jobs:
         curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
         chmod +x yt-dlp
 
+    # FFmpeg
     - name: Install FFmpeg & FFprobe (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
@@ -75,11 +75,11 @@ jobs:
           cp /usr/local/bin/ffprobe .
         fi
 
+    # Clean old builds
     - name: Clean previous build artifacts
-      shell: bash
-      run: |
-        rm -rf build dist *.spec
+      run: rm -rf build dist *.spec
 
+    # Build
     - name: Build with PyInstaller
       shell: bash
       run: |
@@ -147,22 +147,24 @@ jobs:
         pyinstaller "${args[@]}"
         echo "ARCH=$ARCH" >> $GITHUB_ENV
 
+    # Create release archives
     - name: Package build
       shell: bash
       run: |
         ARCH_TAG="${ARCH:-$(uname -m)}"
         if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
           FILE_NAME="${APP_NAME}-linux-${ARCH_TAG}.tar.gz"
-          tar -czvf "$FILE_NAME" -C "dist/${APP_NAME}" .
+          tar -czvf "$FILE_NAME" -C dist "${APP_NAME}"
         elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
           FILE_NAME="${APP_NAME}-windows-${ARCH_TAG}.zip"
           pwsh -c "Compress-Archive -Path dist/${APP_NAME}/* -DestinationPath $FILE_NAME -CompressionLevel Optimal"
         else
           FILE_NAME="${APP_NAME}-macos-${ARCH_TAG}.tar.gz"
-          tar -czvf "$FILE_NAME" -C "dist/${APP_NAME}" .
+          tar -czvf "$FILE_NAME" -C dist "${APP_NAME}"
         fi
         echo "PACKAGE_FILE=$FILE_NAME" >> $GITHUB_ENV
 
+    # Checksum
     - name: Compute SHA-256 checksum
       shell: bash
       run: |
@@ -172,10 +174,18 @@ jobs:
           sha256sum "$PACKAGE_FILE" > "$PACKAGE_FILE.sha256"
         fi
 
-    - name: Upload build artifact
+    # Upload uncompressed folder for CI (avoids double zip)
+    - name: Upload build folder artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.APP_NAME }}-${{ matrix.os }}-${{ env.ARCH }}
+        name: ${{ env.APP_NAME }}-${{ matrix.os }}-${{ env.ARCH }}-folder
+        path: dist/${{ env.APP_NAME }}
+
+    # Upload release-ready archives
+    - name: Upload packaged archive
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.APP_NAME }}-${{ matrix.os }}-${{ env.ARCH }}-archive
         path: |
           ${{ env.PACKAGE_FILE }}
           ${{ env.PACKAGE_FILE }}.sha256
