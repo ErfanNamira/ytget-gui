@@ -1,7 +1,10 @@
 name: Build YTGet
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: 
+
+permissions:
+  contents: read  
 
 jobs:
   build:
@@ -82,12 +85,10 @@ jobs:
         $h = Get-FileHash -Algorithm SHA256 YTGet.zip
         "$($h.Hash)  YTGet.zip" | Out-File -Encoding ASCII -NoNewline YTGet.zip.sha256
 
-    - name: Upload artifacts (folder + zip + checksum)
+    - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
         name: YTGet-build
         path: |
-          dist/YTGet
           YTGet.zip
           YTGet.zip.sha256
-        retention-days: 14
