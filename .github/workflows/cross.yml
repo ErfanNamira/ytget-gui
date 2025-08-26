@@ -50,16 +50,22 @@ jobs:
         curl -L "${{ matrix.yt_dlp_url }}" -o yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}
         chmod +x yt-dlp || true
 
+    # Windows ffmpeg download using PowerShell
     - name: Download ffmpeg & ffprobe (Windows)
       if: runner.os == 'Windows'
+      shell: pwsh
       run: |
         curl -L "${{ matrix.ffmpeg_url }}" -o ffmpeg.zip
         tar -xf ffmpeg.zip
-        cp $(find . -name ffmpeg.exe | head -n 1) .
-        cp $(find . -name ffprobe.exe | head -n 1) .
+        $ffmpegPath = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+        $ffprobePath = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
+        Copy-Item $ffmpegPath.FullName .
+        Copy-Item $ffprobePath.FullName .
 
+    # Linux ffmpeg install using bash
     - name: Install ffmpeg (Linux)
       if: runner.os == 'Linux'
+      shell: bash
       run: |
         sudo apt-get update
         sudo apt-get install -y ${{ matrix.ffmpeg_pkg }}
@@ -67,6 +73,7 @@ jobs:
         cp $(which ffprobe) .
 
     - name: Build with PyInstaller
+      shell: bash
       run: |
         ICON_OPT=""
         [ -f "icon.ico" ] && ICON_OPT="--icon icon.ico"
@@ -104,17 +111,19 @@ jobs:
 
     - name: Package build (Windows)
       if: runner.os == 'Windows'
+      shell: pwsh
       run: Compress-Archive -Path dist/YTGet -DestinationPath YTGet-${{ matrix.os }}.zip -CompressionLevel Optimal
 
     - name: Package build (Linux)
       if: runner.os == 'Linux'
+      shell: bash
       run: tar -czf YTGet-${{ matrix.os }}.tar.gz -C dist YTGet
 
     - name: Generate SHA-256 checksum
+      shell: bash
       run: |
         if [ "${{ runner.os }}" = "Windows" ]; then
-          $h = Get-FileHash -Algorithm SHA256 YTGet-${{ matrix.os }}.zip
-          "$($h.Hash)  YTGet-${{ matrix.os }}.zip" | Out-File -Encoding ASCII -NoNewline YTGet-${{ matrix.os }}.zip.sha256
+          pwsh -Command "$h = Get-FileHash -Algorithm SHA256 YTGet-${{ matrix.os }}.zip; \"$($h.Hash)  YTGet-${{ matrix.os }}.zip\" | Out-File -Encoding ASCII -NoNewline YTGet-${{ matrix.os }}.zip.sha256"
         else
           sha256sum YTGet-${{ matrix.os }}.tar.gz > YTGet-${{ matrix.os }}.tar.gz.sha256
         fi
