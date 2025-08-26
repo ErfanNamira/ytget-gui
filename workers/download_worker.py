@@ -22,7 +22,7 @@ class DownloadWorker(QObject):
     finished = Signal(int)
     error = Signal(str)
 
-    def __init__(self, item: Dict[str, Any], settings: AppSettings, log_flush_ms: int = 500):
+    def __init__(self, item: Dict[str, Any], settings: AppSettings, log_flush_ms: int = 1000):
         super().__init__()
         self.item = item
         self.settings = settings
