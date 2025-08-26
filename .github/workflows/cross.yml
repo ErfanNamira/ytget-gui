@@ -75,10 +75,14 @@ jobs:
           cp /usr/local/bin/ffprobe .
         fi
 
+    - name: Clean previous build artifacts
+      shell: bash
+      run: |
+        rm -rf build dist *.spec
+
     - name: Build with PyInstaller
       shell: bash
       run: |
-        # Decide yt-dlp filename based on OS
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           YTDLP_FILE="yt-dlp.exe"
           SEP=";"
@@ -87,7 +91,6 @@ jobs:
           SEP=":"
         fi
 
-        # Common PyInstaller flags
         args=(
           --noconfirm
           --onedir
@@ -108,7 +111,6 @@ jobs:
           --hidden-import=mutagen.flac
         )
 
-        # OS-specific ffmpeg/ffprobe add-data
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           args+=(
             --add-data="__init__.py;."
@@ -125,7 +127,6 @@ jobs:
           )
         fi
 
-        # Common add-data entries
         args+=(
           --add-data="icon.ico${SEP}."
           --add-data="LICENSE${SEP}."
@@ -142,20 +143,38 @@ jobs:
           main.py
         )
 
+        # Make macOS build universal
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          args+=(--target-architecture universal2)
+        fi
+
         pyinstaller "${args[@]}"
+
+    - name: Smoke test built app
+      shell: bash
+      run: |
+        echo "Running smoke test..."
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          ./dist/${APP_NAME}/${APP_NAME}.exe --version || echo "Launch OK"
+        elif [[ "$RUNNER_OS" == "macOS" ]]; then
+          ./dist/${APP_NAME}/${APP_NAME}.app/Contents/MacOS/${APP_NAME} --version || echo "Launch OK"
+        else
+          ./dist/${APP_NAME}/${APP_NAME} --version || echo "Launch OK"
+        fi
 
     - name: Package build
       shell: bash
       run: |
+        ARCH=$(uname -m)
         if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-          FILE_NAME="${APP_NAME}-${{ matrix.os }}.tar.gz"
-          tar -czvf "$FILE_NAME" -C dist "${APP_NAME}"
+          FILE_NAME="${APP_NAME}-linux-${ARCH}.tar.gz"
+          tar -czvf "$FILE_NAME" -C "dist/${APP_NAME}" .
         elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          FILE_NAME="${APP_NAME}-${{ matrix.os }}.zip"
-          pwsh -c "Compress-Archive -Path dist/${APP_NAME} -DestinationPath $FILE_NAME -CompressionLevel Optimal"
+          FILE_NAME="${APP_NAME}-windows-${ARCH}.zip"
+          pwsh -c "Compress-Archive -Path dist/${APP_NAME}/* -DestinationPath $FILE_NAME -CompressionLevel Optimal"
         else
-          FILE_NAME="${APP_NAME}-${{ matrix.os }}.zip"
-          zip -r "$FILE_NAME" "dist/${APP_NAME}"
+          FILE_NAME="${APP_NAME}-macos-universal.tar.gz"
+          tar -czvf "$FILE_NAME" -C "dist/${APP_NAME}" .
         fi
         echo "PACKAGE_FILE=$FILE_NAME" >> $GITHUB_ENV
 
@@ -171,7 +190,7 @@ jobs:
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.APP_NAME }}-${{ matrix.os }}
+        name: ${{ env.APP_NAME }}-${{ matrix.os }}-${{ env.ARCH || 'universal' }}
         path: |
           ${{ env.PACKAGE_FILE }}
           ${{ env.PACKAGE_FILE }}.sha256
