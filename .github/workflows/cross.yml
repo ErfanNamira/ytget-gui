@@ -2,11 +2,6 @@ name: Cross YTGet
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
 
 permissions:
   contents: read
@@ -35,7 +30,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt pyinstaller
 
-    - name: Fetch yt-dlp binary
+    - name: Fetch yt-dlp binary (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
@@ -47,7 +42,7 @@ jobs:
         curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
         chmod +x yt-dlp
 
-    - name: Install or download FFmpeg & FFprobe (Windows)
+    - name: Install ffmpeg & ffprobe (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
@@ -58,7 +53,7 @@ jobs:
         Copy-Item $f.FullName .
         Copy-Item $p.FullName .
 
-    - name: Install or download FFmpeg & FFprobe (Ubuntu)
+    - name: Install ffmpeg & ffprobe (Ubuntu)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
@@ -66,7 +61,7 @@ jobs:
         cp /usr/bin/ffmpeg .
         cp /usr/bin/ffprobe .
 
-    - name: Install or download FFmpeg & FFprobe (macOS)
+    - name: Install ffmpeg & ffprobe (macOS)
       if: runner.os == 'macOS'
       run: |
         brew update
@@ -74,7 +69,8 @@ jobs:
         cp /usr/local/bin/ffmpeg .
         cp /usr/local/bin/ffprobe .
 
-    - name: Build executable with PyInstaller
+    - name: Build with PyInstaller
+      shell: bash
       run: |
         pyinstaller --noconfirm --onedir --windowed \
           --icon "icon.ico" \
@@ -120,30 +116,31 @@ jobs:
           --add-data "widgets;widgets/" \
           --add-data "workers;workers/" \
           "main.py"
-      shell: bash
 
     - name: Package build into ZIP
+      shell: bash
       run: |
-        ZIP_NAME="${{ env.APP_NAME }}-${{ runner.os }}.zip"
-        if [ "${{ runner.os }}" = "Windows" ]; then
+        ZIP_NAME="${{ env.APP_NAME }}-${{ matrix.os }}.zip"
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
           pwsh -c "Compress-Archive -Path dist/${{ env.APP_NAME }} -DestinationPath $ZIP_NAME -CompressionLevel Optimal"
         else
           zip -r "$ZIP_NAME" "dist/${{ env.APP_NAME }}"
         fi
 
     - name: Compute SHA-256 checksum
+      shell: bash
       run: |
-        ZIP_NAME="${{ env.APP_NAME }}-${{ runner.os }}.zip"
-        if [ "${{ runner.os }}" = "Windows" ]; then
+        ZIP_NAME="${{ env.APP_NAME }}-${{ matrix.os }}.zip"
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
           pwsh -c "\$h = Get-FileHash -Algorithm SHA256 $ZIP_NAME; \"\$($h.Hash)  $ZIP_NAME\" | Out-File -Encoding ASCII -NoNewline $ZIP_NAME.sha256"
         else
           sha256sum "$ZIP_NAME" > "$ZIP_NAME.sha256"
         fi
 
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.APP_NAME }}-${{ runner.os }}
+        name: ${{ env.APP_NAME }}-${{ matrix.os }}
         path: |
-          ${{ env.APP_NAME }}-${{ runner.os }}.zip
-          ${{ env.APP_NAME }}-${{ runner.os }}.zip.sha256
+          ${{ env.APP_NAME }}-${{ matrix.os }}.zip
+          ${{ env.APP_NAME }}-${{ matrix.os }}.zip.sha256
