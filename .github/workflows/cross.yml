@@ -67,8 +67,13 @@ jobs:
       run: |
         brew update
         brew install ffmpeg
-        cp /usr/local/bin/ffmpeg .
-        cp /usr/local/bin/ffprobe .
+        if [[ -x "/opt/homebrew/bin/ffmpeg" ]]; then
+          cp /opt/homebrew/bin/ffmpeg .
+          cp /opt/homebrew/bin/ffprobe .
+        else
+          cp /usr/local/bin/ffmpeg .
+          cp /usr/local/bin/ffprobe .
+        fi
 
     - name: Build with PyInstaller
       shell: bash
@@ -76,8 +81,10 @@ jobs:
         # Decide yt-dlp filename based on OS
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           YTDLP_FILE="yt-dlp.exe"
+          SEP=";"
         else
           YTDLP_FILE="yt-dlp"
+          SEP=":"
         fi
 
         # Common PyInstaller flags
@@ -101,7 +108,7 @@ jobs:
           --hidden-import=mutagen.flac
         )
 
-        # OS-specific add-data syntax
+        # OS-specific ffmpeg/ffprobe add-data
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           args+=(
             --add-data="__init__.py;."
@@ -119,12 +126,6 @@ jobs:
         fi
 
         # Common add-data entries
-        if [[ "$RUNNER_OS" == "Windows" ]]; then
-          SEP=";"
-        else
-          SEP=":"
-        fi
-
         args+=(
           --add-data="icon.ico${SEP}."
           --add-data="LICENSE${SEP}."
