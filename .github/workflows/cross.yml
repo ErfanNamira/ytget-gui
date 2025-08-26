@@ -2,85 +2,83 @@ name: Cross YTGet
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      APP_NAME: YTGet
 
     steps:
+
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up latest Python 3
+    - name: Set up Python 3.x
       uses: actions/setup-python@v5
       with:
         python-version: '3.x'
 
-    - name: Install dependencies
+    - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pyinstaller
+        pip install -r requirements.txt pyinstaller
 
-    # -------------------------
-    # Download yt-dlp per OS
-    # -------------------------
-    - name: Download yt-dlp (Windows)
-      if: matrix.os == 'windows-latest'
+    - name: Fetch yt-dlp binary
+      if: runner.os == 'Windows'
       shell: pwsh
       run: |
         curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
 
-    - name: Download yt-dlp (Linux/macOS)
-      if: matrix.os != 'windows-latest'
-      shell: bash
+    - name: Fetch yt-dlp binary (Linux/macOS)
+      if: runner.os != 'Windows'
       run: |
         curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
         chmod +x yt-dlp
 
-    # -------------------------
-    # Download ffmpeg & ffprobe per OS
-    # -------------------------
-    - name: Download ffmpeg (Windows)
-      if: matrix.os == 'windows-latest'
+    - name: Install or download FFmpeg & FFprobe (Windows)
+      if: runner.os == 'Windows'
       shell: pwsh
       run: |
         curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-        Expand-Archive -Path ffmpeg.zip -DestinationPath .
-        $ffmpegPath = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-        $ffprobePath = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
-        Copy-Item $ffmpegPath.FullName .
-        Copy-Item $ffprobePath.FullName .
+        tar -xf ffmpeg.zip
+        $f = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+        $p = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
+        Copy-Item $f.FullName .
+        Copy-Item $p.FullName .
 
-    - name: Install ffmpeg (Linux)
-      if: matrix.os == 'ubuntu-latest'
-      shell: bash
+    - name: Install or download FFmpeg & FFprobe (Ubuntu)
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y ffmpeg
-        cp "$(which ffmpeg)" .
-        cp "$(which ffprobe)" .
+        cp /usr/bin/ffmpeg .
+        cp /usr/bin/ffprobe .
 
-    - name: Install ffmpeg (macOS)
-      if: matrix.os == 'macos-latest'
-      shell: bash
+    - name: Install or download FFmpeg & FFprobe (macOS)
+      if: runner.os == 'macOS'
       run: |
+        brew update
         brew install ffmpeg
-        cp "$(which ffmpeg)" .
-        cp "$(which ffprobe)" .
+        cp /usr/local/bin/ffmpeg .
+        cp /usr/local/bin/ffprobe .
 
-    # -------------------------
-    # Build with PyInstaller
-    # -------------------------
-    - name: Build with PyInstaller
-      shell: bash
+    - name: Build executable with PyInstaller
       run: |
         pyinstaller --noconfirm --onedir --windowed \
           --icon "icon.ico" \
-          --name "YTGet" \
+          --name "${{ env.APP_NAME }}" \
           --clean --noupx \
           --version-file "version_info.txt" \
           --hidden-import "PySide6.QtCore" \
@@ -92,47 +90,60 @@ jobs:
           --hidden-import "webbrowser" \
           --hidden-import "mutagen.id3" \
           --hidden-import "mutagen.flac" \
-          --add-data "__init__.py:." \
-          --add-data "__main__.py:." \
-          --add-data "ffmpeg*:. " \
-          --add-data "ffprobe*:. " \
-          --add-data "icon.ico:." \
-          --add-data "LICENSE:." \
-          --add-data "main_window.py:." \
-          --add-data "README.md:." \
-          --add-data "RELEASE_NOTES.md:." \
-          --add-data "settings.py:." \
-          --add-data "styles.py:." \
-          --add-data "yt-dlp*:." \
-          --add-data "dialogs:dialogs/" \
-          --add-data "utils:utils/" \
-          --add-data "widgets:widgets/" \
-          --add-data "workers:workers/" \
+          $(
+            if [ "${{ runner.os }}" = "Windows" ]; then
+              cat <<'EOF'
+              --add-data "__init__.py;."
+              --add-data "__main__.py;."
+              --add-data "ffmpeg.exe;."
+              --add-data "ffprobe.exe;."
+              EOF
+            else
+              cat <<'EOF'
+              --add-data "__init__.py:."
+              --add-data "__main__.py:."
+              --add-data "ffmpeg:."
+              --add-data "ffprobe:."
+              EOF
+            fi
+          ) \
+          --add-data "icon.ico;." \
+          --add-data "LICENSE;." \
+          --add-data "main_window.py;." \
+          --add-data "README.md;." \
+          --add-data "RELEASE_NOTES.md;." \
+          --add-data "settings.py;." \
+          --add-data "styles.py;." \
+          --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }};." \
+          --add-data "dialogs;dialogs/" \
+          --add-data "utils;utils/" \
+          --add-data "widgets;widgets/" \
+          --add-data "workers;workers/" \
           "main.py"
-
-    # -------------------------
-    # Package build
-    # -------------------------
-    - name: Zip build
       shell: bash
-      run: |
-        cd dist
-        zip -r ../YTGet-${{ matrix.os }}.zip YTGet
 
-    - name: Generate SHA-256 checksum
-      shell: bash
+    - name: Package build into ZIP
       run: |
-        shasum -a 256 YTGet-${{ matrix.os }}.zip > YTGet-${{ matrix.os }}.zip.sha256
+        ZIP_NAME="${{ env.APP_NAME }}-${{ runner.os }}.zip"
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          pwsh -c "Compress-Archive -Path dist/${{ env.APP_NAME }} -DestinationPath $ZIP_NAME -CompressionLevel Optimal"
+        else
+          zip -r "$ZIP_NAME" "dist/${{ env.APP_NAME }}"
+        fi
 
-    # -------------------------
-    # Upload artifacts
-    # -------------------------
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+    - name: Compute SHA-256 checksum
+      run: |
+        ZIP_NAME="${{ env.APP_NAME }}-${{ runner.os }}.zip"
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          pwsh -c "\$h = Get-FileHash -Algorithm SHA256 $ZIP_NAME; \"\$($h.Hash)  $ZIP_NAME\" | Out-File -Encoding ASCII -NoNewline $ZIP_NAME.sha256"
+        else
+          sha256sum "$ZIP_NAME" > "$ZIP_NAME.sha256"
+        fi
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
       with:
-        name: YTGet-build-${{ matrix.os }}
+        name: ${{ env.APP_NAME }}-${{ runner.os }}
         path: |
-          dist/YTGet
-          YTGet-${{ matrix.os }}.zip
-          YTGet-${{ matrix.os }}.zip.sha256
-        retention-days: 14
+          ${{ env.APP_NAME }}-${{ runner.os }}.zip
+          ${{ env.APP_NAME }}-${{ runner.os }}.zip.sha256
