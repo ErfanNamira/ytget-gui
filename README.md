@@ -141,6 +141,51 @@ _internal/cookies.txt
 
 ---
 
+## 🔧 Development Setup 
+
+### Prerequisites
+
+- [Python](https://www.python.org/downloads/)
+- [FFmpeg and FFprobe](https://www.ffmpeg.org/download.html) (Add to path or source folder)
+
+### Setup
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/ErfanNamira/ytget.git
+   ```
+
+2. **Create & activate virtual environment**
+    ```bash
+    python -m venv venv
+    source venv/bin/activate   # on Linux/Mac
+    venv\Scripts\activate      # on Windows
+    ```
+
+2. **Install dependencies**
+   ```bash
+    pip install -r requirements.txt
+   ```
+
+4. **Run the app**
+   ```bash
+   python -m ytget
+   ```
+
+---
+
+## 🤝 Contribution Guide
+
+1. Fork & clone the repo
+
+2. Create a feature branch: git checkout -b my-feature
+
+3. Commit & push: git commit -m "msg" && git push origin my-feature
+
+4. Open a Pull Request
+
+---
+
 ## 📄 License
 
 This project is licensed under the **MIT License**. See the [LICENSE](./LICENSE) file for full details.
