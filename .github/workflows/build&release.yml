@@ -51,7 +51,7 @@ jobs:
       shell: pwsh
       run: |
         pyinstaller --noconfirm --onedir --windowed `
-          --icon "icon.ico" `
+          --icon "ytget/icon.ico" `
           --name "YTGet" `
           --clean --noupx `
           --version-file "version_info.txt" `
@@ -64,23 +64,23 @@ jobs:
           --hidden-import "webbrowser" `
           --hidden-import "mutagen.id3" `
           --hidden-import "mutagen.flac" `
-          --add-data "__init__.py;." `
-          --add-data "__main__.py;." `
-          --add-data "ffmpeg.exe;." `
-          --add-data "ffprobe.exe;." `
-          --add-data "icon.ico;." `
+          --add-data "ytget/__init__.py;ytget" `
+          --add-data "ytget/__main__.py;ytget" `
+          --add-data "ytget/main_window.py;ytget" `
+          --add-data "ytget/settings.py;ytget" `
+          --add-data "ytget/styles.py;ytget" `
+          --add-data "ytget/icon.ico;ytget" `
+          --add-data "ytget/dialogs;ytget/dialogs" `
+          --add-data "ytget/utils;ytget/utils" `
+          --add-data "ytget/widgets;ytget/widgets" `
+          --add-data "ytget/workers;ytget/workers" `
           --add-data "LICENSE;." `
-          --add-data "main_window.py;." `
           --add-data "README.md;." `
           --add-data "RELEASE_NOTES.md;." `
-          --add-data "settings.py;." `
-          --add-data "styles.py;." `
           --add-data "yt-dlp.exe;." `
-          --add-data "dialogs;dialogs/" `
-          --add-data "utils;utils/" `
-          --add-data "widgets;widgets/" `
-          --add-data "workers;workers/" `
-          "main.py"
+          --add-data "ffmpeg.exe;." `
+          --add-data "ffprobe.exe;." `
+          "ytget/main.py"
 
     - name: Zip build
       shell: pwsh
