@@ -1,24 +1,39 @@
 ## ✨ What’s New
 
-1. **New `update_manager` Module**  
-   - Effortlessly keep **YTGet** and its dependencies up-to-date.  
-   - Checks for the latest YTGet release directly from GitHub.  
-   - **yt-dlp Dependency Updates**  
-     - Verifies the installed `yt-dlp` binary version.  
-     - Automatically downloads and replaces it with the latest release from the official repository when needed.  
+1. **Enhanced Save Keybindings**  
+   - All dialogs now accept **Ctrl + Enter** (Windows/Linux) and **⌘ + Enter** (macOS) to save or accept.  
 
-2. **Fixed "Unknown - …" Filenames**  
-   - The `_build_command()` logic previously applied the `YT_MUSIC_METADATA` filename template even for non-audio jobs.  
-   - This caused incorrect titles like `"Unknown - …"` in `.mkv` files.  
-   - Now, filename templates apply correctly based on job type — no more bleed-through into video downloads.  
+2. **Full Thread‐Safety Overhaul**  
+   - Every signal from worker threads into the UI now uses `Qt.QueuedConnection`.  
+   - Eliminated the “Cannot create children for a parent in a different thread” Qt error.  
 
-3. **Built with GitHub Actions**  
-   - YTGet is now fully built and released using **GitHub Actions** for a more reliable and automated build process.  
+3. **Post-Queue Action Refinement**  
+   - The **Keep** action is now a silent no-op (no warning).  
+   - Shutdown, Sleep, Restart and Close are dispatched through the GUI thread to guarantee correct behavior.  
+
+4. **UpdateManager Improvements**  
+   - Unified OS detection via `platform.system()`.  
+   - Broader macOS asset matching (Intel and Universal2 binaries).  
+   - Graceful fallback around `CREATE_NO_WINDOW` on non-Windows Python builds.  
+
+5. **YouTube URL Validator Extended**  
+   - Now matches `youtube-nocookie.com` URLs.  
+   - Strips trailing slashes before validation for more forgiving input.  
+
+6. **Thumbnail Fetcher Optimized**  
+   - Reuses a single `requests.Session` (with optional proxy).  
+   - Retries each URL up to 3 times with exponential backoff.  
+   - Filters out tiny placeholder images (< 1 KiB).  
+   - Writes atomically via a temp file, then renames into place.  
+
+7. **Styles & High-DPI Support**  
+   - Enabled `Qt.AA_EnableHighDpiScaling` and `Qt.AA_UseHighDpiPixmaps`.  
+   - Dynamically scales fonts, padding and radii based on the screen’s DPI.  
 
 ---
 
 ### 🆚 Updated Dependencies
-- **yt-dlp:** `2025.08.22`  
+- **yt-dlp:** `2025.08.27`  
 - **ffmpeg:** `8.0.0`  
 
 ---

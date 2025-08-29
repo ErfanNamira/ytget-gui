@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import platform
 from pathlib import Path
 from typing import Optional, List, Any
 
@@ -49,8 +50,7 @@ class TitleFetcher(QObject):
 
     def run(self):
         try:
-            # Build yt-dlp command. We intentionally DO NOT use --flat-playlist so we can
-            # get rich JSON for a single video/entry line (id, thumbnail, title, etc.).
+            # Build yt-dlp command.
             cmd: List[str] = [
                 str(self.yt_dlp_path),
                 "--ffmpeg-location",
@@ -80,15 +80,14 @@ class TitleFetcher(QObject):
             if self.proxy_url:
                 cmd.extend(["--proxy", self.proxy_url])
 
-            # Hide console window on Windows
+            # Hide child console on Windows, leave None elsewhere
             startupinfo = None
-            try:
-                if subprocess._mswindows:  # type: ignore[attr-defined]
-                    si = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
-                    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+            if platform.system().lower().startswith("win"):
+                try:
+                    si = subprocess.STARTUPINFO()
+                    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                     startupinfo = si
-            except Exception:
-                pass
+                except Exception:        
 
             proc = subprocess.run(
                 cmd,

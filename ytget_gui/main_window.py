@@ -5,8 +5,11 @@ import os
 import sys
 import json
 import webbrowser
+import platform
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from shutil import which
 
 import requests
 from PySide6.QtCore import Qt, QThread, QTimer, QSettings, QSize, Signal, Slot
@@ -319,6 +322,9 @@ class MainWindow(QMainWindow):
     request_check_ytdlp = Signal()
     request_download_ytdlp = Signal(str)    
 
+    # Signal to marshal post‐queue actions back to GUI thread
+    post_queue_action_signal = Signal(str)
+
     def __init__(self):
         super().__init__()
         self.settings = AppSettings()
@@ -352,6 +358,11 @@ class MainWindow(QMainWindow):
         self.updater.ytdlp_download_failed.connect(self._on_ytdlp_download_failed)
 
         self.update_thread.start()
+        # ensure post‐queue actions run in GUI thread
+        self.post_queue_action_signal.connect(
+            self._perform_post_queue_action,
+            Qt.QueuedConnection
+        )
 
         # Thumbnail cache folder and async jobs
         self.thumb_cache_dir: Path = self.settings.BASE_DIR / "cache" / "thumbs"
@@ -783,7 +794,7 @@ class MainWindow(QMainWindow):
             "Shutdown PC": "Shutdown",
             "Sleep PC": "Sleep",
             "Restart PC": "Restart",
-            "Close ytget_gui": "Close",
+            "Close YTGet": "Close",
         }
         self.post_actions_map = {}
         for text, value in actions.items():
@@ -1270,12 +1281,24 @@ class MainWindow(QMainWindow):
         self.global_progress.setValue(percent)
 
     def _on_queue_finished(self):
-        self.log(f"🏁 Queue complete! Action: {self.post_queue_action}.\n", AppStyles.SUCCESS_COLOR, "Info")
+        # Notify that the queue is complete
+        self.log(
+            f"🏁 Queue complete! Action: {self.post_queue_action}.\n",
+            AppStyles.SUCCESS_COLOR,
+            "Info"
+        )
         self._initial_queue_len = 0
         self._update_global_progress_bar()
 
+        # If we need to crop audio covers, do so asynchronously
         if getattr(self.settings, "CROP_AUDIO_COVERS", False):
-            self.log("🖼️ Cropping audio covers to 1:1. This may take a moment...\n", AppStyles.INFO_COLOR, "Info")
+            self.log(
+                "🖼️ Cropping audio covers to 1:1. This may take a moment...\n",
+                AppStyles.INFO_COLOR,
+                "Info"
+            )
+
+            # If a previous cover thread is running, stop it first
             try:
                 if self.cover_thread and self.cover_thread.isRunning():
                     self.cover_thread.quit()
@@ -1283,34 +1306,126 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 pass
 
+            # Set up a new thread + worker for cover cropping
             self.cover_thread = QThread()
             self.cover_worker = CoverCropWorker(self.settings.DOWNLOADS_DIR)
             self.cover_worker.moveToThread(self.cover_thread)
+
+            # When the thread starts, run the worker
             self.cover_thread.started.connect(self.cover_worker.run)
-            self.cover_worker.log.connect(self.log)
+
+            # Marshal logs onto the GUI thread
+            self.cover_worker.log.connect(self.log, Qt.QueuedConnection)
+
+            # Quit thread when done
             self.cover_worker.finished.connect(self.cover_thread.quit)
-            self.cover_worker.finished.connect(lambda: self._perform_post_queue_action(self.post_queue_action))
+
+            # Instead of calling the action directly (wrong thread), emit our queued signal
+            self.cover_worker.finished.connect(
+                lambda action=self.post_queue_action: self.post_queue_action_signal.emit(action),
+                Qt.QueuedConnection
+            )
+
+            # Clean up when thread finishes
             self.cover_thread.finished.connect(self.cover_worker.deleteLater)
             self.cover_thread.finished.connect(self.cover_thread.deleteLater)
-            self.cover_thread.start()
-        else:
-            self._perform_post_queue_action(self.post_queue_action)
 
+            # Start cropping
+            self.cover_thread.start()
+
+        else:
+            # No cropping needed—emit signal so the action runs on the GUI thread
+            self.post_queue_action_signal.emit(self.post_queue_action)
+           
     def _perform_post_queue_action(self, action: str):
+        """
+        Cross-platform implementations for Keep | Shutdown | Sleep | Restart | Close.
+        - “Keep”: do nothing
+        - “Close”: quit the app
+        - All other actions are dispatched via subprocess.run()
+        """
+        # 1) Silent no-op
+        if action == "Keep":
+            return
+
+        # 2) Close the window immediately
         if action == "Close":
             self.close()
             return
 
-        if sys.platform != "win32":
-            self.log(f"⚠️ '{action}' is only supported on Windows.\n", AppStyles.WARNING_COLOR, "Warning")
+        # 3) Normalize platform key
+        sysname = platform.system().lower()
+        if sysname.startswith("win"):
+            plat = "win"
+        elif sysname == "darwin":
+            plat = "mac"
+        else:
+            plat = "linux"
+
+        # 4) Define action → command mapping
+        ACTION_COMMANDS: dict[str, dict[str, list[str]]] = {
+            "Shutdown": {
+                "win": ["shutdown", "/s", "/t", "60"],
+                "mac": [
+                    "osascript", "-e",
+                    'tell app "System Events" to shut down'
+                ],
+                "linux": [
+                    which("systemctl") or "shutdown",
+                    which("systemctl") and "poweroff" or "now"
+                ],
+            },
+            "Sleep": {
+                "win": [
+                    "powershell", "-Command",
+                    "Add-Type -AssemblyName System.Windows.Forms; "
+                    "[System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false)"
+                ],
+                "mac": ["pmset", "sleepnow"],
+                "linux": [
+                    which("systemctl") or "pm-suspend",
+                    which("systemctl") and "suspend" or ""
+                ],
+            },
+            "Restart": {
+                "win": ["shutdown", "/r", "/t", "60"],
+                "mac": [
+                    "osascript", "-e",
+                    'tell app "System Events" to restart'
+                ],
+                "linux": [
+                    which("systemctl") or "shutdown",
+                    which("systemctl") and "reboot" or "now"
+                ],
+            },
+        }
+
+        # 5) Lookup and run
+        cmds_for_action = ACTION_COMMANDS.get(action)
+        if not cmds_for_action:
+            self.log(
+                f"⚠️ Unknown post-queue action: {action}\n",
+                AppStyles.WARNING_COLOR, "Warning"
+            )
             return
 
-        if action == "Shutdown":
-            os.system("shutdown /s /t 60")
-        elif action == "Sleep":
-            os.system('timeout /t 60 && powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState(\'Suspend\', $false, $false)"')
-        elif action == "Restart":
-            os.system("shutdown /r /t 60")
+        cmd = cmds_for_action.get(plat)
+        if not cmd or not cmd[0]:
+            self.log(
+                f"⚠️ Cannot perform '{action}' on this platform ({sysname}).\n",
+                AppStyles.WARNING_COLOR, "Warning"
+            )
+            return
+
+        try:
+            # Some commands (esp. on Linux fallbacks) are single-item strings
+            # so ensure we pass a list to subprocess.run
+            subprocess.run(cmd if isinstance(cmd, list) else [cmd], check=False)
+        except Exception as exc:
+            self.log(
+                f"❌ Failed to {action.lower()}: {exc}\n",
+                AppStyles.ERROR_COLOR, "Error"
+            )
 
     # ---------- Queue pane helpers (sort, filter, drag-reorder, bulk) ----------
 

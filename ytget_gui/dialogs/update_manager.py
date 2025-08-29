@@ -6,6 +6,7 @@ import sys
 import shutil
 import tempfile
 import subprocess
+import platform
 from pathlib import Path
 
 import requests
@@ -21,10 +22,10 @@ class UpdateManager(QObject):
     Thread-safe update manager for ytget_gui and yt-dlp.
 
     Responsibilities:
-    - Check for updates via GitHub API
-    - Download and replace binaries
-    - Emit signals for UI to handle dialogs and progress
-    - Never touch UI directly (safe for QThread use)
+      - Check for updates via GitHub API
+      - Download and replace binaries
+      - Emit signals for UI to handle dialogs and progress
+      - Never touch UI directly (safe for QThread use)
     """
 
     # Logging to UI console: text, color, level
@@ -34,9 +35,9 @@ class UpdateManager(QObject):
     progress_signal = Signal(int, str)
 
     # ytget_gui update results
-    ytget_gui_ready = Signal(str)           # latest version
-    ytget_gui_uptodate = Signal()           # already up to date
-    ytget_gui_error = Signal(str)           # error message
+    ytget_gui_ready = Signal(str)        # latest version
+    ytget_gui_uptodate = Signal()        # already up to date
+    ytget_gui_error = Signal(str)        # error message
 
     # yt-dlp update results
     ytdlp_ready = Signal(str, str, str)  # latest, current, asset_url
@@ -47,12 +48,12 @@ class UpdateManager(QObject):
     ytdlp_download_success = Signal()
     ytdlp_download_failed = Signal(str)  # error message
 
-    def __init__(self, settings, log_callback=None, parent=None):
+    def __init__(self, settings: Any, log_callback=None, parent=None):
         super().__init__(parent)
         self.settings = settings
         self._log_cb = log_callback
 
-        # API endpoints
+        # Determine GitHub owner/repo from settings.GITHUB_URL
         owner_repo = "/".join(self.settings.GITHUB_URL.rstrip("/").split("/")[-2:])
         self.ytget_gui_api = f"https://api.github.com/repos/{owner_repo}/releases/latest"
         self.ytdlp_api = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
@@ -62,7 +63,7 @@ class UpdateManager(QObject):
         if getattr(self.settings, "PROXY_URL", ""):
             self.session.proxies.update({
                 "http": self.settings.PROXY_URL,
-                "https": self.settings.PROXY_URL
+                "https": self.settings.PROXY_URL,
             })
 
     # -------- Public entry points --------
@@ -74,7 +75,7 @@ class UpdateManager(QObject):
 
     def check_ytget_gui_update(self):
         """Check if a newer ytget_gui release is available."""
-        self._log("🌐 Checking for ytget_gui updates...\n", AppStyles.INFO_COLOR, "Info")
+        self._log("🌐 Checking for YTGet updates...\n", AppStyles.INFO_COLOR, "Info")
         try:
             latest = self._fetch_latest_version(self.ytget_gui_api)
             if version.parse(latest) > version.parse(self.settings.VERSION):
@@ -88,7 +89,6 @@ class UpdateManager(QObject):
         """Check if a newer yt-dlp release is available."""
         self._log("🌐 Checking for yt-dlp updates...\n", AppStyles.INFO_COLOR, "Info")
         exe_path = Path(self.settings.YT_DLP_PATH)
-
         try:
             latest, asset_url = self._fetch_latest_ytdlp_info()
             current_ver = self._get_ytdlp_version(exe_path)
@@ -136,15 +136,22 @@ class UpdateManager(QObject):
             raise ValueError("No suitable yt-dlp binary found for this platform.")
         return latest, asset["browser_download_url"]
 
-    def _select_ytdlp_asset(self, assets):
-        if is_windows():
-            target_names = ["yt-dlp.exe"]
-        elif sys.platform == "darwin":
-            target_names = ["yt-dlp_macos", "yt-dlp"]
+    def _select_ytdlp_asset(self, assets: list) -> Optional[dict]:
+        """
+        Pick the correct yt-dlp binary asset name based on OS:
+          - Windows: yt-dlp.exe
+          - macOS: look for macOS Intel or Universal2 build, fallback to generic
+          - Linux/others: yt-dlp
+        """
+        sysname = platform.system().lower()
+        if sysname.startswith("win"):
+            candidates = ["yt-dlp.exe"]
+        elif sysname == "darwin":
+            candidates = ["yt-dlp_macos", "yt-dlp_macos_universal2", "yt-dlp"]
         else:
-            target_names = ["yt-dlp"]
+            candidates = ["yt-dlp"]
 
-        for name in target_names:
+        for name in candidates:
             for a in assets:
                 if a.get("name") == name:
                     return a
@@ -155,17 +162,23 @@ class UpdateManager(QObject):
         if not exe_path.exists():
             return None
         try:
-            kwargs = {}
-            if sys.platform == "win32":
-                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            kwargs: dict[str, Any] = {}
+            if platform.system().lower().startswith("win"):
+                # suppress console window on Windows
+                try:
+                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                except AttributeError:
+                    pass
 
             result = subprocess.run(
                 [str(exe_path), "--version"],
-                capture_output=True, text=True, timeout=6,
+                capture_output=True,
+                text=True,
+                timeout=6,
                 **kwargs
             )
             out = (result.stdout or "").strip()
-            return out if out else None
+            return out or None
         except Exception:
             return None
 

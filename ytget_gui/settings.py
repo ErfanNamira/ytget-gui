@@ -1,7 +1,9 @@
 # File: ytget_gui/settings.py
+
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,13 +14,12 @@ from ytget_gui.utils.paths import (
     executable_name,
     which_or_path,
     default_downloads_dir,
-    is_windows,
 )
 
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.4.6"
+    VERSION: str = "2.4.7"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
@@ -44,7 +45,6 @@ class AppSettings:
     )
 
     # VP9-first mappings for non-AV1 fallback, plus 8K.
-    # Each value may also include a graceful generic fallback for robustness.
     RESOLUTIONS: Dict[str, str] = field(
         default_factory=lambda: {
             "🎬 4320p (8K)": "bestvideo[height=4320][vcodec=vp9]+bestaudio/bestvideo[height<=4320]+bestaudio",
@@ -62,7 +62,7 @@ class AppSettings:
 
     PROXY_URL: str = ""
     SPONSORBLOCK_CATEGORIES: List[str] = field(default_factory=list)
-    CHAPTERS_MODE: str = "embed"  # none|embed|split
+    CHAPTERS_MODE: str = "embed"       # none|embed|split
     WRITE_SUBS: bool = False
     SUB_LANGS: str = "en"
     WRITE_AUTO_SUBS: bool = False
@@ -86,33 +86,45 @@ class AppSettings:
     VIDEO_FORMAT: str = ".mkv"
 
     def __post_init__(self):
+        # Prepare paths
         self.INTERNAL_DIR = (self.BASE_DIR / "_internal").resolve()
         self.CONFIG_PATH = (self.BASE_DIR / "config.json").resolve()
         self.COOKIES_PATH = (self.BASE_DIR / "cookies.txt").resolve()
         self.ARCHIVE_PATH = (self.BASE_DIR / "archive.txt").resolve()
 
-        # Resolve binaries with PATH fallback
+        # Ensure directories exist
+        self.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        self.INTERNAL_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Touch files if missing
+        if not self.COOKIES_PATH.exists():
+            self.COOKIES_PATH.touch()
+        if self.ENABLE_ARCHIVE and not self.ARCHIVE_PATH.exists():
+            self.ARCHIVE_PATH.touch()
+
+        # Define bundled candidates
         yt_dlp_candidate = self.BASE_DIR / executable_name("yt-dlp")
         ffmpeg_candidate = self.BASE_DIR / executable_name("ffmpeg")
         ffprobe_candidate = self.BASE_DIR / executable_name("ffprobe")
 
-        self.YT_DLP_PATH = which_or_path(yt_dlp_candidate, executable_name("yt-dlp"))
-        self.FFMPEG_PATH = which_or_path(ffmpeg_candidate, executable_name("ffmpeg"))
-        self.FFPROBE_PATH = which_or_path(ffprobe_candidate, executable_name("ffprobe"))
+        # Resolve via ENV override, then system PATH, then bundled
+        yt_env = os.getenv("YTGET_YT_DLP_PATH")
+        self.YT_DLP_PATH = Path(yt_env) if yt_env and Path(yt_env).exists() \
+            else which_or_path(yt_dlp_candidate, executable_name("yt-dlp"))
 
+        ff_env = os.getenv("YTGET_FFMPEG_PATH")
+        self.FFMPEG_PATH = Path(ff_env) if ff_env and Path(ff_env).exists() \
+            else which_or_path(ffmpeg_candidate, executable_name("ffmpeg"))
+
+        fp_env = os.getenv("YTGET_FFPROBE_PATH")
+        self.FFPROBE_PATH = Path(fp_env) if fp_env and Path(fp_env).exists() \
+            else which_or_path(ffprobe_candidate, executable_name("ffprobe"))
+
+        # Output templates
         self.OUTPUT_TEMPLATE = str((self.DOWNLOADS_DIR / "%(title)s.%(ext)s").resolve())
         self.PLAYLIST_TEMPLATE = str((self.DOWNLOADS_DIR / "%(playlist_index)s - %(title)s.%(ext)s").resolve())
 
-        self.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-        self.INTERNAL_DIR.mkdir(parents=True, exist_ok=True)
-
-        if not self.COOKIES_PATH.exists():
-            self.COOKIES_PATH.touch()
-
-        if self.ENABLE_ARCHIVE and not self.ARCHIVE_PATH.exists():
-            self.ARCHIVE_PATH.touch()
-
-        # Load config last to override any defaults
+        # Load persisted config last
         self.load_config()
 
     # -------- Format selection (AV1 -> VP9 map -> best) --------
@@ -120,29 +132,19 @@ class AppSettings:
     def get_format_for_resolution(self, height: int, audio: str = "bestaudio") -> str:
         """
         Build a yt-dlp format string that:
-        1) Prefers AV1 at the target height,
-        2) Falls back to VP9 mapping,
-        3) Falls back to best available at or below that height,
-        4) Finally, generic best as a last resort.
-
-        Uses yt-dlp's slash-separated fallback selection.
+          1) Prefers AV1 at the target height,
+          2) Falls back to VP9 mapping,
+          3) Falls back to best available at or below that height,
+          4) Finally, generic best as a last resort.
         """
         label = self._label_for_height(height)
 
-        # 1) AV1-first candidate at exact height
         av1 = f"bestvideo[height={height}][vcodec=av01]+{audio}"
-
-        # 2) VP9 (or your configured mapping) for that label, if available
         vp9_map = self.RESOLUTIONS.get(label, "")
-
-        # 3) Generic best at-or-below the requested height
         best_at_or_below = f"bestvideo[height<={height}]+{audio}"
-
-        # 4) Absolute generic fallbacks
         generic_best = f"bestvideo+{audio}"
         ultimate = "best"
 
-        # Build chain and dedupe to avoid repeating segments
         chain = "/".join([av1, vp9_map, best_at_or_below, generic_best, ultimate])
         return self._dedupe_format_chain(chain)
 
@@ -157,7 +159,6 @@ class AppSettings:
         }.get(height, f"🎬 {height}p")
 
     def _dedupe_format_chain(self, chain: str) -> str:
-        """Remove duplicate segments while preserving order."""
         seen = set()
         parts: List[str] = []
         for seg in (s.strip() for s in chain.split("/") if s.strip()):
@@ -216,6 +217,8 @@ class AppSettings:
             return
         try:
             config = json.loads(self.CONFIG_PATH.read_text(encoding="utf-8"))
+
+            # Basic flags
             self.PROXY_URL = config.get("PROXY_URL", self.PROXY_URL)
             self.SPONSORBLOCK_CATEGORIES = config.get("SPONSORBLOCK_CATEGORIES", self.SPONSORBLOCK_CATEGORIES)
             self.CHAPTERS_MODE = config.get("CHAPTERS_MODE", self.CHAPTERS_MODE)
@@ -241,7 +244,7 @@ class AppSettings:
             self.CROP_AUDIO_COVERS = config.get("CROP_AUDIO_COVERS", self.CROP_AUDIO_COVERS)
             self.VIDEO_FORMAT = config.get("VIDEO_FORMAT", self.VIDEO_FORMAT)
 
-            # Paths (allow user to override)
+            # Override download dir if set
             dl_dir = config.get("DOWNLOADS_DIR")
             if dl_dir:
                 self.DOWNLOADS_DIR = Path(dl_dir).resolve()
@@ -249,27 +252,17 @@ class AppSettings:
                 self.OUTPUT_TEMPLATE = str(self.DOWNLOADS_DIR / "%(title)s.%(ext)s")
                 self.PLAYLIST_TEMPLATE = str(self.DOWNLOADS_DIR / "%(playlist_index)s - %(title)s.%(ext)s")
 
-            y = config.get("YT_DLP_PATH")
-            f = config.get("FFMPEG_PATH")
-            p = config.get("FFPROBE_PATH")
-            c = config.get("COOKIES_PATH")
-            a = config.get("ARCHIVE_PATH")
-
-            if y and Path(y).exists():
-                self.YT_DLP_PATH = Path(y)
-
-            if f and Path(f).exists():
-                self.FFMPEG_PATH = Path(f)
-
-            if p and Path(p).exists():
-                self.FFPROBE_PATH = Path(p)
-
-            if c and Path(c).exists():
-                self.COOKIES_PATH = Path(c)
-
-            if a and Path(a).exists():
-                self.ARCHIVE_PATH = Path(a)
+            # Override binary paths if valid
+            for key, attr in (
+                ("YT_DLP_PATH", "YT_DLP_PATH"),
+                ("FFMPEG_PATH", "FFMPEG_PATH"),
+                ("FFPROBE_PATH", "FFPROBE_PATH"),
+                ("COOKIES_PATH", "COOKIES_PATH"),
+                ("ARCHIVE_PATH", "ARCHIVE_PATH"),
+            ):
+                val = config.get(key)
+                if val and Path(val).exists():
+                    setattr(self, attr, Path(val))
 
         except Exception as e:
             print(f"Error loading config: {e}")
-

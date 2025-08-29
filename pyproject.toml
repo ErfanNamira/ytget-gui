@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytget-gui"
-version = "2.4.6.5"
+version = "2.4.6.6"
 description = "A GUI YouTube downloader powered by yt-dlp"
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
 authors = [
-    { name = "Erfan Namira", email = "erfannamira@gmail.com" }
+    { name = "Namira", email = "erfannamira@gmail.com" }
 ]
 keywords = ["youtube-downloader", "downloader", "yt-dlp", "yt-dlp-gui", "audio-downloader", "video-downloader"]
 classifiers = [

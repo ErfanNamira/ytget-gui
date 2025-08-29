@@ -21,7 +21,11 @@ class CoverCropWorker(QObject):
         self.downloads_dir = downloads_dir
 
     def run(self):
-        audio_files = list(self.downloads_dir.rglob("*.mp3")) + list(self.downloads_dir.rglob("*.flac"))
+        # collect .mp3 and .flac files regardless of case
+        audio_files = [
+            p for p in self.downloads_dir.rglob("*")
+            if p.is_file() and p.suffix.lower() in (".mp3", ".flac")
+        ]
         if not audio_files:
             self.log.emit("ℹ️ No MP3 or FLAC files found for cover cropping.\n", AppStyles.INFO_COLOR)
             self.finished.emit()
@@ -35,11 +39,11 @@ class CoverCropWorker(QObject):
                 processed += 1
                 if did_change:
                     changed += 1
-                    self.log.emit(f"🖼️ Cropped cover to 1:1: {file_path.name}\n", AppStyles.SUCCESS_COLOR)
+                    self.log.emit(f"🖼️ Cropped Cover to 1:1: {file_path.name}\n", AppStyles.SUCCESS_COLOR)
             except Exception as e:
                 self.log.emit(f"⚠️ Skipped {file_path.name}: {e}\n", AppStyles.WARNING_COLOR)
 
-        self.log.emit(f"✅ Cover cropping complete. Processed {processed}, updated {changed} files.\n", AppStyles.SUCCESS_COLOR)
+        self.log.emit(f"✅ Cover Cropping Complete. Processed {processed}, Updated {changed} Files.\n", AppStyles.SUCCESS_COLOR)
         self.finished.emit()
 
     def _process_audio(self, file: Path) -> bool:

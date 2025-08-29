@@ -1,6 +1,8 @@
 # File: ytget_gui/workers/thumb_fetcher.py
 from __future__ import annotations
 
+import tempfile
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -9,8 +11,25 @@ from PySide6.QtCore import QObject, Signal
 
 
 class ThumbFetcher(QObject):
-    finished = Signal(str, str)  # video_id, dest_path
-    error = Signal(str, str)     # video_id, message
+    """
+    Downloads a YouTube thumbnail image, trying multiple standard resolutions.
+    Respects an optional proxy and will retry on transient errors with backoff.
+    Emits:
+      - finished(video_id: str, dest_path: str)
+      - error(video_id: str, message: str)
+    """
+
+    finished = Signal(str, str)
+    error = Signal(str, str)
+
+    # Candidate filename suffixes to try (JPEG first, then WEBP)
+    _SUFFIXES: ClassVar[List[str]] = [
+        "maxresdefault.jpg", "hqdefault.jpg", "mqdefault.jpg", "sddefault.jpg",
+        "maxresdefault.webp", "hqdefault.webp",
+    ]
+    _MIN_ACCEPTED_SIZE = 1_024     # bytes
+    _MAX_RETRIES = 3
+    _BACKOFF_BASE = 0.5            # seconds
 
     def __init__(
         self,
@@ -21,81 +40,80 @@ class ThumbFetcher(QObject):
         timeout: int = 10,
     ):
         super().__init__()
-        self.video_id = video_id
-        self.url = url
+        self.video_id = video_id.strip()
+        self.url = url.strip()
         self.dest_path = dest_path
-        self.proxy_url = proxy_url
         self.timeout = timeout
+        self.session = requests.Session()
+
+        if proxy_url:
+            self.session.proxies.update({
+                "http": proxy_url,
+                "https": proxy_url,
+            })
+
+        # YouTube referer and common browser UA for better cache hits
+        self.session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/114.0.0.0 Safari/537.36"
+            ),
+            "Referer": "https://www.youtube.com/",
+            "Accept": "image/*;q=0.8,*/*;q=0.5",
+        })
 
     def run(self):
         try:
-            proxies = {"http": self.proxy_url, "https": self.proxy_url} if self.proxy_url else None
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36 OPR/90.0.0.0",
-                "Accept": "image/avif,image/webp,image/apng,image/*;q=0.8,*/*;q=0.5",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://www.youtube.com/",
-            }
-
-            # Build candidate URLs: prefer provided URL, then common YouTube patterns
-            urls: List[str] = []
+            # Build URL list: explicit override first, then standard patterns
+            candidates = []
             if self.url:
-                urls.append(self.url)
-
+                candidates.append(self.url)
             if self.video_id:
                 base = f"https://i.ytimg.com/vi/{self.video_id}"
-                # JPEG variants (most widely supported)
-                urls.extend(
-                    [
-                        f"{base}/maxresdefault.jpg",
-                        f"{base}/hqdefault.jpg",
-                        f"{base}/mqdefault.jpg",
-                        f"{base}/sddefault.jpg",
-                    ]
-                )
-                # WEBP variants (good quality, often available)
-                urls.extend(
-                    [
-                        f"{base}/maxresdefault.webp",
-                        f"{base}/hqdefault.webp",
-                    ]
-                )
+                candidates.extend(f"{base}/{suffix}" for suffix in self._SUFFIXES)
 
-            content: Optional[bytes] = None
-            last_err: Optional[Exception] = None
+            content = None
+            last_error: Optional[Exception] = None
 
-            for u in urls:
-                try:
-                    r = requests.get(
-                        u,
-                        timeout=self.timeout,
-                        proxies=proxies,
-                        headers=headers,
-                        allow_redirects=True,
-                    )
-                    r.raise_for_status()
-                    # Filter out tiny "not found" placeholders; accept > 1KB
-                    if len(r.content) > 1024:
-                        content = r.content
-                        break
-                except Exception as e:
-                    last_err = e
-                    continue
+            for img_url in candidates:
+                for attempt in range(1, self._MAX_RETRIES + 1):
+                    try:
+                        resp = self.session.get(
+                            img_url,
+                            timeout=self.timeout,
+                            allow_redirects=True,
+                        )
+                        resp.raise_for_status()
+                        data = resp.content
+                        # reject very small placeholder images
+                        if len(data) >= self._MIN_ACCEPTED_SIZE:
+                            content = data
+                            break
+                    except Exception as exc:
+                        last_error = exc
+                        # exponential backoff
+                        time.sleep(self._BACKOFF_BASE * attempt)
+                        continue
+                if content:
+                    break
 
             if content is None:
-                raise last_err or RuntimeError("No thumbnail URL succeeded")
+                raise last_error or RuntimeError("No thumbnail succeeded")
 
+            # Ensure parent directory exists
             self.dest_path.parent.mkdir(parents=True, exist_ok=True)
-            # Write atomically via .part and then move into place
-            tmp = (
-                self.dest_path.with_suffix(self.dest_path.suffix + ".part")
-                if self.dest_path.suffix
-                else self.dest_path.with_suffix(".part")
-            )
-            with open(tmp, "wb") as f:
-                f.write(content)
+
+            # Write to a temporary file, then atomically rename
+            tmp = Path(tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=self.dest_path.suffix or ".jpg"
+            ).name)
+            tmp.write_bytes(content)
             tmp.replace(self.dest_path)
 
             self.finished.emit(self.video_id, str(self.dest_path))
-        except Exception as e:
-            self.error.emit(self.video_id, str(e))
+
+        except Exception as exc:
+            msg = str(exc) or "Unknown error fetching thumbnail"
+            self.error.emit(self.video_id, msg)

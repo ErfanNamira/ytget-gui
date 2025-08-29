@@ -42,7 +42,7 @@ class DownloadWorker(QObject):
     def run(self):
         try:
             cmd = self._build_command()
-            self._add_log(f"🚀 Starting download for: {self._short(self.item['title'])}\n", AppStyles.INFO_COLOR)
+            self._add_log(f"🚀 Starting Download for: {self._short(self.item['title'])}\n", AppStyles.INFO_COLOR)
             self.process = QProcess()
             self.process.setProcessChannelMode(QProcess.MergedChannels)
             self.process.readyReadStandardOutput.connect(self._on_read)
@@ -59,7 +59,7 @@ class DownloadWorker(QObject):
     def cancel(self):
         self._cancel_requested = True
         if self.process and self.process.state() == QProcess.Running:
-            self._add_log("⏹️ Cancelling download...\n", AppStyles.WARNING_COLOR)
+            self._add_log("⏹️ Cancelling Download...\n", AppStyles.WARNING_COLOR)
             self.process.terminate()
             if not self.process.waitForFinished(3000):
                 self.process.kill()
@@ -79,7 +79,7 @@ class DownloadWorker(QObject):
             self._add_log("⏹️ Download cancelled by user.\n", AppStyles.WARNING_COLOR)
             self.finished.emit(-1)
         elif exit_code == 0:
-            self._add_log("✅ Download finished successfully.\n", AppStyles.SUCCESS_COLOR)
+            self._add_log("✅ Download Finished Successfully.\n", AppStyles.SUCCESS_COLOR)
 
             # Optimisation: defer post-step to let UI queue next item promptly
             QTimer.singleShot(0, self._post_finish_cleanup)
@@ -99,7 +99,7 @@ class DownloadWorker(QObject):
             self._add_log(f"⚠️ Filename cleanup failed: {e}\n", AppStyles.WARNING_COLOR)
 
     def _short(self, title: str) -> str:
-        return title[:35] + "..." if len(title) > 35 else title
+        return title[:50] + "..." if len(title) > 50 else title
 
     @staticmethod
     def is_short_video(url: str) -> bool:

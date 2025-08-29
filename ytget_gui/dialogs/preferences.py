@@ -1452,17 +1452,31 @@ class PreferencesDialog(QtWidgets.QDialog):
         self._update_responsive_layout()
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        # Intercept Enter/Return in any QLineEdit to trigger Save via Ctrl+Enter or ⌘+Enter
         if event.type() == QtCore.QEvent.KeyPress and isinstance(obj, QtWidgets.QLineEdit):
             ke = QtGui.QKeyEvent(event)
-            if ke.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
-                btn = self.buttons.button(QtWidgets.QDialogButtonBox.Save)
-                if btn and not btn.isEnabled():
+            mods = ke.modifiers()
+            # On Windows/Linux use Ctrl, on macOS use Meta (⌘)
+            if (mods & (QtCore.Qt.ControlModifier | QtCore.Qt.MetaModifier)) and \
+               ke.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+
+                save_btn = self.buttons.button(QtWidgets.QDialogButtonBox.Save)
+                # If Save is disabled, focus first invalid field and show tooltip
+                if save_btn and not save_btn.isEnabled():
                     err = self._first_error_widget()
                     if err:
                         err.setFocus(QtCore.Qt.OtherFocusReason)
                         self._ensure_widget_visible(err)
-                        QtWidgets.QToolTip.showText(err.mapToGlobal(err.rect().bottomLeft()), err.toolTip(), err)
-                    return True
+                        QtWidgets.QToolTip.showText(
+                            err.mapToGlobal(err.rect().bottomLeft()),
+                            err.toolTip(),
+                            err
+                        )
+                else:
+                    # If Save is enabled, accept the dialog
+                    save_btn.click()
+                return True
+
         return super().eventFilter(obj, event)
 
     # ---------- Utilities ----------

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import platform
 from typing import List, Any, Deque, Set, Optional
 from collections import deque
 from pathlib import Path
@@ -115,13 +116,13 @@ class TitleFetchQueue(QObject):
             cmd.extend(["--proxy", proxy_url])
 
         startupinfo = None
-        try:
-            if subprocess._mswindows:  # type: ignore[attr-defined]
-                si = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
-                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+        if platform.system().lower().startswith("win"):
+            try:
+                si = subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo = si
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         try:
             proc = subprocess.run(

@@ -643,11 +643,12 @@ class AdvancedOptionsDialog(QtWidgets.QDialog):
         self.accept()
 
     def keyPressEvent(self, e: QtGui.QKeyEvent) -> None:
-        if (e.modifiers() & QtCore.Qt.ControlModifier) and e.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+        if ((e.modifiers() & (QtCore.Qt.ControlModifier | QtCore.Qt.MetaModifier))
+            and e.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter)):
             self._on_accept()
             return
         super().keyPressEvent(e)
-
+        
     def _invalid_widgets(self) -> List[QtWidgets.QWidget]:
         widgets: List[QtWidgets.QWidget] = []
 
