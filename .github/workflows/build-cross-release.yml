@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag name to release'
+        description: 'Tag name to release (e.g. v1.2.3)'
         required: true
   push:
     tags:
@@ -17,7 +17,6 @@ permissions:
 
 env:
   APP_NAME: YTGet
-  ENTRY_POINT: ytget_gui.main:main
 
 jobs:
   windows:
@@ -28,12 +27,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Determine version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "VERSION=${TAG#v}" >> $GITHUB_ENV
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Install Python deps & PyInstaller
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
@@ -42,12 +46,17 @@ jobs:
         shell: pwsh
         run: |
           curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+
+          # Download & unpack ffmpeg build, then clean up the zip
           curl -sL https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
           tar -xf ffmpeg.zip
-          Copy-Item (Get-ChildItem -Recurse -Filter ffmpeg.exe | Select -First 1).FullName .
-          Copy-Item (Get-ChildItem -Recurse -Filter ffprobe.exe | Select -First 1).FullName .
+          Remove-Item -Force ffmpeg.zip
 
-      - name: Build with PyInstaller
+          # Copy ffmpeg & ffprobe into CWD for PyInstaller
+          Copy-Item (Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName .
+          Copy-Item (Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName .
+
+      - name: Build EXE with PyInstaller
         shell: pwsh
         run: |
           pyinstaller --noconfirm --onedir --windowed `
@@ -55,20 +64,17 @@ jobs:
             --icon "ytget_gui/icon.ico" `
             --clean --noupx `
             --version-file "version_info.txt" `
+            --add-data "ytget_gui/icon.ico;." `
+            --add-data "yt-dlp.exe;." `
+            --add-data "ffmpeg.exe;." `
+            --add-data "ffprobe.exe;." `
             "ytget_gui/main.py"
 
-      - name: Zip Windows build
-        shell: pwsh
-        run: |
-          Remove-Item -Force "${env:APP_NAME}-windows.zip" -ErrorAction Ignore
-          Compress-Archive -Path "dist/$env:APP_NAME/*" -DestinationPath "${env:APP_NAME}-windows.zip"
-
-      - name: Upload Windows artifact
+      - name: Upload Windows build folder
         uses: actions/upload-artifact@v4
         with:
-          name: windows-zip
-          path: |
-            YTGet-windows.zip
+          name: windows-build
+          path: dist/${{ env.APP_NAME }}/**
 
   linux:
     name: 🐧 Linux Build
@@ -78,29 +84,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install system dependencies & linuxdeployqt
+      - name: Determine version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "VERSION=${TAG#v}" >> $GITHUB_ENV
+
+      - name: Install system deps & linuxdeployqt
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            python3-pip python3-setuptools \
-            fuse libfuse2 \
-            rpm \
-            ruby ruby-dev
-          # Download the linuxdeployqt AppImage
+          sudo apt-get install -y build-essential python3-pip python3-setuptools \
+                                  fuse libfuse2 rpm ruby-full
           wget -qO linuxdeployqt.AppImage \
             https://github.com/linuxdeploy/linuxdeployqt/releases/download/7/linuxdeployqt-7-x86_64.AppImage
           chmod +x linuxdeployqt.AppImage
           sudo mv linuxdeployqt.AppImage /usr/local/bin/linuxdeployqt
 
-      - name: Install Python deps & PyInstaller
+      - name: Install Python deps
         run: |
           python3 -m pip install --upgrade pip
           pip3 install -r requirements.txt pyinstaller
-
-      - name: Install fpm (Ruby gem)
-        run: |
-          sudo gem install --no-document fpm
 
       - name: Download yt-dlp & FFmpeg
         run: |
@@ -109,28 +111,35 @@ jobs:
           curl -sL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
             | tar -xJ --strip-components=1 ffmpeg*/{ffmpeg,ffprobe}
 
-      - name: Build with PyInstaller
+      - name: Build AppDir with PyInstaller
         run: |
           pyinstaller --noconfirm --onedir --windowed \
             --name "$APP_NAME" \
             --icon "ytget_gui/icon.png" \
             --clean --noupx \
             --version-file "version_info.txt" \
-            "ytget_gui/main.py"
+            --add-data "yt-dlp:." \
+            --add-data "ffmpeg:." \
+            --add-data "ffprobe:." \
+            ytget_gui/main.py
 
       - name: Create AppImage
         run: |
+          ARCH=$(uname -m)
           linuxdeployqt \
             "dist/$APP_NAME/$APP_NAME.desktop" \
             -appimage \
             -bundle-non-qt-libs
+          mv "${APP_NAME}-${ARCH}.AppImage" "${APP_NAME}-${VERSION}-linux-${ARCH}.AppImage"
 
       - name: Build DEB & RPM via fpm
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
+          sudo gem install --no-document fpm
+          ARCH=amd64
           fpm -s dir -t deb \
             --name "$APP_NAME" \
             --version "$VERSION" \
+            --package "${APP_NAME}-${VERSION}-linux-${ARCH}.deb" \
             --description "YTGet — GUI YouTube downloader powered by yt-dlp" \
             --license MIT \
             --url "https://github.com/ErfanNamira/ytget-gui" \
@@ -144,6 +153,7 @@ jobs:
           fpm -s dir -t rpm \
             --name "$APP_NAME" \
             --version "$VERSION" \
+            --package "${APP_NAME}-${VERSION}-linux-${ARCH}.rpm" \
             --description "YTGet — GUI YouTube downloader powered by yt-dlp" \
             --license MIT \
             --url "https://github.com/ErfanNamira/ytget-gui" \
@@ -171,12 +181,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Determine version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "VERSION=${TAG#v}" >> $GITHUB_ENV
+
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Install Python deps & PyInstaller
+      - name: Install Python deps
         run: |
           python3 -m pip install --upgrade pip
           pip3 install -r requirements.txt pyinstaller
@@ -189,30 +204,34 @@ jobs:
           ln -sf "$(which ffmpeg)" ffmpeg
           ln -sf "$(which ffprobe)" ffprobe
 
-      - name: Build .app with PyInstaller (no .icns)
+      - name: Build .app with PyInstaller
         run: |
           pyinstaller --noconfirm --onedir --windowed \
             --name "$APP_NAME" \
             --clean --noupx \
             --version-file "version_info.txt" \
-            "ytget_gui/main.py"
+            ytget_gui/main.py
 
       - name: Create DMG
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
+          mkdir -p dist/dmg
           hdiutil create \
             -format UDZO \
-            -srcfolder "dist/$APP_NAME" \
-            -volname "$APP_NAME" \
-            "${APP_NAME}-${VERSION}.dmg"
+            -srcfolder "dist/${APP_NAME}.app" \
+            -volname "${APP_NAME}" \
+            "dist/dmg/${APP_NAME}-${VERSION}-macos.dmg"
+
+      - name: Archive .app as tar.xz
+        run: |
+          tar -cJf "${APP_NAME}-${VERSION}-macos.tar.xz" -C dist "${APP_NAME}.app"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-installers
           path: |
-            dist/$APP_NAME
-            *.dmg
+            dist/dmg/${APP_NAME}-${VERSION}-macos.dmg
+            ${APP_NAME}-${VERSION}-macos.tar.xz
 
   release:
     name: 🚀 Publish Release
@@ -222,6 +241,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_assets
 
       - name: Ensure tag exists (manual runs)
         if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -234,11 +258,6 @@ jobs:
             git tag "$TAG" && git push origin "$TAG"
           )
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: build_output
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -246,10 +265,11 @@ jobs:
           name: "YTGet ${{ github.event.inputs.tag || github.ref_name }}"
           body_path: RELEASE_NOTES.md
           files: |
-            build_output/*.zip
-            build_output/*.AppImage
-            build_output/*.deb
-            build_output/*.rpm
-            build_output/*.dmg
+            release_assets/*.zip
+            release_assets/*.AppImage
+            release_assets/*.deb
+            release_assets/*.rpm
+            release_assets/*.dmg
+            release_assets/*.tar.xz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
