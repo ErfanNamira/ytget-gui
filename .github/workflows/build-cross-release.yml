@@ -1,3 +1,5 @@
+# File: .github/workflows/build-and-release.yml
+
 name: Build & Cross Release YTGet
 
 on:
@@ -23,19 +25,20 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Install deps & PyInstaller
+      - name: Install Python deps & PyInstaller
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Download yt-dlp.exe & ffmpeg builds
+      - name: Download yt-dlp.exe & FFmpeg
         shell: pwsh
         run: |
           curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
@@ -52,48 +55,45 @@ jobs:
             --icon "ytget_gui/icon.ico" `
             --clean --noupx `
             --version-file "version_info.txt" `
-            --add-data "yt-dlp.exe;." `
-            --add-data "ffmpeg.exe;." `
-            --add-data "ffprobe.exe;." `
             "ytget_gui/main.py"
 
       - name: Zip Windows build
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist/$env:APP_NAME/*" `
-                           -DestinationPath "${env:APP_NAME}-windows.zip"
+          Remove-Item -Force "${env:APP_NAME}-windows.zip" -ErrorAction Ignore
+          Compress-Archive -Path "dist/$env:APP_NAME/*" -DestinationPath "${env:APP_NAME}-windows.zip"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-zip
-          path: YTGet-windows.zip
+          path: |
+            YTGet-windows.zip
 
   linux:
     name: 🐧 Linux Build
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Install system deps (incl. linuxdeployqt)
+      - name: Install system dependencies & linuxdeployqt
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential python3-pip python3-setuptools \
-            qt5-default qttools5-dev-tools libqt5svg5-dev fuse libfuse2 ruby ruby-dev \
-            rpm
-          # Download the official AppImage of linuxdeployqt
+                                  fuse libfuse2 rpm
           wget -qO linuxdeployqt.AppImage \
             https://github.com/linuxdeploy/linuxdeployqt/releases/download/7/linuxdeployqt-7-x86_64.AppImage
           chmod +x linuxdeployqt.AppImage
           sudo mv linuxdeployqt.AppImage /usr/local/bin/linuxdeployqt
 
-      - name: Install Python deps & PyInstaller
+      - name: Install Python deps & PyInstaller + fpm
         run: |
-          pip3 install --upgrade pip
+          python3 -m pip install --upgrade pip
           pip3 install -r requirements.txt pyinstaller fpm
 
-      - name: Download yt-dlp & ffmpeg
+      - name: Download yt-dlp & FFmpeg
         run: |
           curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
           chmod +x yt-dlp
@@ -107,10 +107,7 @@ jobs:
             --icon "ytget_gui/icon.png" \
             --clean --noupx \
             --version-file "version_info.txt" \
-            --add-data "yt-dlp:." \
-            --add-data "ffmpeg:." \
-            --add-data "ffprobe:." \
-            ytget_gui/main.py
+            "ytget_gui/main.py"
 
       - name: Create AppImage
         run: |
@@ -119,12 +116,13 @@ jobs:
             -appimage \
             -bundle-non-qt-libs
 
-      - name: Build DEB & RPM with fpm
+      - name: Build DEB & RPM via fpm
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
           fpm -s dir -t deb \
             --name "$APP_NAME" \
             --version "$VERSION" \
+            --description "YTGet — GUI YouTube downloader powered by yt-dlp" \
             --license MIT \
             --url "https://github.com/ErfanNamira/ytget-gui" \
             --depends python3,python3-pyside6,python3-requests \
@@ -137,6 +135,7 @@ jobs:
           fpm -s dir -t rpm \
             --name "$APP_NAME" \
             --version "$VERSION" \
+            --description "YTGet — GUI YouTube downloader powered by yt-dlp" \
             --license MIT \
             --url "https://github.com/ErfanNamira/ytget-gui" \
             --depends python3-pyside6,python3-requests \
@@ -160,16 +159,17 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Install deps & PyInstaller
+      - name: Install Python deps & PyInstaller
         run: |
-          pip3 install --upgrade pip
+          python3 -m pip install --upgrade pip
           pip3 install -r requirements.txt pyinstaller
 
       - name: Download yt-dlp & link ffmpeg
@@ -180,20 +180,13 @@ jobs:
           ln -sf "$(which ffmpeg)" ffmpeg
           ln -sf "$(which ffprobe)" ffprobe
 
-      - name: Build .app with PyInstaller
+      - name: Build .app with PyInstaller (no .icns)
         run: |
           pyinstaller --noconfirm --onedir --windowed \
             --name "$APP_NAME" \
-            --icon "ytget_gui/icon.icns" \
             --clean --noupx \
             --version-file "version_info.txt" \
-            --hidden-import PySide6.QtCore \
-            --hidden-import PySide6.QtGui \
-            --hidden-import PySide6.QtWidgets \
-            --add-data "yt-dlp:." \
-            --add-data "ffmpeg:." \
-            --add-data "ffprobe:." \
-            ytget_gui/main.py
+            "ytget_gui/main.py"
 
       - name: Create DMG
         run: |
@@ -218,10 +211,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Ensure tag exists
-        if: github.event_name == 'workflow_dispatch'
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -231,7 +225,7 @@ jobs:
             git tag "$TAG" && git push origin "$TAG"
           )
 
-      - name: Download all artifacts
+      - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           path: build_output
