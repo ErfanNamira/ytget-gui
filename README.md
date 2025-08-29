@@ -40,7 +40,7 @@
 2. Extract the contents.  
 3. Run `YTGet.exe`.
 
-### 🐍 PyPI Installation
+### 🐍 [PyPI Installation](https://pypi.org/project/ytget-gui/)
 YTGet requires FFmpeg to process media. You can set it up in one of the following ways:
 
 #### 1️⃣ Add FFmpeg to PATH (Recommended)
