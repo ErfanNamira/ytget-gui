@@ -64,6 +64,7 @@ class UpdateManager(QObject):
             self.session.proxies.update({
                 "http": self.settings.PROXY_URL,
                 "https": self.settings.PROXY_URL,
+                "socks5": self.settings.PROXY_URL,
             })
 
     # -------- Public entry points --------

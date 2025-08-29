@@ -1,6 +1,14 @@
-# 🎬 YTGet GUI — YouTube Downloader
+# 🎬 YTGet — Cross-Platform YouTube Downloader
 
-**YTGet GUI** is a sleek, user-friendly desktop application built with Python and PySide6 that helps you download YouTube videos, playlists, and music effortlessly using **yt-dlp**. This Windows `.exe` version is portable and standalone — no Python installation required.
+**YTGet GUI** is a modern, lightweight, and user-friendly desktop application built with **Python** and **PySide6**.  
+Powered by **yt-dlp**, it makes downloading YouTube videos, playlists, and music simple and efficient.  
+
+- 🖥️ **Cross-Platform:** Runs seamlessly on **Windows**, **macOS**, and **Linux**.  
+- 📦 **Standalone:** Each release comes with all dependencies bundled, so it works right out of the box.  
+- ⚡ **Optimized & Stable:** Designed for smooth performance with smart resource handling, and built-in update management.  
+- 🎵 **Versatile:** Supports full videos, playlists, and music downloads in multiple formats.  
+
+Whether you’re grabbing a single clip or archiving an entire channel, **YTGet** delivers a polished and seamless experience on every operating system.
 
 ---
 
@@ -35,10 +43,42 @@
 
 ## ☄️ How to Install
 
-### 📦 Windows Standalone
-1. Download the latest `.zip` release.  
+### 📦 Windows
+1. Download the latest `YTGet-Windows.zip` release.  
 2. Extract the contents.  
 3. Run `YTGet.exe`.
+
+### 🐧 Linux
+1. Download the latest `YTGet-Linux.tar.gz` release.  
+2. Extract the contents.
+```
+tar -xzf YTGet-ubuntu-latest.tar.gz
+```
+3. Make it executable and launch:
+```
+chmod +x YTGet
+./YTGet
+```
+
+### 🍏 macOS
+1. Download the latest `YTGet-macOS.tar.gz` release.  
+2. Extract the contents.
+```
+tar -xzf YTGet-macos-latest.tar.gz
+```
+3. If macOS blocks the app, remove the quarantine flag:
+```
+xattr -d com.apple.quarantine YTGet.app
+```
+4. Launch from Finder or via Terminal:
+```
+open YTGet.app
+```
+Or run directly:
+```
+chmod +x YTGet.app/Contents/MacOS/YTGet
+YTGet.app/Contents/MacOS/YTGet
+```
 
 ### 🐍 [PyPI Installation](https://pypi.org/project/ytget-gui/)
 YTGet requires FFmpeg to process media. You can set it up in one of the following ways:
