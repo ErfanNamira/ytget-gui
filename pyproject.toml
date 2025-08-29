@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytget-gui"
-version = "2.4.6.2" 
+version = "2.4.6.2"
 description = "A GUI YouTube downloader powered by yt-dlp"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -12,7 +12,7 @@ license = "MIT"
 authors = [
     { name = "Erfan Namira", email = "erfannamira@gmail.com" }
 ]
-keywords = ["youtube", "downloader", "yt-dlp", "gui", "video", "audio"]
+keywords = ["youtube-downloader", "downloader", "yt-dlp", "yt-dlp-gui", "audio-downloader", "video-downloader"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: End Users/Desktop",
@@ -41,5 +41,14 @@ ytget-gui = "ytget.__main__:main"
 [tool.setuptools]
 include-package-data = true
 
+[tool.setuptools.packages.find]
+where = ["ytget"]
+
 [tool.setuptools.package-data]
-ytget = ["icon.ico", "dialogs/*", "utils/*", "widgets/*", "workers/*"]
+ytget = [
+    "icon.ico",
+    "dialogs/*",
+    "utils/*",
+    "widgets/*",
+    "workers/*"
+]
