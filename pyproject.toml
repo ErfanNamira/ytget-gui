@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61", "wheel", "build"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ytget"
+version = "2.4.6"
+description = "YTGet — a GUI-based YouTube downloader"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Namira" }]
+requires-python = ">=3.8"
+dependencies = [
+  "PySide6",
+  "yt-dlp",
+  "requests",
+  "mutagen",
+  "pillow",
+]
+
+[project.urls]
+Homepage = "https://github.com/ErfanNamira/ytget"
+Issues = "https://github.com/ErfanNamira/ytget/issues"
