@@ -1,4 +1,4 @@
-name: Build & Release YTGet
+name: Cross & Release YTGet
 
 on:
   workflow_dispatch:
