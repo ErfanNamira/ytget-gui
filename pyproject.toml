@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "yt-get"
+name = "ytget-gui"
 version = "2.4.6"
 description = "A GUI YouTube downloader powered by yt-dlp"
 readme = "README.md"
