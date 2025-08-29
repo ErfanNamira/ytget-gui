@@ -1,5 +1,3 @@
-# .github/workflows/build-and-release.yml
-
 name: Build & Cross Release YTGet
 
 on:
