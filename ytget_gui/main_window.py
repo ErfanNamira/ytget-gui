@@ -822,7 +822,7 @@ class MainWindow(QMainWindow):
     # ---------- Startup / Logging with filter ----------
 
     def _log_startup(self):
-        self.log("💡 Welcome to ytget_gui! Paste a URL to Begin.\n", AppStyles.INFO_COLOR, "Info")
+        self.log("💡 Welcome to YTGet! Paste a URL to Begin.\n", AppStyles.INFO_COLOR, "Info")
         self.log(f"📂 Download Folder: {self.settings.DOWNLOADS_DIR}\n", AppStyles.INFO_COLOR, "Info")
         self.log(f"🔧 Using binaries from: {self.settings.FFMPEG_PATH.parent}\n", AppStyles.INFO_COLOR, "Info")
 	    
