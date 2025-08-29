@@ -1,4 +1,4 @@
-name: Cross & Release YTGet
+name: Build & Release YTGet (Cross-Platform)
 
 on:
   workflow_dispatch:
@@ -54,9 +54,9 @@ jobs:
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-          tar -xf ffmpeg.zip
-          cp $(find . -name ffmpeg.exe | head -n 1) .
-          cp $(find . -name ffprobe.exe | head -n 1) .
+          powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ."
+          cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName")" .
+          cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName")" .
         elif [[ "$RUNNER_OS" == "Linux" ]]; then
           sudo apt-get update
           sudo apt-get install -y ffmpeg
