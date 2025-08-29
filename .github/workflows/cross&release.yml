@@ -15,11 +15,11 @@ permissions:
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
     - name: Checkout repository
@@ -36,42 +36,43 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
 
-    # Platform-specific downloads
-    - name: Download yt-dlp binary
+    - name: Download yt-dlp
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
         elif [[ "$RUNNER_OS" == "Linux" ]]; then
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o yt-dlp
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
           chmod +x yt-dlp
         else
           curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o yt-dlp
           chmod +x yt-dlp
         fi
+      shell: bash
 
-    - name: Download ffmpeg & ffprobe (platform specific)
+    - name: Download ffmpeg & ffprobe
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
           tar -xf ffmpeg.zip
-          cp $(find . -name ffmpeg.exe | head -n1) .
-          cp $(find . -name ffprobe.exe | head -n1) .
+          cp $(find . -name ffmpeg.exe | head -n 1) .
+          cp $(find . -name ffprobe.exe | head -n 1) .
         elif [[ "$RUNNER_OS" == "Linux" ]]; then
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-          cp /usr/bin/ffmpeg .
-          cp /usr/bin/ffprobe .
+          cp $(which ffmpeg) .
+          cp $(which ffprobe) .
         else
           brew install ffmpeg
           cp $(which ffmpeg) .
           cp $(which ffprobe) .
         fi
+      shell: bash
 
     - name: Build with PyInstaller
       run: |
         pyinstaller --noconfirm --onedir --windowed \
-          --name "YTGet" \
           --icon "ytget/icon.ico" \
+          --name "YTGet" \
           --clean --noupx \
           --version-file "version_info.txt" \
           --hidden-import "PySide6.QtCore" \
@@ -83,47 +84,65 @@ jobs:
           --hidden-import "webbrowser" \
           --hidden-import "mutagen.id3" \
           --hidden-import "mutagen.flac" \
-          --add-data "ytget/__init__.py;ytget" \
-          --add-data "ytget/__main__.py;ytget" \
-          --add-data "ytget/main_window.py;ytget" \
-          --add-data "ytget/settings.py;ytget" \
-          --add-data "ytget/styles.py;ytget" \
-          --add-data "ytget/icon.ico;ytget" \
-          --add-data "ytget/dialogs;ytget/dialogs" \
-          --add-data "ytget/utils;ytget/utils" \
-          --add-data "ytget/widgets;ytget/widgets" \
-          --add-data "ytget/workers;ytget/workers" \
-          --add-data "LICENSE;." \
-          --add-data "README.md;." \
-          --add-data "RELEASE_NOTES.md;." \
-          --add-data "yt-dlp*;." \
-          --add-data "ffmpeg*;." \
-          --add-data "ffprobe*;." \
+          --add-data "ytget/__init__.py:ytget" \
+          --add-data "ytget/__main__.py:ytget" \
+          --add-data "ytget/main_window.py:ytget" \
+          --add-data "ytget/settings.py:ytget" \
+          --add-data "ytget/styles.py:ytget" \
+          --add-data "ytget/icon.ico:ytget" \
+          --add-data "ytget/dialogs:ytget/dialogs" \
+          --add-data "ytget/utils:ytget/utils" \
+          --add-data "ytget/widgets:ytget/widgets" \
+          --add-data "ytget/workers:ytget/workers" \
+          --add-data "LICENSE:." \
+          --add-data "README.md:." \
+          --add-data "RELEASE_NOTES.md:." \
+          --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+          --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+          --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
           "ytget/main.py"
 
-    - name: Package artifacts
+    - name: Package build
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
-          powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-${{ runner.os }}.zip
-        elif [[ "$RUNNER_OS" == "Linux" ]]; then
-          tar -czf YTGet-${{ runner.os }}.tar.gz -C dist YTGet
+          powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-${{ runner.os }}.zip -CompressionLevel Optimal
         else
           tar -czf YTGet-${{ runner.os }}.tar.gz -C dist YTGet
         fi
+      shell: bash
 
     - name: Generate SHA-256 checksum
       run: |
-        FILE=$(ls YTGet-*)
-        shasum -a 256 $FILE > $FILE.sha256
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          certutil -hashfile YTGet-${{ runner.os }}.zip SHA256 > YTGet-${{ runner.os }}.sha256
+        else
+          shasum -a 256 YTGet-${{ runner.os }}.* > YTGet-${{ runner.os }}.sha256
+        fi
+      shell: bash
 
-    - name: Upload Release Assets
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-${{ runner.os }}
+        path: |
+          YTGet-${{ runner.os }}.*
+          YTGet-${{ runner.os }}.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
+
+    - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ github.event.inputs.tag || github.ref_name }}
         name: "YTGet ${{ github.event.inputs.tag || github.ref_name }}"
         body_path: RELEASE_NOTES.md
-        files: |
-          YTGet-* 
-          YTGet-*.sha256
+        files: artifacts/**/*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
