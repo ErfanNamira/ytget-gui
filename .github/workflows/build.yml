@@ -84,6 +84,7 @@ jobs:
           --add-data "ytget_gui/settings.py:ytget_gui" \
           --add-data "ytget_gui/styles.py:ytget_gui" \
           --add-data "ytget_gui/icon.ico:ytget_gui" \
+          --add-data "ytget_gui/icon.ico:." \
           --add-data "ytget_gui/dialogs:ytget_gui/dialogs" \
           --add-data "ytget_gui/utils:ytget_gui/utils" \
           --add-data "ytget_gui/widgets:ytget_gui/widgets" \
