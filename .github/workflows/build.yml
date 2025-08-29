@@ -1,14 +1,19 @@
-name: Build YTGet
+name: Build YTGet (Cross-Platform Test)
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch:  # manual only
 
 permissions:
-  contents: read  
+  contents: read
 
 jobs:
   build:
-    runs-on: windows-latest
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
     - name: Checkout repository
@@ -25,70 +30,96 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
 
-    - name: Download latest yt-dlp.exe
-      shell: pwsh
+    - name: Download yt-dlp
       run: |
-        curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+        elif [[ "$RUNNER_OS" == "Linux" ]]; then
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+          chmod +x yt-dlp
+        else
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o yt-dlp
+          chmod +x yt-dlp
+        fi
+      shell: bash
 
     - name: Download ffmpeg & ffprobe
-      shell: pwsh
       run: |
-        curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-        tar -xf ffmpeg.zip
-        $ffmpegPath = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-        $ffprobePath = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
-        Copy-Item $ffmpegPath.FullName .
-        Copy-Item $ffprobePath.FullName .
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+          powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ."
+          cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName")" .
+          cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName")" .
+        elif [[ "$RUNNER_OS" == "Linux" ]]; then
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          cp $(which ffmpeg) .
+          cp $(which ffprobe) .
+        else
+          brew install ffmpeg
+          cp $(which ffmpeg) .
+          cp $(which ffprobe) .
+        fi
+      shell: bash
 
     - name: Build with PyInstaller
-      shell: pwsh
       run: |
-        pyinstaller --noconfirm --onedir --windowed `
-          --icon "icon.ico" `
-          --name "YTGet" `
-          --clean --noupx `
-          --version-file "version_info.txt" `
-          --hidden-import "PySide6.QtCore" `
-          --hidden-import "PySide6.QtGui" `
-          --hidden-import "PySide6.QtWidgets" `
-          --hidden-import "requests" `
-          --hidden-import "mutagen" `
-          --hidden-import "PIL" `
-          --hidden-import "webbrowser" `
-          --hidden-import "mutagen.id3" `
-          --hidden-import "mutagen.flac" `
-          --add-data "__init__.py;." `
-          --add-data "__main__.py;." `
-          --add-data "ffmpeg.exe;." `
-          --add-data "ffprobe.exe;." `
-          --add-data "icon.ico;." `
-          --add-data "LICENSE;." `
-          --add-data "main_window.py;." `
-          --add-data "README.md;." `
-          --add-data "RELEASE_NOTES.md;." `
-          --add-data "settings.py;." `
-          --add-data "styles.py;." `
-          --add-data "yt-dlp.exe;." `
-          --add-data "dialogs;dialogs/" `
-          --add-data "utils;utils/" `
-          --add-data "widgets;widgets/" `
-          --add-data "workers;workers/" `
-          "main.py"
+        pyinstaller --noconfirm --onedir --windowed \
+          --icon "ytget_gui/icon.ico" \
+          --name "YTGet" \
+          --clean --noupx \
+          --version-file "version_info.txt" \
+          --hidden-import "PySide6.QtCore" \
+          --hidden-import "PySide6.QtGui" \
+          --hidden-import "PySide6.QtWidgets" \
+          --hidden-import "requests" \
+          --hidden-import "mutagen" \
+          --hidden-import "PIL" \
+          --hidden-import "webbrowser" \
+          --hidden-import "mutagen.id3" \
+          --hidden-import "mutagen.flac" \
+          --add-data "ytget_gui/__init__.py:ytget_gui" \
+          --add-data "ytget_gui/__main__.py:ytget_gui" \
+          --add-data "ytget_gui/main_window.py:ytget_gui" \
+          --add-data "ytget_gui/settings.py:ytget_gui" \
+          --add-data "ytget_gui/styles.py:ytget_gui" \
+          --add-data "ytget_gui/icon.ico:ytget_gui" \
+          --add-data "icon.ico:." \
+          --add-data "ytget_gui/dialogs:ytget_gui/dialogs" \
+          --add-data "ytget_gui/utils:ytget_gui/utils" \
+          --add-data "ytget_gui/widgets:ytget_gui/widgets" \
+          --add-data "ytget_gui/workers:ytget_gui/workers" \
+          --add-data "LICENSE:." \
+          --add-data "README.md:." \
+          --add-data "RELEASE_NOTES.md:." \
+          --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+          --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+          --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+          "ytget_gui/main.py"
+      shell: bash
 
-    - name: Zip build
-      shell: pwsh
-      run: Compress-Archive -Path dist/YTGet -DestinationPath YTGet.zip -CompressionLevel Optimal
+    - name: Package build
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-${{ runner.os }}.zip -CompressionLevel Optimal
+        else
+          tar -czf YTGet-${{ runner.os }}.tar.gz -C dist YTGet
+        fi
+      shell: bash
 
     - name: Generate SHA-256 checksum
-      shell: pwsh
       run: |
-        $h = Get-FileHash -Algorithm SHA256 YTGet.zip
-        "$($h.Hash)  YTGet.zip" | Out-File -Encoding ASCII -NoNewline YTGet.zip.sha256
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          certutil -hashfile YTGet-${{ runner.os }}.zip SHA256 > YTGet-${{ runner.os }}.sha256
+        else
+          shasum -a 256 YTGet-${{ runner.os }}.* > YTGet-${{ runner.os }}.sha256
+        fi
+      shell: bash
 
-    - name: Upload build artifacts
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: YTGet-build
+        name: build-${{ runner.os }}
         path: |
-          YTGet.zip
-          YTGet.zip.sha256
+          YTGet-${{ runner.os }}.*
+          YTGet-${{ runner.os }}.sha256
