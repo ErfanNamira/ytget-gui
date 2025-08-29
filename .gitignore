@@ -59,15 +59,15 @@ $RECYCLE.BIN/
 # Project-specific runtime files
 # =========================
 # Cache and temp data
-cache/
-_internal/
+ytget/cache/
+ytget/_internal/
 
 # User/session data
-cookies.txt
-queue.json
+ytget/cookies.txt
+ytget/queue.json
 
 # Generated media (thumbnails, etc.)
-cache/thumbs/
+ytget/cache/thumbs/
 Images/
 
 # =========================

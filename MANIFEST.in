@@ -1,0 +1,5 @@
+exclude .gitignore
+exclude requirements.txt
+exclude RELEASE_NOTES.md
+recursive-exclude Images *
+recursive-exclude .github *
