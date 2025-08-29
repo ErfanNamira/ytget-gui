@@ -44,8 +44,8 @@ jobs:
           curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
           curl -sL https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
           tar -xf ffmpeg.zip
-          Copy-Item (Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName .
-          Copy-Item (Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName .
+          Copy-Item (Get-ChildItem -Recurse -Filter ffmpeg.exe | Select -First 1).FullName .
+          Copy-Item (Get-ChildItem -Recurse -Filter ffprobe.exe | Select -First 1).FullName .
 
       - name: Build with PyInstaller
         shell: pwsh
@@ -81,17 +81,26 @@ jobs:
       - name: Install system dependencies & linuxdeployqt
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential python3-pip python3-setuptools \
-                                  fuse libfuse2 rpm
+          sudo apt-get install -y \
+            build-essential \
+            python3-pip python3-setuptools \
+            fuse libfuse2 \
+            rpm \
+            ruby ruby-dev
+          # Download the linuxdeployqt AppImage
           wget -qO linuxdeployqt.AppImage \
             https://github.com/linuxdeploy/linuxdeployqt/releases/download/7/linuxdeployqt-7-x86_64.AppImage
           chmod +x linuxdeployqt.AppImage
           sudo mv linuxdeployqt.AppImage /usr/local/bin/linuxdeployqt
 
-      - name: Install Python deps & PyInstaller + fpm
+      - name: Install Python deps & PyInstaller
         run: |
           python3 -m pip install --upgrade pip
-          pip3 install -r requirements.txt pyinstaller fpm
+          pip3 install -r requirements.txt pyinstaller
+
+      - name: Install fpm (Ruby gem)
+        run: |
+          sudo gem install --no-document fpm
 
       - name: Download yt-dlp & FFmpeg
         run: |
@@ -118,7 +127,7 @@ jobs:
 
       - name: Build DEB & RPM via fpm
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION="${GITHUB_REF#refs/tags/}"
           fpm -s dir -t deb \
             --name "$APP_NAME" \
             --version "$VERSION" \
@@ -162,7 +171,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
@@ -172,7 +181,7 @@ jobs:
           python3 -m pip install --upgrade pip
           pip3 install -r requirements.txt pyinstaller
 
-      - name: Download yt-dlp & link ffmpeg
+      - name: Download yt-dlp & link FFmpeg
         run: |
           curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
           chmod +x yt-dlp
@@ -190,7 +199,7 @@ jobs:
 
       - name: Create DMG
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION="${GITHUB_REF#refs/tags/}"
           hdiutil create \
             -format UDZO \
             -srcfolder "dist/$APP_NAME" \
@@ -211,10 +220,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Ensure tag exists
+      - name: Ensure tag exists (manual runs)
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           git config user.name "github-actions[bot]"
