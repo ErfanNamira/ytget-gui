@@ -4,16 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytget-gui"
-version = "2.4.6.1"
+version = "2.4.6.2" 
 description = "A GUI YouTube downloader powered by yt-dlp"
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
-license-files = ["LICENSE"]
 authors = [
     { name = "Erfan Namira", email = "erfannamira@gmail.com" }
 ]
-keywords = ["youtube-downloader", "yt-dlp-gui", "yt-dlp", "audio-downloader-gui", "video-downloader-apps", "youtube"]
+keywords = ["youtube", "downloader", "yt-dlp", "gui", "video", "audio"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: End Users/Desktop",
@@ -21,6 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13"
 ]
+
 dependencies = [
     "yt-dlp",
     "PySide6",
@@ -31,9 +31,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ErfanNamira/ytget"
-Repository = "https://github.com/ErfanNamira/ytget"
-Issues = "https://github.com/ErfanNamira/ytget/issues"
+Homepage = "https://github.com/ErfanNamira/ytget-gui"
+Repository = "https://github.com/ErfanNamira/ytget-gui"
+Issues = "https://github.com/ErfanNamira/ytget-gui/issues"
 
 [project.scripts]
 ytget-gui = "ytget.__main__:main"
@@ -42,7 +42,4 @@ ytget-gui = "ytget.__main__:main"
 include-package-data = true
 
 [tool.setuptools.package-data]
-ytget = ["icon.ico"]
-
-[tool.setuptools.packages.find]
-where = ["ytget"]
+ytget = ["icon.ico", "dialogs/*", "utils/*", "widgets/*", "workers/*"]
