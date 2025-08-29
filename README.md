@@ -46,6 +46,13 @@ Install via pip:
 ```bash
 pip install ytget-gui
 ```
+### 🔄 How to Update (PyPI version)
+
+To update YTGet GUI installed via pip:
+```
+pip install --upgrade ytget-gui
+```
+This will fetch the latest version from PyPI and replace the old version automatically.
 
 ---
 
