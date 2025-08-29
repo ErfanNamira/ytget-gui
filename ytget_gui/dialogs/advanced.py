@@ -1,12 +1,12 @@
-# File: ytget/dialogs/advanced.py
+# File: ytget_gui/dialogs/advanced.py
 from __future__ import annotations
 
 from typing import Optional, List, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ytget.styles import AppStyles
-from ytget.settings import AppSettings
+from ytget_gui.styles import AppStyles
+from ytget_gui.settings import AppSettings
 
 
 # ----------------------------

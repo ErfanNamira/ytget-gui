@@ -1,4 +1,4 @@
-# File: ytget/utils/validators.py
+# File: ytget_gui/utils/validators.py
 from __future__ import annotations
 import re
 

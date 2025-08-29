@@ -1,4 +1,4 @@
-# File: ytget/workers/title_fetcher.py
+# File: ytget_gui/workers/title_fetcher.py
 from __future__ import annotations
 
 import json

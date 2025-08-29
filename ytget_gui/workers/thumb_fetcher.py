@@ -1,4 +1,4 @@
-# File: ytget/workers/thumb_fetcher.py
+# File: ytget_gui/workers/thumb_fetcher.py
 from __future__ import annotations
 
 from pathlib import Path

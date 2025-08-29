@@ -1,4 +1,4 @@
-# ytget/__main__.py
+# ytget_gui/__main__.py
 from .main import main
 
 if __name__ == "__main__":

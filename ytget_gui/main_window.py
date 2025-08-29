@@ -1,4 +1,4 @@
-# File: ytget/main_window.py
+# File: ytget_gui/main_window.py
 from __future__ import annotations
 
 import os
@@ -41,16 +41,16 @@ from PySide6.QtWidgets import (
     QProgressBar,
 )
 
-from ytget.settings import AppSettings
-from ytget.styles import AppStyles
-from ytget.utils.validators import is_youtube_url
-from ytget.dialogs.preferences import PreferencesDialog
-from ytget.dialogs.advanced import AdvancedOptionsDialog
-from ytget.dialogs.update_manager import UpdateManager
-from ytget.workers.download_worker import DownloadWorker
-from ytget.workers.cover_crop_worker import CoverCropWorker
-from ytget.widgets.queue_card import QueueCard
-from ytget.workers.title_fetch_manager import TitleFetchQueue
+from ytget_gui.settings import AppSettings
+from ytget_gui.styles import AppStyles
+from ytget_gui.utils.validators import is_youtube_url
+from ytget_gui.dialogs.preferences import PreferencesDialog
+from ytget_gui.dialogs.advanced import AdvancedOptionsDialog
+from ytget_gui.dialogs.update_manager import UpdateManager
+from ytget_gui.workers.download_worker import DownloadWorker
+from ytget_gui.workers.cover_crop_worker import CoverCropWorker
+from ytget_gui.widgets.queue_card import QueueCard
+from ytget_gui.workers.title_fetch_manager import TitleFetchQueue
 
 def short(text: str, n: int = 50) -> str:
     return text[:n] + "..." if len(text) > n else text
@@ -315,7 +315,7 @@ class MainWindow(QMainWindow):
     enqueue_titles = Signal(list)
     
     # Signals to marshal update checks into updater thread
-    request_check_ytget = Signal()
+    request_check_ytget_gui = Signal()
     request_check_ytdlp = Signal()
     request_download_ytdlp = Signal(str)    
 
@@ -330,17 +330,17 @@ class MainWindow(QMainWindow):
         self.updater.moveToThread(self.update_thread)
 
         # Requests routed into updater thread
-        self.request_check_ytget.connect(self.updater.check_ytget_update, Qt.QueuedConnection)
+        self.request_check_ytget_gui.connect(self.updater.check_ytget_gui_update, Qt.QueuedConnection)
         self.request_check_ytdlp.connect(self.updater.check_ytdlp_update, Qt.QueuedConnection)
         self.request_download_ytdlp.connect(self.updater.download_ytdlp, Qt.QueuedConnection)
 
         # Logs from updater to console (executed in GUI thread)
         self.updater.log_signal.connect(self.log)
 
-        # YTGet update results
-        self.updater.ytget_ready.connect(self._on_ytget_ready)
-        self.updater.ytget_uptodate.connect(self._on_ytget_uptodate)
-        self.updater.ytget_error.connect(self._on_ytget_error)
+        # ytget_gui update results
+        self.updater.ytget_gui_ready.connect(self._on_ytget_gui_ready)
+        self.updater.ytget_gui_uptodate.connect(self._on_ytget_gui_uptodate)
+        self.updater.ytget_gui_error.connect(self._on_ytget_gui_error)
 
         # yt-dlp update results
         self.updater.ytdlp_ready.connect(self._on_ytdlp_ready)
@@ -783,7 +783,7 @@ class MainWindow(QMainWindow):
             "Shutdown PC": "Shutdown",
             "Sleep PC": "Sleep",
             "Restart PC": "Restart",
-            "Close YTGet": "Close",
+            "Close ytget_gui": "Close",
         }
         self.post_actions_map = {}
         for text, value in actions.items():
@@ -797,7 +797,7 @@ class MainWindow(QMainWindow):
 
         # Help
         m_help = menubar.addMenu("Help")
-        m_help.addAction("Check YTGet Update", lambda: self.request_check_ytget.emit())
+        m_help.addAction("Check ytget_gui Update", lambda: self.request_check_ytget_gui.emit())
         m_help.addAction("Check yt-dlp Update", lambda: self.request_check_ytdlp.emit())
         m_help.addAction("Open Download Folder", lambda: webbrowser.open(self.settings.DOWNLOADS_DIR.as_uri()))
         m_help.addAction("About", self._show_about)
@@ -822,7 +822,7 @@ class MainWindow(QMainWindow):
     # ---------- Startup / Logging with filter ----------
 
     def _log_startup(self):
-        self.log("💡 Welcome to YTGet! Paste a URL to Begin.\n", AppStyles.INFO_COLOR, "Info")
+        self.log("💡 Welcome to ytget_gui! Paste a URL to Begin.\n", AppStyles.INFO_COLOR, "Info")
         self.log(f"📂 Download Folder: {self.settings.DOWNLOADS_DIR}\n", AppStyles.INFO_COLOR, "Info")
         self.log(f"🔧 Using binaries from: {self.settings.FFMPEG_PATH.parent}\n", AppStyles.INFO_COLOR, "Info")
 	    
@@ -1054,7 +1054,7 @@ class MainWindow(QMainWindow):
 
         # Download asynchronously
         try:
-            from ytget.workers.thumb_fetcher import ThumbFetcher
+            from ytget_gui.workers.thumb_fetcher import ThumbFetcher
         except Exception as e:
             self.log(f"⚠️ Thumbnail worker missing: {e}\n", AppStyles.WARNING_COLOR, "Warning")
             return
@@ -1574,7 +1574,7 @@ class MainWindow(QMainWindow):
             
     # ----- Updater UI handlers (GUI thread) -----
 
-    def _on_ytget_ready(self, latest: str):
+    def _on_ytget_gui_ready(self, latest: str):
         reply = QMessageBox.information(
             self,
             f"{self.settings.APP_NAME} Update Available",
@@ -1586,10 +1586,10 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             webbrowser.open(f"{self.settings.GITHUB_URL}/releases/latest")
 
-    def _on_ytget_uptodate(self):
+    def _on_ytget_gui_uptodate(self):
         QMessageBox.information(self, "Up to Date", f"{self.settings.APP_NAME} is up to date.")
 
-    def _on_ytget_error(self, msg: str):
+    def _on_ytget_gui_error(self, msg: str):
         QMessageBox.warning(self, "Update Check Failed", f"Could not check {self.settings.APP_NAME} updates:\n{msg}")
 
     def _on_ytdlp_ready(self, latest: str, current: str, asset_url: str):
@@ -1920,5 +1920,3 @@ class MainWindow(QMainWindow):
             pass
 
         super().closeEvent(event)
-
-

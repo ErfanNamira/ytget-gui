@@ -6,8 +6,8 @@ import os
 import re
 from pathlib import Path
 
-from ytget.styles import AppStyles
-from ytget.settings import AppSettings
+from ytget_gui.styles import AppStyles
+from ytget_gui.settings import AppSettings
 
 
 @dataclass

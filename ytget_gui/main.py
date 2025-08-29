@@ -4,14 +4,14 @@ import sys
 from pathlib import Path
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
-from ytget.main_window import MainWindow
+from ytget_gui.main_window import MainWindow
 
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("YTGet")
     app.setOrganizationName("YTGet")
-    app.setOrganizationDomain("ytget.local")
+    app.setOrganizationDomain("ytget_gui.local")
 
     icon_path = Path(__file__).parent / "icon.ico"
     if icon_path.exists():

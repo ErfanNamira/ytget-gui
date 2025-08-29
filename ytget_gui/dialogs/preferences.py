@@ -1,4 +1,4 @@
-# File: ytget/dialogs/preferences.py
+# File: ytget_gui/dialogs/preferences.py
 from __future__ import annotations
 
 import datetime
@@ -8,9 +8,9 @@ from typing import Dict, List, Optional, Tuple
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import QDate
 
-from ytget.styles import AppStyles
-from ytget.settings import AppSettings
-from ytget.dialogs.advanced import UISwitch
+from ytget_gui.styles import AppStyles
+from ytget_gui.settings import AppSettings
+from ytget_gui.dialogs.advanced import UISwitch
 
 
 _SPONSORBLOCK_CATEGORIES = {

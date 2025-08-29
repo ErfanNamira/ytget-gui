@@ -1,4 +1,4 @@
-# File: ytget/settings.py
+# File: ytget_gui/settings.py
 from __future__ import annotations
 
 import json
@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Pattern
 
-from ytget.utils.paths import (
+from ytget_gui.utils.paths import (
     get_base_path,
     executable_name,
     which_or_path,
@@ -20,7 +20,7 @@ from ytget.utils.paths import (
 class AppSettings:
     VERSION: str = "2.4.6"
     APP_NAME: str = "YTGet"
-    GITHUB_URL: str = "https://github.com/ErfanNamira/YTGet"
+    GITHUB_URL: str = "https://github.com/ErfanNamira/ytget_gui"
 
     BASE_DIR: Path = field(default_factory=get_base_path)
     INTERNAL_DIR: Path = field(init=False)

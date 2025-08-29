@@ -1,4 +1,4 @@
-# File: ytget/workers/title_fetch_manager.py
+# File: ytget_gui/workers/title_fetch_manager.py
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from ytget.settings import AppSettings
+from ytget_gui.settings import AppSettings
 
 
 class TitleFetchQueue(QObject):

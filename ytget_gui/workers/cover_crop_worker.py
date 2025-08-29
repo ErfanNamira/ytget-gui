@@ -1,4 +1,4 @@
-# File: ytget/workers/cover_crop_worker.py
+# File: ytget_gui/workers/cover_crop_worker.py
 from __future__ import annotations
 
 import io
@@ -9,7 +9,7 @@ from mutagen.id3 import ID3, ID3NoHeaderError
 from mutagen.flac import FLAC, Picture
 from PySide6.QtCore import QObject, Signal
 
-from ytget.styles import AppStyles
+from ytget_gui.styles import AppStyles
 
 class CoverCropWorker(QObject):
     """Scans MP3 and FLAC files and crops embedded covers to 1:1 centered."""

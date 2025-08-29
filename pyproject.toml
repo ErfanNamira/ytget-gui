@@ -36,19 +36,15 @@ Repository = "https://github.com/ErfanNamira/ytget-gui"
 Issues = "https://github.com/ErfanNamira/ytget-gui/issues"
 
 [project.scripts]
-ytget-gui = "ytget.__main__:main"
+ytget-gui = "ytget_gui.__main__:main"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-where = ["ytget"]
+where = ["."]
+include = ["ytget_gui*"]
+exclude = ["Images*"]
 
 [tool.setuptools.package-data]
-ytget = [
-    "icon.ico",
-    "dialogs/*",
-    "utils/*",
-    "widgets/*",
-    "workers/*"
-]
+ytget_gui = ["icon.ico", "dialogs/*", "utils/*", "widgets/*", "workers/*"]

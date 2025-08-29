@@ -1,4 +1,4 @@
-# File: ytget/utils/paths.py
+# File: ytget_gui/utils/paths.py
 from __future__ import annotations
 
 import os

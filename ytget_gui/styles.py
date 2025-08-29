@@ -1,4 +1,4 @@
-# File: ytget/styles.py
+# File: ytget_gui/styles.py
 from __future__ import annotations
 
 class AppStyles:

@@ -1,4 +1,4 @@
-# File: ytget/dialogs/update_manager.py
+# File: ytget_gui/dialogs/update_manager.py
 from __future__ import annotations
 
 import os
@@ -12,13 +12,13 @@ import requests
 from packaging import version
 from PySide6.QtCore import QObject, Signal
 
-from ytget.styles import AppStyles
-from ytget.utils.paths import is_windows
+from ytget_gui.styles import AppStyles
+from ytget_gui.utils.paths import is_windows
 
 
 class UpdateManager(QObject):
     """
-    Thread-safe update manager for YTGet and yt-dlp.
+    Thread-safe update manager for ytget_gui and yt-dlp.
 
     Responsibilities:
     - Check for updates via GitHub API
@@ -33,10 +33,10 @@ class UpdateManager(QObject):
     # Progress updates: percent (0-100), label
     progress_signal = Signal(int, str)
 
-    # YTGet update results
-    ytget_ready = Signal(str)           # latest version
-    ytget_uptodate = Signal()           # already up to date
-    ytget_error = Signal(str)           # error message
+    # ytget_gui update results
+    ytget_gui_ready = Signal(str)           # latest version
+    ytget_gui_uptodate = Signal()           # already up to date
+    ytget_gui_error = Signal(str)           # error message
 
     # yt-dlp update results
     ytdlp_ready = Signal(str, str, str)  # latest, current, asset_url
@@ -54,7 +54,7 @@ class UpdateManager(QObject):
 
         # API endpoints
         owner_repo = "/".join(self.settings.GITHUB_URL.rstrip("/").split("/")[-2:])
-        self.ytget_api = f"https://api.github.com/repos/{owner_repo}/releases/latest"
+        self.ytget_gui_api = f"https://api.github.com/repos/{owner_repo}/releases/latest"
         self.ytdlp_api = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
 
         # HTTP session with optional proxy
@@ -68,21 +68,21 @@ class UpdateManager(QObject):
     # -------- Public entry points --------
 
     def check_all_updates(self):
-        """Check both YTGet and yt-dlp updates sequentially."""
-        self.check_ytget_update()
+        """Check both ytget_gui and yt-dlp updates sequentially."""
+        self.check_ytget_gui_update()
         self.check_ytdlp_update()
 
-    def check_ytget_update(self):
-        """Check if a newer YTGet release is available."""
-        self._log("🌐 Checking for YTGet updates...\n", AppStyles.INFO_COLOR, "Info")
+    def check_ytget_gui_update(self):
+        """Check if a newer ytget_gui release is available."""
+        self._log("🌐 Checking for ytget_gui updates...\n", AppStyles.INFO_COLOR, "Info")
         try:
-            latest = self._fetch_latest_version(self.ytget_api)
+            latest = self._fetch_latest_version(self.ytget_gui_api)
             if version.parse(latest) > version.parse(self.settings.VERSION):
-                self.ytget_ready.emit(latest)
+                self.ytget_gui_ready.emit(latest)
             else:
-                self.ytget_uptodate.emit()
+                self.ytget_gui_uptodate.emit()
         except Exception as e:
-            self.ytget_error.emit(str(e))
+            self.ytget_gui_error.emit(str(e))
 
     def check_ytdlp_update(self):
         """Check if a newer yt-dlp release is available."""
