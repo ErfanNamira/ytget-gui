@@ -1,6 +1,6 @@
 # .github/workflows/build-and-release.yml
 
-name: Build & Release YTGet
+name: Build & Cross Release YTGet
 
 on:
   workflow_dispatch:
