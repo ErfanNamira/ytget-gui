@@ -1,0 +1,258 @@
+# File: .github/workflows/build-and-release.yml
+name: Build & Cross Release YTGet
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name to release'
+        required: true
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  PYINSTALLER_SPEC: ytget.spec
+  APP_NAME: YTGet
+  ENTRY_POINT: ytget_gui.main:main
+
+jobs:
+  windows:
+    name: 🪟 Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Python deps + PyInstaller
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Download yt-dlp & FFmpeg binaries
+        shell: pwsh
+        run: |
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+          curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+          tar -xf ffmpeg.zip
+          Copy-Item (Get-ChildItem -Recurse -Filter ffmpeg.exe | Select -First 1).FullName .
+          Copy-Item (Get-ChildItem -Recurse -Filter ffprobe.exe | Select -First 1).FullName .
+
+      - name: PyInstaller Windows build
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --onedir --windowed `
+            --name "$env:APP_NAME" `
+            --icon "ytget_gui/icon.ico" `
+            --clean --noupx `
+            --version-file "version_info.txt" `
+            --add-data "yt-dlp.exe;." `
+            --add-data "ffmpeg.exe;." `
+            --add-data "ffprobe.exe;." `
+            "ytget_gui/main.py"
+
+      - name: Archive Windows build
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/$env:APP_NAME/*" -DestinationPath "${env:APP_NAME}-windows.zip"
+        continue-on-error: false
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.os }}-installer
+          path: "${env:APP_NAME}-windows.zip"
+
+  linux:
+    name: 🐧 Build Linux
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          apt-get update
+          apt-get install -y python3 python3-pip python3-setuptools fuse libfuse2 \
+                             ruby-dev build-essential \
+                             rpm ruby ruby-dev
+
+      - name: Install Python & packaging tools
+        run: |
+          pip3 install --upgrade pip
+          pip3 install -r requirements.txt pyinstaller linuxdeployqt fpm
+
+      - name: Download yt-dlp & FFmpeg
+        run: |
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+          chmod +x yt-dlp
+          curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+            | tar -xJ --strip-components=1 ffmpeg*/{ffmpeg,ffprobe}
+
+      - name: PyInstaller Linux build
+        run: |
+          pyinstaller --noconfirm --onedir --windowed \
+            --name "$APP_NAME" \
+            --icon "ytget_gui/icon.png" \
+            --clean --noupx \
+            --version-file "version_info.txt" \
+            --add-data "yt-dlp:." \
+            --add-data "ffmpeg:." \
+            --add-data "ffprobe:." \
+            ytget_gui/main.py
+
+      - name: Make AppImage
+        run: |
+          # bundle ALL Qt libs + your app into a single .AppImage
+          linuxdeployqt \
+            "dist/$APP_NAME/$APP_NAME.desktop" \
+            -appimage \
+            -bundle-non-qt-libs \
+            -verbose=1
+
+      - name: Build .deb & .rpm via fpm
+        run: |
+          # common metadata
+          VERSION=${GITHUB_REF#refs/tags/}
+          fpm -s dir -t deb \
+            --name "$APP_NAME" \
+            --version "$VERSION" \
+            --description "YTGet GUI (yt-dlp frontend)" \
+            --license MIT \
+            --url "https://github.com/ErfanNamira/ytget-gui" \
+            --depends python3,python3-pyside6,python3-requests \
+            --prefix /opt/$APP_NAME \
+            dist/$APP_NAME/=/opt/$APP_NAME \
+            yt-dlp=/opt/$APP_NAME \
+            ffmpeg=/opt/$APP_NAME \
+            ffprobe=/opt/$APP_NAME
+
+          fpm -s dir -t rpm \
+            --name "$APP_NAME" \
+            --version "$VERSION" \
+            --description "YTGet GUI (yt-dlp frontend)" \
+            --license MIT \
+            --url "https://github.com/ErfanNamira/ytget-gui" \
+            --depends python3,python3-pyside6,python3-requests \
+            --prefix /opt/$APP_NAME \
+            dist/$APP_NAME/=/opt/$APP_NAME \
+            yt-dlp=/opt/$APP_NAME \
+            ffmpeg=/opt/$APP_NAME \
+            ffprobe=/opt/$APP_NAME
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-installers
+          path: |
+            *.AppImage
+            *.deb
+            *.rpm
+
+  macos:
+    name: 🍎 Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Homebrew deps
+        run: |
+          brew install ffmpeg
+          brew install linuxdeployqt  # optional if building AppImage on macOS too
+
+      - name: Install Python deps + PyInstaller
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Download yt-dlp & link FFmpeg
+        run: |
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+          chmod +x yt-dlp
+          ln -s "$(which ffmpeg)" ffmpeg
+          ln -s "$(which ffprobe)" ffprobe
+
+      - name: PyInstaller macOS build
+        run: |
+          pyinstaller --noconfirm --onedir --windowed \
+            --name "$APP_NAME" \
+            --icon "ytget_gui/icon.icns" \
+            --clean --noupx \
+            --version-file "version_info.txt" \
+            --hidden-import PySide6.QtCore \
+            --hidden-import PySide6.QtGui \
+            --hidden-import PySide6.QtWidgets \
+            --add-data "yt-dlp:." \
+            --add-data "ffmpeg:." \
+            --add-data "ffprobe:." \
+            ytget_gui/main.py
+
+      - name: Create .dmg
+        run: |
+          DMG_NAME="${APP_NAME}-${GITHUB_REF#refs/tags/}.dmg"
+          hdiutil create \
+            -format UDZO \
+            -srcfolder "dist/$APP_NAME" \
+            -volname "$APP_NAME" \
+            "$DMG_NAME"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-installers
+          path: |
+            dist/$APP_NAME
+            *.dmg
+
+  release:
+    name: 📦 Publish Release
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure tag exists
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags
+          TAG="${{ github.event.inputs.tag }}"
+          git rev-parse -q --verify "refs/tags/$TAG" || (
+            git tag "$TAG" && git push origin "$TAG"
+          )
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: build_output
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: "$APP_NAME ${{ github.event.inputs.tag || github.ref_name }}"
+          body_path: RELEASE_NOTES.md
+          files: |
+            build_output/*.zip
+            build_output/*.AppImage
+            build_output/*.deb
+            build_output/*.rpm
+            build_output/*.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
