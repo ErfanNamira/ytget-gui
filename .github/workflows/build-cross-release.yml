@@ -1,6 +1,6 @@
-# File: .github/workflows/build-and-release.yml
+# .github/workflows/build-and-release.yml
 
-name: Build & Cross Release YTGet
+name: Build & Release YTGet
 
 on:
   workflow_dispatch:
@@ -17,20 +17,19 @@ permissions:
 
 env:
   APP_NAME: YTGet
+  VERSION: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   windows:
     name: 🪟 Windows Build
     runs-on: windows-latest
+    env:
+      APP_NAME: ${{ env.APP_NAME }}
+      VERSION: ${{ env.VERSION }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Determine version
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          echo "VERSION=${TAG#v}" >> $GITHUB_ENV
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -47,16 +46,16 @@ jobs:
         run: |
           curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
 
-          # Download & unpack ffmpeg build, then clean up the zip
+          # download and unpack ffmpeg build, then drop archive
           curl -sL https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
           tar -xf ffmpeg.zip
           Remove-Item -Force ffmpeg.zip
 
-          # Copy ffmpeg & ffprobe into CWD for PyInstaller
+          # copy ffmpeg & ffprobe into CWD for PyInstaller
           Copy-Item (Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName .
           Copy-Item (Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName .
 
-      - name: Build EXE with PyInstaller
+      - name: Build with PyInstaller
         shell: pwsh
         run: |
           pyinstaller --noconfirm --onedir --windowed `
@@ -70,36 +69,34 @@ jobs:
             --add-data "ffprobe.exe;." `
             "ytget_gui/main.py"
 
-      - name: Upload Windows build folder
+      - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist/${{ env.APP_NAME }}/**
+          path: dist/$APP_NAME/**
 
   linux:
     name: 🐧 Linux Build
     runs-on: ubuntu-latest
+    env:
+      APP_NAME: ${{ env.APP_NAME }}
+      VERSION: ${{ env.VERSION }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Determine version
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          echo "VERSION=${TAG#v}" >> $GITHUB_ENV
-
-      - name: Install system deps & linuxdeployqt
+      - name: Install system dependencies & linuxdeployqt
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential python3-pip python3-setuptools \
-                                  fuse libfuse2 rpm ruby-full
+                                  rpm ruby-full
           wget -qO linuxdeployqt.AppImage \
             https://github.com/linuxdeploy/linuxdeployqt/releases/download/7/linuxdeployqt-7-x86_64.AppImage
           chmod +x linuxdeployqt.AppImage
           sudo mv linuxdeployqt.AppImage /usr/local/bin/linuxdeployqt
 
-      - name: Install Python deps
+      - name: Install Python dependencies
         run: |
           python3 -m pip install --upgrade pip
           pip3 install -r requirements.txt pyinstaller
@@ -118,6 +115,7 @@ jobs:
             --icon "ytget_gui/icon.png" \
             --clean --noupx \
             --version-file "version_info.txt" \
+            --add-data "ytget_gui/icon.png;." \
             --add-data "yt-dlp:." \
             --add-data "ffmpeg:." \
             --add-data "ffprobe:." \
@@ -126,13 +124,12 @@ jobs:
       - name: Create AppImage
         run: |
           ARCH=$(uname -m)
-          linuxdeployqt \
-            "dist/$APP_NAME/$APP_NAME.desktop" \
+          linuxdeployqt "dist/$APP_NAME/$APP_NAME.desktop" \
             -appimage \
             -bundle-non-qt-libs
           mv "${APP_NAME}-${ARCH}.AppImage" "${APP_NAME}-${VERSION}-linux-${ARCH}.AppImage"
 
-      - name: Build DEB & RPM via fpm
+      - name: Package DEB & RPM via fpm
         run: |
           sudo gem install --no-document fpm
           ARCH=amd64
@@ -140,7 +137,7 @@ jobs:
             --name "$APP_NAME" \
             --version "$VERSION" \
             --package "${APP_NAME}-${VERSION}-linux-${ARCH}.deb" \
-            --description "YTGet — GUI YouTube downloader powered by yt-dlp" \
+            --description "YTGet — GUI YouTube downloader" \
             --license MIT \
             --url "https://github.com/ErfanNamira/ytget-gui" \
             --depends python3,python3-pyside6,python3-requests \
@@ -154,7 +151,7 @@ jobs:
             --name "$APP_NAME" \
             --version "$VERSION" \
             --package "${APP_NAME}-${VERSION}-linux-${ARCH}.rpm" \
-            --description "YTGet — GUI YouTube downloader powered by yt-dlp" \
+            --description "YTGet — GUI YouTube downloader" \
             --license MIT \
             --url "https://github.com/ErfanNamira/ytget-gui" \
             --depends python3-pyside6,python3-requests \
@@ -164,7 +161,7 @@ jobs:
             ffmpeg=/opt/$APP_NAME \
             ffprobe=/opt/$APP_NAME
 
-      - name: Upload Linux artifacts
+      - name: Upload Linux build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-installers
@@ -176,22 +173,20 @@ jobs:
   macos:
     name: 🍎 macOS Build
     runs-on: macos-latest
+    env:
+      APP_NAME: ${{ env.APP_NAME }}
+      VERSION: ${{ env.VERSION }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Determine version
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          echo "VERSION=${TAG#v}" >> $GITHUB_ENV
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Install Python deps
+      - name: Install Python dependencies
         run: |
           python3 -m pip install --upgrade pip
           pip3 install -r requirements.txt pyinstaller
@@ -221,11 +216,11 @@ jobs:
             -volname "${APP_NAME}" \
             "dist/dmg/${APP_NAME}-${VERSION}-macos.dmg"
 
-      - name: Archive .app as tar.xz
+      - name: Archive .app bundle
         run: |
           tar -cJf "${APP_NAME}-${VERSION}-macos.tar.xz" -C dist "${APP_NAME}.app"
 
-      - name: Upload macOS artifacts
+      - name: Upload macOS build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-installers
@@ -247,7 +242,7 @@ jobs:
         with:
           path: release_assets
 
-      - name: Ensure tag exists (manual runs)
+      - name: Ensure tag exists
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           git config user.name "github-actions[bot]"
