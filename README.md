@@ -41,7 +41,17 @@
 3. Run `YTGet.exe`.
 
 ### 🐍 PyPI Installation
-Install via pip:
+YTGet requires FFmpeg to process media. You can set it up in one of the following ways:
+
+#### 1️⃣ Add FFmpeg to PATH (Recommended)
+
+Download the latest FFmpeg build. Extract it and add the bin/ folder to your system PATH so that the ffmpeg command is available globally.
+
+#### 2️⃣ Place Binaries in the Program Folder (Alternative)
+
+Download the FFmpeg binaries. Copy ffmpeg.exe and ffprobe.exe into the YTGet installation directory (the same folder as the executable).
+
+#### 3️⃣ Install YTGet via pip:
 
 ```bash
 pip install ytget-gui
