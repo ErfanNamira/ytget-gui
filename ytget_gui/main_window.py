@@ -797,7 +797,7 @@ class MainWindow(QMainWindow):
 
         # Help
         m_help = menubar.addMenu("Help")
-        m_help.addAction("Check ytget_gui Update", lambda: self.request_check_ytget_gui.emit())
+        m_help.addAction("Check YTGet Update", lambda: self.request_check_ytget_gui.emit())
         m_help.addAction("Check yt-dlp Update", lambda: self.request_check_ytdlp.emit())
         m_help.addAction("Open Download Folder", lambda: webbrowser.open(self.settings.DOWNLOADS_DIR.as_uri()))
         m_help.addAction("About", self._show_about)
