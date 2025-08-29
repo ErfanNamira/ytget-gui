@@ -8,20 +8,19 @@ version = "2.4.6"
 description = "A GUI YouTube downloader powered by yt-dlp"
 readme = "README.md"
 requires-python = ">=3.13"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Erfan Namira", email = "erfannamira@gmail.com" }
 ]
-keywords = ["youtube", "downloader", "yt-dlp", "gui", "video", "audio"]
+keywords = ["youtube-downloader", "yt-dlp-gui", "yt-dlp", "audio-downloader-gui", "video-downloader-apps", "youtube"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: End Users/Desktop",
     "Topic :: Multimedia :: Video",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13"
 ]
-
 dependencies = [
     "yt-dlp",
     "PySide6",
@@ -44,3 +43,6 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 ytget = ["icon.ico"]
+
+[tool.setuptools.packages.find]
+where = ["ytget"]
