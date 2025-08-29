@@ -20,7 +20,7 @@ from ytget_gui.utils.paths import (
 class AppSettings:
     VERSION: str = "2.4.6"
     APP_NAME: str = "YTGet"
-    GITHUB_URL: str = "https://github.com/ErfanNamira/ytget_gui"
+    GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
     BASE_DIR: Path = field(default_factory=get_base_path)
     INTERNAL_DIR: Path = field(init=False)
