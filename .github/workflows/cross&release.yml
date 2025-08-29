@@ -17,6 +17,7 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    continue-on-error: true   # Don't cancel other OS builds if one fails
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
@@ -71,7 +72,7 @@ jobs:
     - name: Build with PyInstaller
       run: |
         pyinstaller --noconfirm --onedir --windowed \
-          --icon "ytget/icon.ico" \
+          --icon "ytget_gui/icon.ico" \
           --name "YTGet" \
           --clean --noupx \
           --version-file "version_info.txt" \
@@ -84,23 +85,24 @@ jobs:
           --hidden-import "webbrowser" \
           --hidden-import "mutagen.id3" \
           --hidden-import "mutagen.flac" \
-          --add-data "ytget/__init__.py:ytget" \
-          --add-data "ytget/__main__.py:ytget" \
-          --add-data "ytget/main_window.py:ytget" \
-          --add-data "ytget/settings.py:ytget" \
-          --add-data "ytget/styles.py:ytget" \
-          --add-data "ytget/icon.ico:ytget" \
-          --add-data "ytget/dialogs:ytget/dialogs" \
-          --add-data "ytget/utils:ytget/utils" \
-          --add-data "ytget/widgets:ytget/widgets" \
-          --add-data "ytget/workers:ytget/workers" \
+          --add-data "ytget_gui/__init__.py:ytget_gui" \
+          --add-data "ytget_gui/__main__.py:ytget_gui" \
+          --add-data "ytget_gui/main_window.py:ytget_gui" \
+          --add-data "ytget_gui/settings.py:ytget_gui" \
+          --add-data "ytget_gui/styles.py:ytget_gui" \
+          --add-data "ytget_gui/icon.ico:ytget_gui" \
+          --add-data "ytget_gui/dialogs:ytget_gui/dialogs" \
+          --add-data "ytget_gui/utils:ytget_gui/utils" \
+          --add-data "ytget_gui/widgets:ytget_gui/widgets" \
+          --add-data "ytget_gui/workers:ytget_gui/workers" \
           --add-data "LICENSE:." \
           --add-data "README.md:." \
           --add-data "RELEASE_NOTES.md:." \
           --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
           --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
           --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-          "ytget/main.py"
+          "ytget_gui/main.py"
+      shell: bash
 
     - name: Package build
       run: |
@@ -132,6 +134,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
