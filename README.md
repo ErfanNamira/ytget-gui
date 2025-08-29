@@ -152,7 +152,7 @@ _internal/cookies.txt
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/ErfanNamira/ytget.git
+   git clone https://github.com/ErfanNamira/ytget-gui.git
    ```
 
 2. **Create & activate virtual environment**
