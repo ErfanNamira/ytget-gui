@@ -17,7 +17,7 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    continue-on-error: true   # Don't cancel other OS builds if one fails
+    continue-on-error: true
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
@@ -63,9 +63,14 @@ jobs:
           cp $(which ffmpeg) .
           cp $(which ffprobe) .
         else
-          brew install ffmpeg
-          cp $(which ffmpeg) .
-          cp $(which ffprobe) .
+          # macOS static builds
+          curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.zip -o ffmpeg.zip
+          unzip ffmpeg.zip
+          mv ffmpeg ffmpeg
+          curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.zip -o ffprobe.zip
+          unzip ffprobe.zip
+          mv ffprobe ffprobe
+          chmod +x ffmpeg ffprobe
         fi
       shell: bash
 
