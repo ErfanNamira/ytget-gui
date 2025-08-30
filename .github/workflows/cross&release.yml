@@ -6,9 +6,6 @@ on:
       tag:
         description: 'Tag name to release'
         required: true
-  push:
-    tags:
-      - 'v*'
 
 permissions:
   contents: write
@@ -26,7 +23,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up latest Python 3
+    - name: Set up Python 3
       uses: actions/setup-python@v5
       with:
         python-version: '3.x'
@@ -63,78 +60,109 @@ jobs:
           cp $(which ffmpeg) .
           cp $(which ffprobe) .
         else
-          # macOS static builds
           curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.zip -o ffmpeg.zip
           unzip ffmpeg.zip
-          mv ffmpeg ffmpeg
+          chmod +x ffmpeg
           curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.zip -o ffprobe.zip
           unzip ffprobe.zip
-          mv ffprobe ffprobe
-          chmod +x ffmpeg ffprobe
+          chmod +x ffprobe
         fi
       shell: bash
 
-    - name: Build with PyInstaller
+    - name: Build application
       run: |
-        pyinstaller --noconfirm --onedir --windowed \
-          --icon "ytget_gui/icon.ico" \
-          --name "YTGet" \
-          --clean --noupx \
-          --version-file "version_info.txt" \
-          --hidden-import "PySide6.QtCore" \
-          --hidden-import "PySide6.QtGui" \
-          --hidden-import "PySide6.QtWidgets" \
-          --hidden-import "requests" \
-          --hidden-import "mutagen" \
-          --hidden-import "PIL" \
-          --hidden-import "webbrowser" \
-          --hidden-import "mutagen.id3" \
-          --hidden-import "mutagen.flac" \
-          --add-data "ytget_gui/__init__.py:ytget_gui" \
-          --add-data "ytget_gui/__main__.py:ytget_gui" \
-          --add-data "ytget_gui/main_window.py:ytget_gui" \
-          --add-data "ytget_gui/settings.py:ytget_gui" \
-          --add-data "ytget_gui/styles.py:ytget_gui" \
-          --add-data "ytget_gui/icon.ico:ytget_gui" \
-          --add-data "ytget_gui/icon.ico:." \
-          --add-data "ytget_gui/dialogs:ytget_gui/dialogs" \
-          --add-data "ytget_gui/utils:ytget_gui/utils" \
-          --add-data "ytget_gui/widgets:ytget_gui/widgets" \
-          --add-data "ytget_gui/workers:ytget_gui/workers" \
-          --add-data "LICENSE:." \
-          --add-data "README.md:." \
-          --add-data "RELEASE_NOTES.md:." \
-          --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-          --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-          --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-          "ytget_gui/main.py"
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          ICON="ytget_gui/icon.icns"
+          APP_NAME="YTGet"
+          pyinstaller --noconfirm --onedir --windowed \
+            --name "$APP_NAME" \
+            --icon "$ICON" \
+            --clean --noupx \
+            --version-file "version_info.txt" \
+            --hidden-import "PySide6.QtCore" \
+            --hidden-import "PySide6.QtGui" \
+            --hidden-import "PySide6.QtWidgets" \
+            --hidden-import "requests" \
+            --hidden-import "mutagen" \
+            --hidden-import "PIL" \
+            --hidden-import "webbrowser" \
+            --hidden-import "mutagen.id3" \
+            --hidden-import "mutagen.flac" \
+            --add-data "ytget_gui:ytget_gui" \
+            --add-data "ytget_gui/icon.icns:." \
+            --add-data "yt-dlp:." \
+            --add-data "ffmpeg:." \
+            --add-data "ffprobe:." \
+            ytget_gui/main.py
+        else
+          ICON="ytget_gui/icon.ico"
+          pyinstaller --noconfirm --onedir --windowed \
+            --icon "$ICON" \
+            --name "YTGet" \
+            --clean --noupx \
+            --version-file "version_info.txt" \
+            --hidden-import "PySide6.QtCore" \
+            --hidden-import "PySide6.QtGui" \
+            --hidden-import "PySide6.QtWidgets" \
+            --hidden-import "requests" \
+            --hidden-import "mutagen" \
+            --hidden-import "PIL" \
+            --hidden-import "webbrowser" \
+            --hidden-import "mutagen.id3" \
+            --hidden-import "mutagen.flac" \
+            --add-data "ytget_gui:ytget_gui" \
+            --add-data "ytget_gui/icon.ico:." \
+            --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+            --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+            --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+            ytget_gui/main.py
+        fi
       shell: bash
+
+    - name: Smoke test (macOS only)
+      if: matrix.os == 'macos-latest'
+      run: |
+        EXECUTABLE="./dist/YTGet.app/Contents/MacOS/YTGet"
+        echo "Running basic smoke test..."
+        if [ ! -f "$EXECUTABLE" ]; then
+          echo "Executable not found: $EXECUTABLE"
+          exit 1
+        fi
+        "$EXECUTABLE" --version
 
     - name: Package build
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
-          powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-${{ runner.os }}.zip -CompressionLevel Optimal
+          powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
+        elif [[ "$RUNNER_OS" == "Linux" ]]; then
+          tar -czf YTGet-linux.tar.gz -C dist YTGet
         else
-          tar -czf YTGet-${{ runner.os }}.tar.gz -C dist YTGet
+          cd dist
+          tar -czf YTGet-macOS.tar.gz YTGet.app
+          cd ..
         fi
       shell: bash
 
     - name: Generate SHA-256 checksum
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
-          certutil -hashfile YTGet-${{ runner.os }}.zip SHA256 > YTGet-${{ runner.os }}.sha256
+          certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
+        elif [[ "$RUNNER_OS" == "Linux" ]]; then
+          shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
         else
-          shasum -a 256 YTGet-${{ runner.os }}.* > YTGet-${{ runner.os }}.sha256
+          shasum -a 256 dist/YTGet-macOS.tar.gz > dist/YTGet-macOS.sha256
         fi
       shell: bash
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: build-${{ runner.os }}
+        name: build-${{ matrix.os }}
         path: |
-          YTGet-${{ runner.os }}.*
-          YTGet-${{ runner.os }}.sha256
+          YTGet-*.*
+          YTGet-*.sha256
+          dist/YTGet-macOS.tar.gz
+          dist/YTGet-macOS.sha256
 
   release:
     needs: build
