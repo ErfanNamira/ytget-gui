@@ -1,0 +1,234 @@
+name: Build, Test & Release YTGet (Cross-Platform)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name to release'
+        required: true
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.runs_on }}
+    continue-on-error: true
+    strategy:
+      matrix:
+        include:
+          - name: Windows
+            runs_on: windows-latest
+          - name: Linux
+            runs_on: ubuntu-latest
+          - name: macOS
+            runs_on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # Linux-specific dependencies
+      - name: Install Qt XCB dependencies (Linux)
+        if: matrix.name == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb-cursor0 libxcb-xinerama0 libxcb-xinput0 \
+            libxcb-xfixes0 libxcb-shape0 libxcb-render-util0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render0 libxcb-shm0 \
+            libxcb-sync1 libxcb-util1 libxcb-xkb1
+
+      # macOS-specific dependencies
+      - name: Install Qt (macOS)
+        if: matrix.name == 'macOS'
+        run: |
+          brew install --quiet qt
+
+      # Download yt-dlp
+      - name: Download yt-dlp (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -OutFile yt-dlp.exe
+
+      - name: Download yt-dlp (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+          chmod +x yt-dlp
+
+      - name: Download yt-dlp (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o yt-dlp
+          chmod +x yt-dlp
+
+      # Download ffmpeg & ffprobe
+      - name: Install ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath .
+          $ffmpeg = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $ffprobe = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          Copy-Item $ffmpeg.FullName .
+          Copy-Item $ffprobe.FullName .
+
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          cp "$(which ffmpeg)" .
+          cp "$(which ffprobe)" .
+
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg
+          cp "$(which ffmpeg)" .
+          cp "$(which ffprobe)" .
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          set -e
+          pyinstaller --noconfirm --onedir --windowed \
+            --icon "ytget_gui/icon.ico" \
+            --name "YTGet" \
+            --clean --noupx \
+            --version-file "version_info.txt" \
+            --hidden-import "PySide6.QtCore" \
+            --hidden-import "PySide6.QtGui" \
+            --hidden-import "PySide6.QtWidgets" \
+            --hidden-import "requests" \
+            --hidden-import "mutagen" \
+            --hidden-import "PIL" \
+            --hidden-import "webbrowser" \
+            --hidden-import "mutagen.id3" \
+            --hidden-import "mutagen.flac" \
+            --add-data "ytget_gui:ytget_gui" \
+            --add-data "ytget_gui/icon.ico:." \
+            --add-data "LICENSE:." \
+            --add-data "README.md:." \
+            --add-data "RELEASE_NOTES.md:." \
+            --add-data "yt-dlp:." \
+            --add-data "ffmpeg:." \
+            --add-data "ffprobe:." \
+            "ytget_gui/main.py"
+
+      - name: Bundle Qt XCB libraries (Linux)
+        if: matrix.name == 'Linux'
+        run: |
+          DIST=dist/YTGet
+          mkdir -p "${DIST}"
+          sudo apt-get install -y libxcb-cursor0
+          find /usr/lib/x86_64-linux-gnu -maxdepth 1 -type f -name 'libxcb*.so*' \
+            -exec cp {} "${DIST}/" \;
+
+      - name: Bundle macOS app with macdeployqt
+        if: matrix.name == 'macOS'
+        run: |
+          brew install qt@6
+          DIST=dist/YTGet/YTGet.app
+          macdeployqt "$DIST" -verbose=1
+
+      - name: Package build
+        shell: bash
+        run: |
+          set -e
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-${{ matrix.name }}.zip -CompressionLevel Optimal
+          else
+            tar -czf YTGet-${{ matrix.name }}.tar.gz -C dist YTGet
+          fi
+
+      - name: Generate SHA-256 checksum
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            certutil -hashfile YTGet-${{ matrix.name }}.zip SHA256 | findstr /R "^[0-9A-F]" > YTGet-${{ matrix.name }}.sha256
+          else
+            shasum -a 256 YTGet-${{ matrix.name }}.* > YTGet-${{ matrix.name }}.sha256
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.name }}
+          path: |
+            YTGet-${{ matrix.name }}.*
+            YTGet-${{ matrix.name }}.sha256
+
+  smoke_test:
+    name: Smoke Test
+    needs: build
+    strategy:
+      matrix:
+        include:
+          - name: Linux
+            runs_on: ubuntu-latest
+            archive: YTGet-Linux.tar.gz
+          - name: macOS
+            runs_on: macos-latest
+            archive: YTGet-macOS.tar.gz
+    runs-on: ${{ matrix.runs_on }}
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.name }}
+          path: ./artifact
+
+      - name: Extract artifact
+        run: |
+          mkdir -p testdir
+          tar -xzf artifact/${{ matrix.archive }} -C testdir
+
+      - name: Run version smoke test
+        run: |
+          cd testdir/YTGet
+          ./YTGet --version | grep "${{ github.event.inputs.tag || github.ref_name }}"
+
+  release:
+    name: Create GitHub Release
+    needs: [build, smoke_test]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: "YTGet ${{ github.event.inputs.tag || github.ref_name }}"
+          body_path: RELEASE_NOTES.md
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
