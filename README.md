@@ -52,7 +52,7 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 1. Download the latest `YTGet-Linux.tar.gz` release.  
 2. Extract the contents.
 ```
-tar -xzf YTGet-ubuntu-latest.tar.gz
+tar -xzf YTGet-Linux.tar.gz
 ```
 3. Make it executable and launch:
 ```
@@ -64,7 +64,7 @@ chmod +x YTGet
 1. Download the latest `YTGet-macOS.tar.gz` release.  
 2. In Terminal, run:
 ```
-tar -xzf YTGet-macos-latest.tar.gz
+tar -xzf YTGet-macOS.tar.gz
 ```
 This will produce a YTGet.app bundle in your current directory.
 
