@@ -75,7 +75,7 @@ jobs:
         VERSION="${{ github.event.inputs.tag }}"
         BUILD_NUMBER="${{ github.run_number }}"
         /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
-        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" Info.plist
+        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" Info.plist
 
     - name: Build application
       run: |
