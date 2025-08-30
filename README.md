@@ -49,12 +49,16 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 3. Run `YTGet.exe`.
 
 ### 🐧 Linux
-1. Download the latest `YTGet-Linux.tar.gz` release.  
-2. Extract the contents.
+1. Install required dependencies:
+```
+sudo apt-get update && sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libxcb-xinput0 libxcb-xfixes0 libxcb-shape0 libxcb-render-util0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xkb1
+``` 
+3. Download the latest `YTGet-Linux.tar.gz` release.  
+4. Extract the contents.
 ```
 tar -xzf YTGet-Linux.tar.gz
 ```
-3. Make it executable and launch:
+4. Make it executable and launch:
 ```
 chmod +x YTGet
 ./YTGet
