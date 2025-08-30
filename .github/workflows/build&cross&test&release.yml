@@ -29,23 +29,23 @@ jobs:
             runs_on: macos-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # Linux-specific dependencies
       - name: Install Qt XCB dependencies (Linux)
-        if: matrix.name == 'Linux'
+        if: ${{ matrix.name == 'Linux' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -55,62 +55,46 @@ jobs:
             libxcb-randr0 libxcb-render0 libxcb-shm0 \
             libxcb-sync1 libxcb-util1 libxcb-xkb1
 
-      # macOS-specific dependencies
       - name: Install Qt (macOS)
-        if: matrix.name == 'macOS'
+        if: ${{ matrix.name == 'macOS' }}
         run: |
-          brew install --quiet qt
+          brew update
+          brew install qt
 
-      # Download yt-dlp
-      - name: Download yt-dlp (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
+      - name: Download yt-dlp
         run: |
-          Invoke-WebRequest -Uri https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -OutFile yt-dlp.exe
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+            chmod +x yt-dlp
+          else
+            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o yt-dlp
+            chmod +x yt-dlp
+          fi
+        shell: bash
 
-      - name: Download yt-dlp (Linux)
-        if: runner.os == 'Linux'
+      - name: Download ffmpeg & ffprobe
         run: |
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
-          chmod +x yt-dlp
-
-      - name: Download yt-dlp (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o yt-dlp
-          chmod +x yt-dlp
-
-      # Download ffmpeg & ffprobe
-      - name: Install ffmpeg (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
-          Expand-Archive -Path ffmpeg.zip -DestinationPath .
-          $ffmpeg = Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          $ffprobe = Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1
-          Copy-Item $ffmpeg.FullName .
-          Copy-Item $ffprobe.FullName .
-
-      - name: Install ffmpeg (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          cp "$(which ffmpeg)" .
-          cp "$(which ffprobe)" .
-
-      - name: Install ffmpeg (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install ffmpeg
-          cp "$(which ffmpeg)" .
-          cp "$(which ffprobe)" .
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+            powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ."
+            cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName")" .
+            cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName")" .
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+            cp "$(which ffmpeg)" .
+            cp "$(which ffprobe)" .
+          else
+            brew install ffmpeg
+            cp "$(which ffmpeg)" .
+            cp "$(which ffprobe)" .
+          fi
+        shell: bash
 
       - name: Build with PyInstaller
-        shell: bash
         run: |
-          set -e
           pyinstaller --noconfirm --onedir --windowed \
             --icon "ytget_gui/icon.ico" \
             --name "YTGet" \
@@ -126,49 +110,51 @@ jobs:
             --hidden-import "mutagen.id3" \
             --hidden-import "mutagen.flac" \
             --add-data "ytget_gui:ytget_gui" \
-            --add-data "ytget_gui/icon.ico:." \
+			--add-data "ytget_gui/icon.ico:." \
             --add-data "LICENSE:." \
             --add-data "README.md:." \
             --add-data "RELEASE_NOTES.md:." \
-            --add-data "yt-dlp:." \
-            --add-data "ffmpeg:." \
-            --add-data "ffprobe:." \
+            --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+            --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+            --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
             "ytget_gui/main.py"
+        shell: bash
 
       - name: Bundle Qt XCB libraries (Linux)
-        if: matrix.name == 'Linux'
+        if: ${{ matrix.name == 'Linux' }}
         run: |
           DIST=dist/YTGet
-          mkdir -p "${DIST}"
-          sudo apt-get install -y libxcb-cursor0
+          sudo apt-get update
+          sudo apt-get install -y libxcb-cursor0    # ensure they exist
           find /usr/lib/x86_64-linux-gnu -maxdepth 1 -type f -name 'libxcb*.so*' \
             -exec cp {} "${DIST}/" \;
+        shell: bash
 
       - name: Bundle macOS app with macdeployqt
-        if: matrix.name == 'macOS'
+        if: ${{ matrix.name == 'macOS' }}
         run: |
           brew install qt@6
           DIST=dist/YTGet/YTGet.app
           macdeployqt "$DIST" -verbose=1
+        shell: bash
 
       - name: Package build
-        shell: bash
         run: |
-          set -e
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-${{ matrix.name }}.zip -CompressionLevel Optimal
           else
             tar -czf YTGet-${{ matrix.name }}.tar.gz -C dist YTGet
           fi
+        shell: bash
 
       - name: Generate SHA-256 checksum
-        shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            certutil -hashfile YTGet-${{ matrix.name }}.zip SHA256 | findstr /R "^[0-9A-F]" > YTGet-${{ matrix.name }}.sha256
+            certutil -hashfile YTGet-${{ matrix.name }}.zip SHA256 > YTGet-${{ matrix.name }}.sha256
           else
             shasum -a 256 YTGet-${{ matrix.name }}.* > YTGet-${{ matrix.name }}.sha256
           fi
+        shell: bash
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -201,13 +187,14 @@ jobs:
 
       - name: Extract artifact
         run: |
-          mkdir -p testdir
           tar -xzf artifact/${{ matrix.archive }} -C testdir
+        shell: bash
 
       - name: Run version smoke test
         run: |
           cd testdir/YTGet
           ./YTGet --version | grep "${{ github.event.inputs.tag || github.ref_name }}"
+        shell: bash
 
   release:
     name: Create GitHub Release
