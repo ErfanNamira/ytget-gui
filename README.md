@@ -43,7 +43,7 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 
 ## ☄️ How to Install
 
-### 📦 Windows
+### 🪟 Windows
 1. Download the latest `YTGet-Windows.zip` release.  
 2. Extract the contents.  
 3. Run `YTGet.exe`.
@@ -60,49 +60,94 @@ chmod +x YTGet
 ./YTGet
 ```
 
-### 🍏 macOS
+### 🍎 macOS
 1. Download the latest `YTGet-macOS.tar.gz` release.  
-2. Extract the contents.
+2. In Terminal, run:
 ```
 tar -xzf YTGet-macos-latest.tar.gz
 ```
-3. If macOS blocks the app, remove the quarantine flag:
+This will produce a YTGet.app bundle in your current directory.
+
+3. Remove Quarantine Flag
+If you see “cannot be opened because Apple cannot check it for malicious software,” you need to strip the quarantine attribute:
 ```
 xattr -d com.apple.quarantine YTGet.app
 ```
-4. Launch from Finder or via Terminal:
-```
-open YTGet.app
-```
-Or run directly:
+This lets macOS trust your app without popping security dialogs every launch.
+
+4. Set Executable Permission
 ```
 chmod +x YTGet.app/Contents/MacOS/YTGet
-YTGet.app/Contents/MacOS/YTGet
 ```
+5. Move to Applications (Optional)
+   
+For a cleaner setup, drag YTGet.app into your /Applications folder or run:
+```
+mv YTGet.app /Applications/
+```
+6. Launch YTGet
+   
+Choose one:
+* From Finder: double-click /Applications/YTGet.app.
+* From Terminal:
+  ```
+  open /Applications/YTGet.app
+  ```
+* Or run the binary directly:
+  ```
+  /Applications/YTGet.app/Contents/MacOS/YTGet
+  ``` 
+   
 
 ### 🐍 [PyPI Installation](https://pypi.org/project/ytget-gui/)
-YTGet requires FFmpeg to process media. You can set it up in one of the following ways:
+YTGet GUI depends on FFmpeg to process and convert media. Follow these steps to get everything up and running:
 
-#### 1️⃣ Add FFmpeg to PATH (Recommended)
-
-Download the latest FFmpeg build. Extract it and add the bin/ folder to your system PATH so that the ffmpeg command is available globally.
-
-#### 2️⃣ Place Binaries in the Program Folder (Alternative)
-
-Download the FFmpeg binaries. Copy ffmpeg.exe and ffprobe.exe into the YTGet installation directory (the same folder as the executable).
-
-#### 3️⃣ Install YTGet via pip:
-
-```bash
+#### 1️⃣ Install YTGet GUI
+```
 pip install ytget-gui
 ```
-### 🔄 How to Update (PyPI version)
+#### 2️⃣ Set Up FFmpeg
 
-To update YTGet GUI installed via pip:
+Choose one of the two methods below:
+
+**2.1 Add FFmpeg to Your PATH (Recommended)**
+* Download the latest FFmpeg build for your platform from this [Link](https://ffmpeg.org/download.html).
+* Extract the archive.
+* Add the bin/ directory to your system PATH:
+ 
+    On Windows: update Environment Variables → Path.
+  
+    On macOS/Linux: edit ~/.bashrc or ~/.zshrc with
+    ```
+    export PATH="/path/to/ffmpeg/bin:$PATH"
+    ```
+* Verify installation:
+  ```
+  ffmpeg -version
+  ```
+**2.2 Copy Binaries into the YTGet Folder (Alternative)**
+
+  * Download the static FFmpeg binaries for your OS.
+
+  * Copy ffmpeg (or ffmpeg.exe) and ffprobe (or ffprobe.exe) into the same directory where the ytget-gui executable lives. 
+
+#### 🔄 How to Update (PyPI version)
+
+To upgrade your PyPI installation to the latest release:
 ```
 pip install --upgrade ytget-gui
 ```
-This will fetch the latest version from PyPI and replace the old version automatically.
+This command fetches and installs the newest version, replacing your current one automatically.
+
+#### ✨ Extra Tips You Might Find Useful
+* On macOS, you can also use Homebrew:
+```
+brew install ffmpeg
+```
+* On Debian/Ubuntu:
+```
+sudo apt update && sudo apt install ffmpeg
+```
 
 ---
 
@@ -150,12 +195,11 @@ This will fetch the latest version from PyPI and replace the old version automat
 
 ## 🧰 How to Use
 
-1. 📦 Extract the downloaded `.zip` file.  
-2. ▶️ Launch `YTGet.exe`.  
-3. 🔗 Paste a YouTube URL.  
-4. 🎚️ Select format (e.g., 1080p MKV or MP3).  
-5. ⬇️ Click **➕ Add to Queue**.  
-6. ⬇️ Click **▶️ Start Queue**.
+1. ▶️ Launch `YTGet`.  
+2. 🔗 Paste a YouTube URL.  
+3. 🎚️ Select format (e.g., 1080p MKV or MP3).  
+4. ⬇️ Click **➕ Add to Queue**.  
+5. ⬇️ Click **▶️ Start Queue**.
 
 ---
 
@@ -165,7 +209,6 @@ This will fetch the latest version from PyPI and replace the old version automat
 - 🎵 Audio downloads include:
   - Embedded album art  
   - Metadata tags (artist, title, etc.)  
-  - Subtitles (if available)
 
 ---
 
@@ -173,7 +216,8 @@ This will fetch the latest version from PyPI and replace the old version automat
 
 | Format           | Description                                     |
 |-----------------|-------------------------------------------------|
-| 🎞️ 480p–8K      | MKV video with merged best audio               |
+| 🎞️ 480p–8K      | MKV, MP4, WebM video with merged best audio               |
+| 🎵 FLAC Audio    | High-quality audio with tags & thumbnails      |
 | 🎵 MP3 Audio     | High-quality audio with tags & thumbnails      |
 | 📃 Playlist MP3  | Batch audio extraction from playlists          |
 
