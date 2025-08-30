@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag name to release'
+        description: 'Tag name to release (e.g. 2.4.7)'
         required: true
 
 permissions:
@@ -69,6 +69,14 @@ jobs:
         fi
       shell: bash
 
+    - name: Update Info.plist version (macOS only)
+      if: matrix.os == 'macos-latest'
+      run: |
+        VERSION="${{ github.event.inputs.tag }}"
+        BUILD_NUMBER="${{ github.run_number }}"
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
+        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" Info.plist
+
     - name: Build application
       run: |
         if [[ "$RUNNER_OS" == "macOS" ]]; then
@@ -79,6 +87,8 @@ jobs:
             --icon "$ICON" \
             --clean --noupx \
             --version-file "version_info.txt" \
+            --osx-bundle-identifier "com.erfannamira.ytget" \
+            --plist "Info.plist" \
             --hidden-import "PySide6.QtCore" \
             --hidden-import "PySide6.QtGui" \
             --hidden-import "PySide6.QtWidgets" \
