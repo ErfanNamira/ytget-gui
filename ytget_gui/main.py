@@ -8,11 +8,17 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from ytget_gui.main_window import MainWindow
-# from ytget_gui.utils.firewall_manager import check_network_firewall
+
+__version__ = "2.4.7"  # replace with your actual version
 
 
 def main():
-    # 1) Create the QApplication before any QWidget (e.g. QMessageBox in firewall check)
+    # Check for command-line arguments first
+    if "--version" in sys.argv:
+        print(f"YTGet version {__version__}")
+        sys.exit(0)
+
+    # 1) Create the QApplication before any QWidget (e.g. QMessageBox)
     app = QApplication(sys.argv)
     app.setApplicationName("YTGet")
     app.setOrganizationName("YTGet")
@@ -23,14 +29,11 @@ def main():
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # 3) Every launch: verify network/firewall & yt-dlp availability
-    # check_network_firewall(parent=None)
-
-    # 4) Instantiate and show the main window
+    # 3) Instantiate and show the main window
     w = MainWindow()
     w.show()
 
-    # 5) Enter Qt event loop
+    # 4) Enter Qt event loop
     sys.exit(app.exec())
 
 
