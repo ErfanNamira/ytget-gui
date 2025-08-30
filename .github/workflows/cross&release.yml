@@ -88,7 +88,6 @@ jobs:
             --clean --noupx \
             --version-file "version_info.txt" \
             --osx-bundle-identifier "com.erfannamira.ytget" \
-            --plist "Info.plist" \
             --hidden-import "PySide6.QtCore" \
             --hidden-import "PySide6.QtGui" \
             --hidden-import "PySide6.QtWidgets" \
@@ -104,6 +103,10 @@ jobs:
             --add-data "ffmpeg:." \
             --add-data "ffprobe:." \
             ytget_gui/main.py
+
+          # Overwrite generated Info.plist with our custom one
+          cp Info.plist "dist/$APP_NAME.app/Contents/Info.plist"
+
         else
           ICON="ytget_gui/icon.ico"
           pyinstaller --noconfirm --onedir --windowed \
