@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 
 from ytget_gui.main_window import MainWindow
 
-__version__ = "2.4.7"  # replace with your actual version
+__version__ = "2.4.7" 
 
 
 def main():
