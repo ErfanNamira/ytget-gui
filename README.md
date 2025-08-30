@@ -44,7 +44,7 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 ## ☄️ How to Install
 
 ### 🪟 Windows
-1. Download the latest `YTGet-Windows.zip` release.  
+1. [Download the latest `YTGet-Windows.zip` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-Windows.zip)  
 2. Extract the contents.  
 3. Run `YTGet.exe`.
 
@@ -53,7 +53,7 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 ```
 sudo apt-get update && sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libxcb-xinput0 libxcb-xfixes0 libxcb-shape0 libxcb-render-util0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xkb1
 ``` 
-3. Download the latest `YTGet-Linux.tar.gz` release.  
+3. [Download the latest `YTGet-Linux.tar.gz` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-Linux.tar.gz)  
 4. Extract the contents.
 ```
 tar -xzf YTGet-Linux.tar.gz
@@ -65,7 +65,7 @@ chmod +x YTGet
 ```
 
 ### 🍎 macOS
-1. Download the latest `YTGet-macOS.tar.gz` release.  
+1. [Download the latest `YTGet-macOS.tar.gz` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS.tar.gz)  
 2. In Terminal, run:
 ```
 tar -xzf YTGet-macOS.tar.gz
