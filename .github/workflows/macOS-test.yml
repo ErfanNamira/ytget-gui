@@ -42,7 +42,7 @@ jobs:
       - name: Build .app with PyInstaller
         run: |
           pyinstaller --noconfirm --onedir --windowed \
-            --name "YTGet.app" \
+            --name "YTGet" \
             --icon "ytget_gui/icon.icns" \
             --clean --noupx \
             --version-file "version_info.txt" \
@@ -65,9 +65,14 @@ jobs:
       - name: Smoke test .app
         run: |
           echo "Running basic smoke test..."
-          ./dist/YTGet.app/Contents/MacOS/YTGet --version || exit 1
+          EXECUTABLE="./dist/YTGet.app/Contents/MacOS/YTGet"
+          if [ ! -f "$EXECUTABLE" ]; then
+            echo "Executable not found: $EXECUTABLE"
+            exit 1
+          fi
+          "$EXECUTABLE" --version
 
-      - name: Package .app for download
+      - name: Package .app as tar.gz
         run: |
           cd dist
           tar -czf YTGet-macOS.tar.gz YTGet.app
