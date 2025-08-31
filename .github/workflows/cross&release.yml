@@ -142,29 +142,54 @@ jobs:
           exit 1
         fi
         "$EXECUTABLE" --version
+      shell: bash
 
-    - name: Package build
+    - name: Package build (Windows & Linux)
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
         elif [[ "$RUNNER_OS" == "Linux" ]]; then
           tar -czf YTGet-linux.tar.gz -C dist YTGet
-        else
-          cd dist
-          tar -czf YTGet-macOS.tar.gz YTGet.app
-          cd ..
         fi
       shell: bash
 
-    - name: Generate SHA-256 checksum
+    - name: Install create-dmg (macOS only)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew update
+        brew install create-dmg
+      shell: bash
+
+    - name: Build DMG (macOS only)
+      if: matrix.os == 'macos-latest'
+      run: |
+        TAG=${{ github.event.inputs.tag }}
+        create-dmg \
+          --volname "YTGet ${TAG}" \
+          --volicon ytget_gui/icon.icns \
+          --background ytget_gui/dmg-background.png \
+          --window-size 600 400 \
+          --icon-size 100 \
+          --app-drop-link 500 200 \
+          --icon "YTGet.app" 100 200 \
+          "dist/YTGet-${TAG}.dmg" \
+          "dist/YTGet.app"
+      shell: bash
+
+    - name: Generate checksum (Windows & Linux)
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
         elif [[ "$RUNNER_OS" == "Linux" ]]; then
           shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
-        else
-          shasum -a 256 dist/YTGet-macOS.tar.gz > dist/YTGet-macOS.sha256
         fi
+      shell: bash
+
+    - name: Generate DMG checksum (macOS only)
+      if: matrix.os == 'macos-latest'
+      run: |
+        TAG=${{ github.event.inputs.tag }}
+        shasum -a 256 "dist/YTGet-${TAG}.dmg" > "dist/YTGet-${TAG}.dmg.sha256"
       shell: bash
 
     - name: Upload artifacts
@@ -174,12 +199,13 @@ jobs:
         path: |
           YTGet-*.*
           YTGet-*.sha256
-          dist/YTGet-macOS.tar.gz
-          dist/YTGet-macOS.sha256
+          dist/YTGet-*.dmg
+          dist/YTGet-*.dmg.sha256
 
   release:
     needs: build
     runs-on: ubuntu-latest
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
