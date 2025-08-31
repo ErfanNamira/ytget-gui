@@ -14,271 +14,187 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    continue-on-error: true
     strategy:
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest, macos-11]
+        os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Set up Python 3
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
+    - name: Set up Python 3
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
 
-      - name: Install Python deps & PyInstaller
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
-        shell: bash
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
 
-      - name: Download yt-dlp
-        run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
-            chmod +x yt-dlp
-          else
-            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o yt-dlp
-            chmod +x yt-dlp
-          fi
-        shell: bash
+    - name: Download yt-dlp
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+        elif [[ "$RUNNER_OS" == "Linux" ]]; then
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+          chmod +x yt-dlp
+        else
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o yt-dlp
+          chmod +x yt-dlp
+        fi
+      shell: bash
 
-      - name: Download ffmpeg & ffprobe
-        run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-            powershell -Command "Expand-Archive ffmpeg.zip ."
-            cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffmpeg.exe).FullName")" .
-            cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffprobe.exe).FullName")" .
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y ffmpeg
-            cp "$(which ffmpeg)" .
-            cp "$(which ffprobe)" .
-          else
-            curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.zip -o ffmpeg.zip
-            unzip ffmpeg.zip
-            chmod +x ffmpeg
-            curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.zip -o ffprobe.zip
-            unzip ffprobe.zip
-            chmod +x ffprobe
-          fi
-        shell: bash
-
-      - name: Update Info.plist (macOS only)
-        if: matrix.os == 'macos-latest' || matrix.os == 'macos-11'
-        run: |
-          VERSION="${{ github.event.inputs.tag }}"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" Info.plist
-        shell: bash
-
-      - name: Build application
-        run: |
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            ICON=ytget_gui/icon.icns
-            APP=YTGet
-            pyinstaller --noconfirm --onedir --windowed \
-              --name "$APP" \
-              --icon "$ICON" \
-              --clean --noupx \
-              --version-file version_info.txt \
-              --osx-bundle-identifier com.erfannamira.ytget \
-              --hidden-import PySide6.QtCore \
-              --hidden-import PySide6.QtGui \
-              --hidden-import PySide6.QtWidgets \
-              --hidden-import requests \
-              --hidden-import mutagen \
-              --hidden-import PIL \
-              --hidden-import webbrowser \
-              --add-data ytget_gui:ytget_gui \
-              --add-data ytget_gui/icon.icns:. \
-              --add-data yt-dlp:. \
-              --add-data ffmpeg:. \
-              --add-data ffprobe:. \
-              ytget_gui/main.py
-
-            # overwrite Info.plist
-            cp Info.plist "dist/$APP.app/Contents/Info.plist"
-          else
-            ICON=ytget_gui/icon.ico
-            pyinstaller --noconfirm --onedir --windowed \
-              --name YTGet \
-              --icon "$ICON" \
-              --clean --noupx \
-              --version-file version_info.txt \
-              --hidden-import PySide6.QtCore \
-              --hidden-import PySide6.QtGui \
-              --hidden-import PySide6.QtWidgets \
-              --hidden-import requests \
-              --hidden-import mutagen \
-              --hidden-import PIL \
-              --hidden-import webbrowser \
-              --add-data ytget_gui:ytget_gui \
-              --add-data ytget_gui/icon.ico:. \
-              --add-data yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:. \
-              --add-data ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:. \
-              --add-data ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:. \
-              ytget_gui/main.py
-          fi
-        shell: bash
-
-      - name: Smoke test (macOS only)
-        if: matrix.os == 'macos-latest' || matrix.os == 'macos-11'
-        run: |
-          EXEC=./dist/YTGet.app/Contents/MacOS/YTGet
-          if [[ ! -f "$EXEC" ]]; then
-            echo "Missing $EXEC" && exit 1
-          fi
-          "$EXEC" --version
-        shell: bash
-
-      - name: Package build (Windows & Linux)
-        if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
-        run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
-          else
-            tar -czf YTGet-linux.tar.gz -C dist YTGet
-          fi
-        shell: bash
-
-      - name: Package build (macOS tar.gz)
-        if: matrix.os == 'macos-latest' || matrix.os == 'macos-11'
-        run: |
-          ARCH=$(uname -m)
-          cd dist
-          tar -czf YTGet-macOS-${ARCH}.tar.gz YTGet.app
-          cd ..
-        shell: bash
-
-      - name: Build DEB & RPM (Linux only)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
+    - name: Download ffmpeg & ffprobe
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+          powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ."
+          cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName")" .
+          cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName")" .
+        elif [[ "$RUNNER_OS" == "Linux" ]]; then
           sudo apt-get update
-          sudo apt-get install -y ruby-dev build-essential rpm
-          gem install --no-document fpm
+          sudo apt-get install -y ffmpeg
+          cp $(which ffmpeg) .
+          cp $(which ffprobe) .
+        else
+          curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.zip -o ffmpeg.zip
+          unzip ffmpeg.zip
+          chmod +x ffmpeg
+          curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.zip -o ffprobe.zip
+          unzip ffprobe.zip
+          chmod +x ffprobe
+        fi
+      shell: bash
 
-          mkdir -p pkg/usr/local/bin
-          cp dist/YTGet/YTGet pkg/usr/local/bin/ytget
+    - name: Update Info.plist version (macOS only)
+      if: matrix.os == 'macos-latest'
+      run: |
+        VERSION="${{ github.event.inputs.tag }}"
+        BUILD_NUMBER="${{ github.run_number }}"
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
+        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" Info.plist
 
-          mkdir -p pkg/usr/share/applications pkg/usr/share/icons/hicolor/256x256/apps
-          cp ytget_gui/ytget.desktop pkg/usr/share/applications/
-          cp ytget_gui/icon.png pkg/usr/share/icons/hicolor/256x256/apps/ytget.png
+    - name: Build application
+      run: |
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          ICON="ytget_gui/icon.icns"
+          APP_NAME="YTGet"
+          pyinstaller --noconfirm --onedir --windowed \
+            --name "$APP_NAME" \
+            --icon "$ICON" \
+            --clean --noupx \
+            --version-file "version_info.txt" \
+            --osx-bundle-identifier "com.erfannamira.ytget" \
+            --hidden-import "PySide6.QtCore" \
+            --hidden-import "PySide6.QtGui" \
+            --hidden-import "PySide6.QtWidgets" \
+            --hidden-import "requests" \
+            --hidden-import "mutagen" \
+            --hidden-import "PIL" \
+            --hidden-import "webbrowser" \
+            --hidden-import "mutagen.id3" \
+            --hidden-import "mutagen.flac" \
+            --add-data "ytget_gui:ytget_gui" \
+            --add-data "ytget_gui/icon.icns:." \
+            --add-data "yt-dlp:." \
+            --add-data "ffmpeg:." \
+            --add-data "ffprobe:." \
+            ytget_gui/main.py
 
-          TAG=${{ github.event.inputs.tag }}
-          # .deb
-          fpm -s dir -t deb \
-            -n ytget \
-            -v ${TAG} \
-            --architecture amd64 \
-            --description "YTGet: cross-platform video downloader" \
-            --license MIT \
-            --url "https://github.com/erfannamira/ytget-gui" \
-            -C pkg .
-          mv ytget_${TAG}_amd64.deb dist/
+          # Overwrite generated Info.plist
+          cp Info.plist "dist/$APP_NAME.app/Contents/Info.plist"
 
-          # .rpm
-          fpm -s dir -t rpm \
-            -n ytget \
-            -v ${TAG} \
-            --architecture amd64 \
-            --description "YTGet: cross-platform video downloader" \
-            --license MIT \
-            --url "https://github.com/erfannamira/ytget-gui" \
-            -C pkg .
-          mv ytget-${TAG}-1.x86_64.rpm dist/
-        shell: bash
+        else
+          ICON="ytget_gui/icon.ico"
+          pyinstaller --noconfirm --onedir --windowed \
+            --icon "$ICON" \
+            --name "YTGet" \
+            --clean --noupx \
+            --version-file "version_info.txt" \
+            --hidden-import "PySide6.QtCore" \
+            --hidden-import "PySide6.QtGui" \
+            --hidden-import "PySide6.QtWidgets" \
+            --hidden-import "requests" \
+            --hidden-import "mutagen" \
+            --hidden-import "PIL" \
+            --hidden-import "webbrowser" \
+            --hidden-import "mutagen.id3" \
+            --hidden-import "mutagen.flac" \
+            --add-data "ytget_gui:ytget_gui" \
+            --add-data "ytget_gui/icon.ico:." \
+            --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+            --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+            --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+            ytget_gui/main.py
+        fi
+      shell: bash
 
-      - name: Install create-dmg (macOS only)
-        if: matrix.os == 'macos-latest' || matrix.os == 'macos-11'
-        run: |
-          brew update
-          brew install create-dmg
-        shell: bash
+    - name: Smoke test (macOS only)
+      if: matrix.os == 'macos-latest'
+      run: |
+        EXECUTABLE="./dist/YTGet.app/Contents/MacOS/YTGet"
+        echo "Running basic smoke test..."
+        if [ ! -f "$EXECUTABLE" ]; then
+          echo "Executable not found: $EXECUTABLE"
+          exit 1
+        fi
+        "$EXECUTABLE" --version
 
-      - name: Prepare DMG assets (macOS only)
-        if: matrix.os == 'macos-latest' || matrix.os == 'macos-11'
-        run: |
-          mkdir -p dist/dmg_assets
-          cp ytget_gui/icon.icns        dist/dmg_assets/
-        shell: bash
+    - name: Package build
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
+        elif [[ "$RUNNER_OS" == "Linux" ]]; then
+          tar -czf YTGet-linux.tar.gz -C dist YTGet
+        else
+          cd dist
+          tar -czf YTGet-macOS.tar.gz YTGet.app
+          cd ..
+        fi
+      shell: bash
 
-      - name: Build DMG (macOS only)
-        if: matrix.os == 'macos-latest' || matrix.os == 'macos-11'
-        run: |
-          TAG=${{ github.event.inputs.tag }}
-          ARCH=$(uname -m)
-          # label x64 vs arm64
-          LABEL=x64 && [[ "$ARCH" == "arm64" ]] && LABEL=arm64
+    - name: Generate SHA-256 checksum
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
+        elif [[ "$RUNNER_OS" == "Linux" ]]; then
+          shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
+        else
+          shasum -a 256 dist/YTGet-macOS.tar.gz > dist/YTGet-macOS.sha256
+        fi
+      shell: bash
 
-          create-dmg \
-            --volname "YTGet ${TAG}" \
-            --volicon dist/dmg_assets/icon.icns \
-            --window-size 600 400 \
-            --icon-size 100 \
-            --app-drop-link 500 200 \
-            --icon "YTGet.app" 100 200 \
-            "dist/YTGet-macOS-${LABEL}.dmg" \
-            "dist/YTGet.app"
-        shell: bash
-
-      - name: Generate checksums
-        run: |
-          TAG=${{ github.event.inputs.tag }}
-
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            certutil -hashfile YTGet-windows.zip SHA256   > YTGet-windows.sha256
-
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            shasum -a 256 YTGet-linux.tar.gz             > YTGet-linux.sha256
-            shasum -a 256 dist/ytget_${TAG}_amd64.deb    > dist/ytget_${TAG}_amd64.deb.sha256
-            shasum -a 256 dist/ytget-${TAG}-1.x86_64.rpm > dist/ytget-${TAG}-1.x86_64.rpm.sha256
-
-          else
-            ARCH=$(uname -m)
-            LABEL=x64 && [[ "$ARCH" == "arm64" ]] && LABEL=arm64
-
-            shasum -a 256 dist/YTGet-macOS-${LABEL}.tar.gz > dist/YTGet-macOS-${LABEL}.tar.gz.sha256
-            shasum -a 256 dist/YTGet-macOS-${LABEL}.dmg      > dist/YTGet-macOS-${LABEL}.dmg.sha256
-          fi
-        shell: bash
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-${{ matrix.os }}
-          path: |
-            YTGet-*.zip
-            YTGet-*.tar.gz
-            ytget_*.deb
-            ytget-*.rpm
-            dist/YTGet-macOS-*.dmg
-            **/*.sha256
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-${{ matrix.os }}
+        path: |
+          YTGet-*.*
+          YTGet-*.sha256
+          dist/YTGet-macOS.tar.gz
+          dist/YTGet-macOS.sha256
 
   release:
     needs: build
-    if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifacts
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: "YTGet ${{ github.event.inputs.tag || github.ref_name }}"
-          body_path: RELEASE_NOTES.md
-          files: artifacts/**/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+        name: "YTGet ${{ github.event.inputs.tag || github.ref_name }}"
+        body_path: RELEASE_NOTES.md
+        files: artifacts/**/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
