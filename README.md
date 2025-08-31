@@ -64,8 +64,13 @@ chmod +x YTGet
 ./YTGet
 ```
 
-### 🍎 macOS (tar.gz)
-1. [Download the latest `YTGet-macOS.tar.gz` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS.tar.gz)  
+### 🍎 macOS
+1. Download the latest `YTGet-macOS.tar.gz` release.
+
+[Apple Silicon (arm64)](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.7/YTGet-macOS.tar.gz)
+
+[Intel (amd64)](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.7/YTGet-macOS-x86_64.tar.gz)
+
 2. In Terminal, run:
 ```
 tar -xzf YTGet-macOS.tar.gz
