@@ -1,11 +1,16 @@
-name: Build macOS x86_64 Only
+name: Build & Upload macOS x86_64
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag"
+        required: true
 
 jobs:
   build-macos-x86_64:
     runs-on: macos-13
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -66,14 +71,15 @@ jobs:
       run: |
         cd dist
         tar -czf YTGet-macOS-x86_64.tar.gz YTGet.app
+        shasum -a 256 YTGet-macOS-x86_64.tar.gz > YTGet-macOS-x86_64.sha256
         cd ..
 
-    - name: Generate SHA256
-      run: |
-        shasum -a 256 dist/YTGet-macOS-x86_64.tar.gz > dist/YTGet-macOS-x86_64.sha256
-
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
+    - name: Upload to GitHub Release
+      uses: softprops/action-gh-release@v2
       with:
-        name: macOS-x86_64
-        path: dist/YTGet-macOS-x86_64.*
+        tag_name: ${{ github.event.inputs.tag }}
+        files: |
+          dist/YTGet-macOS-x86_64.tar.gz
+          dist/YTGet-macOS-x86_64.sha256
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
