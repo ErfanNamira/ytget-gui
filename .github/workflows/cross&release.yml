@@ -12,12 +12,20 @@ permissions:
 
 jobs:
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.os }} - ${{ matrix.arch || 'x86_64' }})
     runs-on: ${{ matrix.os }}
     continue-on-error: true
     strategy:
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        include:
+          - os: windows-latest
+            arch: x86_64
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: macos-latest
+            arch: arm64
+          - os: macos-13
+            arch: x86_64
 
     steps:
     - name: Checkout repository
@@ -70,7 +78,7 @@ jobs:
       shell: bash
 
     - name: Update Info.plist version (macOS only)
-      if: matrix.os == 'macos-latest'
+      if: startsWith(matrix.os, 'macos')
       run: |
         VERSION="${{ github.event.inputs.tag }}"
         BUILD_NUMBER="${{ github.run_number }}"
@@ -103,10 +111,7 @@ jobs:
             --add-data "ffmpeg:." \
             --add-data "ffprobe:." \
             ytget_gui/main.py
-
-          # Overwrite generated Info.plist
           cp Info.plist "dist/$APP_NAME.app/Contents/Info.plist"
-
         else
           ICON="ytget_gui/icon.ico"
           pyinstaller --noconfirm --onedir --windowed \
@@ -133,7 +138,7 @@ jobs:
       shell: bash
 
     - name: Smoke test (macOS only)
-      if: matrix.os == 'macos-latest'
+      if: startsWith(matrix.os, 'macos')
       run: |
         EXECUTABLE="./dist/YTGet.app/Contents/MacOS/YTGet"
         echo "Running basic smoke test..."
@@ -151,7 +156,11 @@ jobs:
           tar -czf YTGet-linux.tar.gz -C dist YTGet
         else
           cd dist
-          tar -czf YTGet-macOS.tar.gz YTGet.app
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            tar -czf YTGet-macOS-arm64.tar.gz YTGet.app
+          else
+            tar -czf YTGet-macOS-x86_64.tar.gz YTGet.app
+          fi
           cd ..
         fi
       shell: bash
@@ -163,19 +172,22 @@ jobs:
         elif [[ "$RUNNER_OS" == "Linux" ]]; then
           shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
         else
-          shasum -a 256 dist/YTGet-macOS.tar.gz > dist/YTGet-macOS.sha256
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            shasum -a 256 dist/YTGet-macOS-arm64.tar.gz > dist/YTGet-macOS-arm64.sha256
+          else
+            shasum -a 256 dist/YTGet-macOS-x86_64.tar.gz > dist/YTGet-macOS-x86_64.sha256
+          fi
         fi
       shell: bash
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: build-${{ matrix.os }}
+        name: build-${{ matrix.os }}-${{ matrix.arch }}
         path: |
           YTGet-*.*
-          YTGet-*.sha256
-          dist/YTGet-macOS.tar.gz
-          dist/YTGet-macOS.sha256
+          dist/YTGet-macOS-*.tar.gz
+          dist/YTGet-macOS-*.sha256
 
   release:
     needs: build
