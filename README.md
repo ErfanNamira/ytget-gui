@@ -64,7 +64,7 @@ chmod +x YTGet
 ./YTGet
 ```
 
-### 🍎 macOS
+### 🍎 macOS (tar.gz)
 1. [Download the latest `YTGet-macOS.tar.gz` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS.tar.gz)  
 2. In Terminal, run:
 ```
@@ -101,7 +101,14 @@ Choose one:
   ```
   /Applications/YTGet.app/Contents/MacOS/YTGet
   ``` 
-   
+
+### 🍎 macOS (dmg)
+1. [Download the latest YTGet-macOS.dmg release.]()
+2. Double-click the .dmg to mount it.
+3. Drag YTGet.app from the mounted volume into your Applications folder.
+4. Eject the mounted image (right-click in Finder → Eject).
+5. Launch From Finder: open /Applications/YTGet.app
+6. If Gatekeeper blocks first launch, right-click (or Control-click) YTGet.app → Open, then confirm.
 
 ### 🐍 [PyPI Installation](https://pypi.org/project/ytget-gui/)
 YTGet GUI depends on FFmpeg to process and convert media. Follow these steps to get everything up and running:
