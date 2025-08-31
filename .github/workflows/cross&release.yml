@@ -204,7 +204,6 @@ jobs:
         if: matrix.os == 'macos-latest' || matrix.os == 'macos-11'
         run: |
           mkdir -p dist/dmg_assets
-          cp ytget_gui/dmg-background.png dist/dmg_assets/
           cp ytget_gui/icon.icns        dist/dmg_assets/
         shell: bash
 
@@ -219,7 +218,6 @@ jobs:
           create-dmg \
             --volname "YTGet ${TAG}" \
             --volicon dist/dmg_assets/icon.icns \
-            --background dist/dmg_assets/dmg-background.png \
             --window-size 600 400 \
             --icon-size 100 \
             --app-drop-link 500 200 \
