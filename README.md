@@ -73,7 +73,7 @@ chmod +x YTGet
 
 2. Open Terminal and run:
 ```
-cd Downlaods
+cd Downloads
 
 tar -xzf YTGet-macOS-arm64.tar.gz
 
