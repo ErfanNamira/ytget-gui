@@ -44,7 +44,7 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 ## ☄️ How to Install
 
 ### 🪟 Windows
-1. [Download the latest `YTGet-Windows.zip` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-Windows.zip)  
+1. [Download the latest `YTGet-Windows.zip` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-windows.zip)  
 2. Extract the contents.  
 3. Run `YTGet.exe`.
 
@@ -53,7 +53,7 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 ```
 sudo apt-get update && sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libxcb-xinput0 libxcb-xfixes0 libxcb-shape0 libxcb-render-util0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xkb1
 ``` 
-2. [Download the latest `YTGet-Linux.tar.gz` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-Linux.tar.gz)  
+2. [Download the latest `YTGet-Linux.tar.gz` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-linux.tar.gz)  
 3. Extract the contents.
 ```
 tar -xzf YTGet-Linux.tar.gz
@@ -67,9 +67,9 @@ chmod +x YTGet
 ### 🍎 macOS
 1. Download the latest release:
 
-[Apple Silicon (arm64)](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.7/YTGet-macOS.tar.gz)
+[Apple Silicon (arm64)](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS-arm64.tar.gz)
 
-[Intel (amd64)](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.7/YTGet-macOS-x86_64.tar.gz)
+[Intel (amd64)](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS-x86_64.tar.gz)
 
 2. Open Terminal and run:
 ```
