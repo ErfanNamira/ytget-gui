@@ -19,7 +19,7 @@ from ytget_gui.utils.paths import (
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.4.8"
+    VERSION: str = "2.4.9"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
@@ -84,6 +84,11 @@ class AppSettings:
     CUSTOM_FFMPEG_ARGS: str = ""
     CROP_AUDIO_COVERS: bool = True
     VIDEO_FORMAT: str = ".mkv"
+    # Thumbnail embedding
+    WRITE_THUMBNAIL: bool = False
+    CONVERT_THUMBNAILS: bool = True
+    THUMBNAIL_FORMAT: str = "png"
+    EMBED_THUMBNAIL: bool = True
 
     def __post_init__(self):
         # Prepare paths
@@ -202,6 +207,10 @@ class AppSettings:
             "CUSTOM_FFMPEG_ARGS": self.CUSTOM_FFMPEG_ARGS,
             "CROP_AUDIO_COVERS": self.CROP_AUDIO_COVERS,
             "VIDEO_FORMAT": self.VIDEO_FORMAT,
+            "WRITE_THUMBNAIL": self.WRITE_THUMBNAIL,
+            "CONVERT_THUMBNAILS": self.CONVERT_THUMBNAILS,
+            "THUMBNAIL_FORMAT": self.THUMBNAIL_FORMAT,
+            "EMBED_THUMBNAIL": self.EMBED_THUMBNAIL,
             "DOWNLOADS_DIR": str(self.DOWNLOADS_DIR),
             "YT_DLP_PATH": str(self.YT_DLP_PATH),
             "FFMPEG_PATH": str(self.FFMPEG_PATH),
@@ -243,6 +252,11 @@ class AppSettings:
             self.CUSTOM_FFMPEG_ARGS = config.get("CUSTOM_FFMPEG_ARGS", self.CUSTOM_FFMPEG_ARGS)
             self.CROP_AUDIO_COVERS = config.get("CROP_AUDIO_COVERS", self.CROP_AUDIO_COVERS)
             self.VIDEO_FORMAT = config.get("VIDEO_FORMAT", self.VIDEO_FORMAT)
+            # Thumbnail options
+            self.WRITE_THUMBNAIL      = config.get("WRITE_THUMBNAIL", self.WRITE_THUMBNAIL)
+            self.CONVERT_THUMBNAILS   = config.get("CONVERT_THUMBNAILS", self.CONVERT_THUMBNAILS)
+            self.THUMBNAIL_FORMAT     = config.get("THUMBNAIL_FORMAT", self.THUMBNAIL_FORMAT)
+            self.EMBED_THUMBNAIL      = config.get("EMBED_THUMBNAIL", self.EMBED_THUMBNAIL)
 
             # Override download dir if set
             dl_dir = config.get("DOWNLOADS_DIR")
