@@ -65,15 +65,21 @@ chmod +x YTGet
 ```
 
 ### 🍎 macOS
-1. Download the latest `YTGet-macOS.tar.gz` release.
+1. Download the latest release:
 
 [Apple Silicon (arm64)](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.7/YTGet-macOS.tar.gz)
 
 [Intel (amd64)](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.7/YTGet-macOS-x86_64.tar.gz)
 
-2. In Terminal, run:
+2. Open Terminal and run:
 ```
+cd Downlaods
+
 tar -xzf YTGet-macOS.tar.gz
+
+or
+
+tar -xzf YTGet-macOS-x86_64.tar.gz
 ```
 This will produce a YTGet.app bundle in your current directory.
 
@@ -102,10 +108,7 @@ Choose one:
   ```
   open /Applications/YTGet.app
   ```
-* Or run the binary directly:
-  ```
-  /Applications/YTGet.app/Contents/MacOS/YTGet
-  ``` 
+7. **Download yt-dlp via Menu Bar → Help → Check yt-dlp Update.**
 <!--
 ### 🍎 macOS (dmg)
 1. [Download the latest YTGet-macOS.dmg release.]()
