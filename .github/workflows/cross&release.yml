@@ -203,7 +203,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: "YTGet ${{ github.event.inputs.tag || github.ref_name }}"
+          name: "${{ github.event.inputs.tag || github.ref_name }}"
           body_path: RELEASE_NOTES.md
           files: artifacts/**/*  
         env:
