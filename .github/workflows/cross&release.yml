@@ -107,7 +107,6 @@ jobs:
             --hidden-import "mutagen.flac" \
             --add-data "ytget_gui:ytget_gui" \
             --add-data "ytget_gui/icon.icns:." \
-            --add-data "yt-dlp:." \
             --add-data "ffmpeg:." \
             --add-data "ffprobe:." \
             ytget_gui/main.py
