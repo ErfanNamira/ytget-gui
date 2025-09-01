@@ -120,6 +120,8 @@ Choose one:
 5. Launch From Finder: open /Applications/YTGet.app
 6. If Gatekeeper blocks first launch, right-click (or Control-click) YTGet.app → Open, then confirm.
 -->
+
+
 ### 🐍 [PyPI Installation](https://pypi.org/project/ytget-gui/)
 YTGet GUI depends on FFmpeg to process and convert media. Follow these steps to get everything up and running:
 
