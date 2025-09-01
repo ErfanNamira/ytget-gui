@@ -74,11 +74,13 @@ chmod +x YTGet
 2. Open Terminal and run:
 ```
 cd Downloads
-
+```
+3. Extract the contents.
+```
 tar -xzf YTGet-macOS-arm64.tar
-
+```
 or
-
+```
 tar -xzf YTGet-macOS-x86_64.tar
 ```
 This will produce a YTGet.app bundle in your current directory.
@@ -103,7 +105,7 @@ mv YTGet.app /Applications/
 6. Launch YTGet
    
 Choose one:
-* From Finder: double-click /Applications/YTGet.app.
+* From Finder: double-click /Applications/YTGet
 * From Terminal:
   ```
   open /Applications/YTGet.app
