@@ -75,11 +75,11 @@ chmod +x YTGet
 ```
 cd Downloads
 
-tar -xzf YTGet-macOS-arm64.tar.gz
+tar -xzf YTGet-macOS-arm64.tar
 
 or
 
-tar -xzf YTGet-macOS-x86_64.tar.gz 
+tar -xzf YTGet-macOS-x86_64.tar
 ```
 This will produce a YTGet.app bundle in your current directory.
 
