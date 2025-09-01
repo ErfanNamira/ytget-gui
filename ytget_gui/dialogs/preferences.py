@@ -632,25 +632,25 @@ class PreferencesDialog(QtWidgets.QDialog):
         self._tweak_toggle(self.audio_normalize)
         self.audio_normalize.setAccessibleName("Normalize audio volume")
         self.audio_normalize.setEnabled(True)
-        fl.addWidget(self._form_row("Audio normalize", self.audio_normalize, "Adjust volume to a consistent level"))
+        fl.addWidget(self._form_row("Audio Normalize", self.audio_normalize, "Adjust Volume to A Consistent Level"))
 
         self.add_metadata = UISwitch("")
         self._tweak_toggle(self.add_metadata)
         self.add_metadata.setAccessibleName("Add metadata to files")
         self.add_metadata.setEnabled(True)
-        fl.addWidget(self._form_row("Metadata", self.add_metadata, "Write tags (title, artist, album) into files"))
+        fl.addWidget(self._form_row("Metadata", self.add_metadata, "Write Tags (Title, Artist, Album) Into Files"))
 
         self.crop_covers = UISwitch("")
         self._tweak_toggle(self.crop_covers)
         self.crop_covers.setAccessibleName("Crop audio covers to square")
         self.crop_covers.setEnabled(True)
-        fl.addWidget(self._form_row("Covers", self.crop_covers, "Crop artwork to a 1:1 aspect ratio"))
+        fl.addWidget(self._form_row("Audio Covers", self.crop_covers, "Crop Artwork to A 1:1 Aspect Ratio"))
         
         self.video_format_combo = QtWidgets.QComboBox()
         self.video_format_combo.setObjectName("combo")
         self.video_format_combo.addItems([".mkv", ".mp4", ".webm"])
         self.video_format_combo.setAccessibleName("Preferred video format")
-        fl.addWidget(self._form_row("Video format", self.video_format_combo, "Choose output container"))
+        fl.addWidget(self._form_row("Video Format", self.video_format_combo, "Choose Output Container"))
 
         self.custom_ffmpeg = self._line_edit(
             placeholder="-c:v libx265 -crf 23",
@@ -658,6 +658,41 @@ class PreferencesDialog(QtWidgets.QDialog):
         )
         self.custom_ffmpeg.setAccessibleName("Custom FFmpeg arguments")
         fl.addWidget(self._form_row("Custom FFmpeg args", self.custom_ffmpeg))
+
+        # ─────────── Thumbnail toggles ───────────
+        self.write_thumbnail = UISwitch("")
+        self._tweak_toggle(self.write_thumbnail)
+        self.write_thumbnail.setAccessibleName("Download thumbnails")
+        fl.addWidget(
+            self._form_row(
+                "Thumbnail",
+                self.write_thumbnail,
+                "Save the Original Thumbnail File Alongside the Audio/Video",
+            )
+        )
+
+        self.convert_thumbnails = UISwitch("")
+        self._tweak_toggle(self.convert_thumbnails)
+        self.convert_thumbnails.setAccessibleName("Convert thumbnails")
+        fl.addWidget(
+            self._form_row(
+                "Convert Thumbnail",
+                self.convert_thumbnails,
+                "Convert Downloaded Thumbnail to PNG",
+            )
+        )
+
+        self.embed_thumbnail = UISwitch("")
+        self._tweak_toggle(self.embed_thumbnail)
+        self.embed_thumbnail.setAccessibleName("Embed thumbnail")
+        fl.addWidget(
+            self._form_row(
+                "Embed Thumbnail",
+                self.embed_thumbnail,
+                "Embed the Thumbnail Into the Video’s Metadata",
+            )
+        )
+        # ───────────────────────────────────────────
 
         card = self._card(form, title="Post-processing", subtitle="Fine-tune audio, metadata, and FFmpeg options.")
         pv.addWidget(card)
@@ -725,6 +760,22 @@ class PreferencesDialog(QtWidgets.QDialog):
 
     # ---------- Styling ----------
     def _apply_styles(self) -> None:
+        
+        # ─── Force fixed dark background & text ───
+        from PySide6.QtGui import QColor, QPalette
+
+        forced_bg   = QColor("#161A22")  # dark bg
+        forced_text = QColor("#EAEAF2")  # light text
+
+        pal = self.palette()
+        pal.setColor(QPalette.Window, forced_bg)
+        pal.setColor(QPalette.Base,   forced_bg)
+        pal.setColor(QPalette.Text,   forced_text)
+        # ensure the widget actually paints its background
+        self.setAutoFillBackground(True)
+        self.setPalette(pal)
+        # ─────────────────────────────────────────
+        
         base = ""
         try:
             base = getattr(AppStyles, "DIALOG", "") or ""
@@ -1131,6 +1182,9 @@ class PreferencesDialog(QtWidgets.QDialog):
             self.crop_covers,
             self.custom_ffmpeg,
             self.video_format_combo,
+            self.write_thumbnail,
+            self.convert_thumbnails,
+            self.embed_thumbnail,
             # Output
             self.organize_uploader,
             self.date_after,
@@ -1316,6 +1370,13 @@ class PreferencesDialog(QtWidgets.QDialog):
         vf = getattr(self.settings, "VIDEO_FORMAT", ".mkv") or ".mkv"
         if vf not in (".mkv", ".mp4", ".webm"):
             vf = ".mkv"
+        
+        # ─────────── Thumbnail state ───────────
+        self.write_thumbnail.setChecked(bool(getattr(self.settings, "WRITE_THUMBNAIL", False)))
+        self.convert_thumbnails.setChecked(bool(getattr(self.settings, "CONVERT_THUMBNAILS", True)))
+        self.embed_thumbnail.setChecked(bool(getattr(self.settings, "EMBED_THUMBNAIL", True)))
+        # ─────────────────────────────────────────
+       
         self.video_format_combo.setCurrentText(vf)
 
         # Output
@@ -1409,6 +1470,11 @@ class PreferencesDialog(QtWidgets.QDialog):
             "ADD_METADATA": self.add_metadata.isChecked(),
             "CROP_AUDIO_COVERS": self.crop_covers.isChecked(),
             "CUSTOM_FFMPEG_ARGS": self.custom_ffmpeg.text().strip(),
+            # ─────────── Thumbnail flags ───────────
+            "WRITE_THUMBNAIL":    self.write_thumbnail.isChecked(),
+            "CONVERT_THUMBNAILS": self.convert_thumbnails.isChecked(),
+            "EMBED_THUMBNAIL":    self.embed_thumbnail.isChecked(),
+            # ─────────────────────────────────────────
             "VIDEO_FORMAT": self.video_format_combo.currentText(),
             "ORGANIZE_BY_UPLOADER": self.organize_uploader.isChecked(),
             "DATEAFTER": self.date_after.text().strip(),
