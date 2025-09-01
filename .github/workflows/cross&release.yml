@@ -43,15 +43,13 @@ jobs:
           pip install pyinstaller
 
       - name: Download yt-dlp
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
-            chmod +x yt-dlp
-          else
-            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos -o yt-dlp
             chmod +x yt-dlp
           fi
 
