@@ -759,23 +759,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         return page
 
     # ---------- Styling ----------
-    def _apply_styles(self) -> None:
-        
-        # ─── Force fixed dark background & text ───
-        from PySide6.QtGui import QColor, QPalette
-
-        forced_bg   = QColor("#161A22")  # dark bg
-        forced_text = QColor("#EAEAF2")  # light text
-
-        pal = self.palette()
-        pal.setColor(QPalette.Window, forced_bg)
-        pal.setColor(QPalette.Base,   forced_bg)
-        pal.setColor(QPalette.Text,   forced_text)
-        # ensure the widget actually paints its background
-        self.setAutoFillBackground(True)
-        self.setPalette(pal)
-        # ─────────────────────────────────────────
-        
+    def _apply_styles(self) -> None:               
         base = ""
         try:
             base = getattr(AppStyles, "DIALOG", "") or ""
