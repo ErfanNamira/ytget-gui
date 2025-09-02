@@ -15,14 +15,19 @@
    - The Preferences window forces a dark, high-contrast background (#161A22) and light text (#EAEFF2), preventing unreadable text when the OS or Qt theme changes on macOS/Linux.
 
 ---
-## 📥 Downloads  
+## 📥 Downloads
 
-| Platform          | Architecture                               | File Size | Download |
-|-------------------|-------------------------------------------|--------------------|----------|
-| 🪟 **Windows**    | ![x86_64](https://img.shields.io/badge/arch-x86__64-blue) | ~150 MB            | [![Download](https://img.shields.io/badge/Download-Windows-blue?logo=windows)](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-windows.zip) |
-| 🐧 **Linux**      | ![x86_64](https://img.shields.io/badge/arch-x86__64-green) | ~180 MB            | [![Download](https://img.shields.io/badge/Download-Linux-green?logo=linux)](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-linux.tar.gz) |
-| 🍎 **macOS**      | ![arm64](https://img.shields.io/badge/arch-arm64-orange)   | ~100 MB            | [![Download](https://img.shields.io/badge/Download-macOS-orange?logo=apple)](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-macOS-arm64.tar.gz) |
-| 🍎 **macOS**      | ![x86_64](https://img.shields.io/badge/arch-x86__64-orange)| ~100 MB            | [![Download](https://img.shields.io/badge/Download-macOS-orange?logo=apple)](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-macOS-x86_64.tar.gz) |
+#### 🪟 Windows · x86_64 · 150 MB  
+[⬇ Download for Windows](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-windows.zip)
+
+#### 🐧 Linux · x86_64 · 180 MB  
+[⬇ Download for Linux](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-linux.tar.gz)
+
+#### 🍎 macOS (ARM) · arm64 · 100 MB  
+[⬇ Download for macOS ARM](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-macOS-arm64.tar.gz)
+
+#### 🍎 macOS (Intel) · x86_64 · 100 MB  
+[⬇ Download for macOS Intel](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-macOS-x86_64.tar.gz)
 
 ---
 
