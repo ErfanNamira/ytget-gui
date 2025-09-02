@@ -415,7 +415,7 @@ class PreferencesDialog(QtWidgets.QDialog):
 
         self.cookies_browser_combo = QtWidgets.QComboBox()
         self.cookies_browser_combo.setObjectName("combo")
-        self.cookies_browser_combo.addItems(["", "chrome", "firefox", "edge", "opera", "vivaldi"])
+        self.cookies_browser_combo.addItems(["", "chrome", "chromium", "edge", "firefox", "opera", "brave", "vivaldi", "safari", "whale"])
         self.cookies_browser_combo.setAccessibleName("Import cookies from browser")
         self._base_tips[self.cookies_browser_combo] = "Import cookies directly from a supported browser profile"
         pf.addWidget(self._form_row("Import from browser", self.cookies_browser_combo))
