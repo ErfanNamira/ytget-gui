@@ -1,10 +1,10 @@
-name: Build & Release YTGet (Cross-Platform)
+name: Build & Release YTGet
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag name to release'
+        description: 'Tag Name to Release'
         required: true
 
 permissions:
