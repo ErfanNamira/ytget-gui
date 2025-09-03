@@ -183,7 +183,7 @@ sudo apt update && sudo apt install ffmpeg
 
 ### 📥 Download Options
 - 📹 **Multiple Formats** — Download videos from 480p up to 8K.  
-- 🎵 **MP3 Mode** — High-quality audio extraction with embedded thumbnails & metadata.  
+- 🎵 **MP3/FLAC Mode** — High-quality audio extraction with embedded thumbnails & metadata.  
 - 📄 **Subtitles** — Auto-fetch subtitles (multi-language).  
 - 📂 **Playlist Support** — Download entire playlists in audio/video mode.
 
