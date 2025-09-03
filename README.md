@@ -85,24 +85,24 @@ tar -xzf YTGet-macOS-x86_64.tar
 ```
 This will produce a YTGet.app bundle in your current directory.
 
-3. Remove Quarantine Flag
+4. Remove Quarantine Flag
 If you see “cannot be opened because Apple cannot check it for malicious software,” you need to strip the quarantine attribute:
 ```
 xattr -d com.apple.quarantine YTGet.app
 ```
 This lets macOS trust your app without popping security dialogs every launch.
 
-4. Set Executable Permission
+5. Set Executable Permission
 ```
 chmod +x YTGet.app/Contents/MacOS/YTGet
 ```
-5. Move to Applications (Optional)
+6. Move to Applications (Optional)
    
 For a cleaner setup, drag YTGet.app into your /Applications folder or run:
 ```
 mv YTGet.app /Applications/
 ```
-6. Launch YTGet
+7. Launch YTGet
    
 Choose one:
 * From Finder: double-click /Applications/YTGet
@@ -110,7 +110,7 @@ Choose one:
   ```
   open /Applications/YTGet.app
   ```
-7. **Download yt-dlp via Menu Bar → Help → Check yt-dlp Update.**
+8. **Download yt-dlp via Menu Bar → Help → Check yt-dlp Update.**
 <!--
 ### 🍎 macOS (dmg)
 1. [Download the latest YTGet-macOS.dmg release.]()
