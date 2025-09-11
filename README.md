@@ -1,5 +1,7 @@
 # 🎬 YTGet — Cross-Platform YouTube Downloader
 
+📄 [نسخه فارسی این راهنما](https://github.com/ErfanNamira/ytget-gui/blob/main/README.fa.md)
+
 **YTGet GUI** is a modern, lightweight, and user-friendly desktop application built with **Python** and **PySide6**.  
 Powered by **yt-dlp**, it makes downloading YouTube videos, playlists, and music simple and efficient.  
 
