@@ -36,6 +36,7 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 ![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/ErfanNamira/ytget-gui?style=for-the-badge)
 ![GitHub language count](https://img.shields.io/github/languages/count/ErfanNamira/ytget-gui?style=for-the-badge)
 ![GitHub top language](https://img.shields.io/github/languages/top/ErfanNamira/ytget-gui?style=for-the-badge)
+![Lines of code](https://img.shields.io/badge/Lines%20of%20Code-06000-blue?style=for-the-badge)
 
 ### ⏱️ Activity
 ![GitHub last commit](https://img.shields.io/github/last-commit/ErfanNamira/ytget-gui?style=for-the-badge)
