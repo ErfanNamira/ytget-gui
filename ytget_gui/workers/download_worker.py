@@ -265,7 +265,7 @@ class DownloadWorker(QObject):
         if s.EMBED_THUMBNAIL and not is_audio:
             # Log the cover-embed event
             self._add_log(
-                f"🖼️ Embedding thumbnail as cover for: {self._short(it['title'])}\n",
+                f"🖼️ Will embed thumbnail as cover for: {self._short(it['title'])}\n",
                 AppStyles.INFO_COLOR
             )
             cmd.append("--embed-thumbnail")
