@@ -75,6 +75,33 @@ jobs:
             chmod +x ffprobe
           fi
 
+      - name: Download PhantomJS (per-OS) and normalize names
+        shell: bash
+        run: |
+          WIN_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-windows.zip"
+          MAC_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-macosx.zip"
+          LINUX_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-linux-x86_64.tar.bz2"
+
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            echo "Downloading PhantomJS for Windows"
+            curl -L "$WIN_URL" -o phantomjs-windows.zip
+            powershell -Command "Expand-Archive -Path phantomjs-windows.zip -DestinationPath phantomjs-windows"
+            # Copy and normalize to phantomjs.exe at repo root
+            cp phantomjs-windows/phantomjs-2.1.1-windows/bin/phantomjs.exe ./phantomjs.exe
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            echo "Downloading PhantomJS for Linux"
+            curl -L "$LINUX_URL" -o phantomjs-linux.tar.bz2
+            tar xjf phantomjs-linux.tar.bz2
+            cp phantomjs-2.1.1-linux-x86_64/bin/phantomjs ./phantomjs
+            chmod +x phantomjs
+          else
+            echo "Downloading PhantomJS for macOS"
+            curl -L "$MAC_URL" -o phantomjs-macos.zip
+            unzip phantomjs-macos.zip
+            cp phantomjs-2.1.1-macosx/bin/phantomjs ./phantomjs
+            chmod +x phantomjs
+          fi
+
       - name: Update Info.plist version (macOS only)
         if: startsWith(matrix.os, 'macos')
         shell: bash
@@ -89,6 +116,7 @@ jobs:
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             ICON="ytget_gui/icon.icns"
             APP_NAME="YTGet"
+            # macOS: include phantomjs (no extension), ffmpeg, ffprobe
             pyinstaller --noconfirm --onedir --windowed \
               --name "$APP_NAME" \
               --icon "$ICON" \
@@ -106,12 +134,19 @@ jobs:
               --hidden-import "mutagen.flac" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.icns:." \
+              --add-data "phantomjs:." \
               --add-data "ffmpeg:." \
               --add-data "ffprobe:." \
               ytget_gui/main.py
             cp Info.plist "dist/$APP_NAME.app/Contents/Info.plist"
           else
             ICON="ytget_gui/icon.ico"
+            # For Windows we want phantomjs.exe; for Linux use phantomjs (no ext)
+            PHANTOM_SRC="phantomjs${{ runner.os == 'Windows' && '.exe' || '' }}"
+            YTDLP_SRC="yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}"
+            FFMPEG_SRC="ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}"
+            FFPROBE_SRC="ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}"
+
             pyinstaller --noconfirm --onedir --windowed \
               --name "YTGet" \
               --icon "$ICON" \
@@ -128,11 +163,11 @@ jobs:
               --hidden-import "mutagen.flac" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.ico:." \
-              --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-              --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-              --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+              --add-data "${YTDLP_SRC}:." \
+              --add-data "${FFMPEG_SRC}:." \
+              --add-data "${FFPROBE_SRC}:." \
+              --add-data "${PHANTOM_SRC}:." \
               ytget_gui/main.py
-          fi
 
       - name: Smoke test (macOS only)
         if: startsWith(matrix.os, 'macos')
@@ -184,6 +219,10 @@ jobs:
             YTGet-*.*
             dist/YTGet-*.tar.gz
             dist/YTGet-*.sha256
+            phantomjs*
+            yt-dlp*
+            ffmpeg*
+            ffprobe*
 
   release:
     name: Create GitHub Release
@@ -194,7 +233,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download **all** artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
@@ -205,6 +244,6 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: "${{ github.event.inputs.tag || github.ref_name }}"
           body_path: RELEASE_NOTES.md
-          files: artifacts/**/*  
+          files: artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
