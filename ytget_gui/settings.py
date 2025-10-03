@@ -48,12 +48,12 @@ class AppSettings:
     RESOLUTIONS: Dict[str, str] = field(
         default_factory=lambda: {
             # --- YouTube-optimized presets (keep existing) ---
-            "🔳 4320p (8K)": "bestvideo[height=4320][vcodec=vp9]+bestaudio/bestvideo[height<=4320]+bestaudio",
-            "🔳 2160p (4K)": "251+313/bestvideo[height<=2160]+bestaudio",
-            "🖼️ 1440p (QHD)": "251+271/bestvideo[height<=1440]+bestaudio",
-            "🖼️ 1080p (FHD)": "251+248/bestvideo[height<=1080]+bestaudio",
-            "📱 720p (HD)":  "251+247/bestvideo[height<=720]+bestaudio",
-            "📱 480p (SD)":  "251+244/bestvideo[height<=480]+bestaudio",
+            "🎬 YouTube 4320p (8K)": "bestvideo[height=4320][vcodec=vp9]+bestaudio/bestvideo[height<=4320]+bestaudio",
+            "🎬 YouTube 2160p (4K)": "251+313/bestvideo[height<=2160]+bestaudio",
+            "🎥 YouTube 1440p (QHD)": "251+271/bestvideo[height<=1440]+bestaudio",
+            "🎥 YouTube 1080p (FHD)": "251+248/bestvideo[height<=1080]+bestaudio",
+            "📱 YouTube 720p (HD)":  "251+247/bestvideo[height<=720]+bestaudio",
+            "📱 YouTube 480p (SD)":  "251+244/bestvideo[height<=480]+bestaudio",
 
             # --- Universal presets (stricter, work across any site supported by yt-dlp) ---
             "🌐 Universal 4320p (8K)": "bestvideo[height<=4320][width<=7680]+bestaudio/best[height<=4320]",
