@@ -1,9 +1,11 @@
 # File: ytget_gui/workers/title_fetch_manager.py
+
 from __future__ import annotations
 
 import json
 import subprocess
 import platform
+import os
 from typing import List, Any, Deque, Set, Optional
 from collections import deque
 from pathlib import Path
@@ -16,7 +18,7 @@ from ytget_gui.settings import AppSettings
 class TitleFetchQueue(QObject):
     """
     Serial queue that fetches titles one-by-one in its own thread.
-    Signals are forwarded to UI just like TitleFetcher did.
+    Signals are forwarded to UI.
     """
 
     # Forwarded signals
@@ -115,6 +117,26 @@ class TitleFetchQueue(QObject):
         if proxy_url:
             cmd.extend(["--proxy", proxy_url])
 
+        # Prepare environment for subprocess so phantomjs and bundled binaries are visible immediately
+        env = os.environ.copy()
+        try:
+            extra_paths = []
+            extra_paths.append(str(self.settings.INTERNAL_DIR))
+            extra_paths.append(str(self.settings.BASE_DIR))
+            ph = getattr(self.settings, "PHANTOMJS_PATH", None)
+            if ph and ph.exists():
+                extra_paths.append(str(ph.parent))
+            cur_path = env.get("PATH", "")
+            for p in reversed(extra_paths):
+                if p and p not in cur_path:
+                    cur_path = f"{p}{os.pathsep}{cur_path}"
+            env["PATH"] = cur_path
+            if os.name == "nt":
+                if not env.get("PATHEXT"):
+                    env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+        except Exception:
+            pass
+
         startupinfo = None
         if platform.system().lower().startswith("win"):
             try:
@@ -133,6 +155,7 @@ class TitleFetchQueue(QObject):
                 timeout=120,
                 startupinfo=startupinfo,
                 encoding="utf-8",
+                env=env,
             )
         except subprocess.TimeoutExpired:
             self.error.emit(url, "Timeout while fetching metadata (120 seconds)")
