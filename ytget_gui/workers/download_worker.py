@@ -445,6 +445,7 @@ class DownloadWorker(QObject):
             "(full song)", "(snippet)", "(reaction)", "(review)", "(trailer)", "(teaser)",
             "(fan edit)", "(studio version)", "(youtube)", "(vevo)", "(tiktok)",
             "(drone shot)", "(pov video)", "(official music video)", "(visualizer)",
+            "(official lyric video)",
         ]
         escaped = "|".join(re.escape(t) for t in tag_texts)
         combined = re.compile(r"\s*(?:" + escaped + r")", re.IGNORECASE)
