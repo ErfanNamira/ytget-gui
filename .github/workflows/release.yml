@@ -51,6 +51,8 @@ jobs:
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
             chmod +x yt-dlp
+          else
+            true
           fi
 
       - name: Download ffmpeg & ffprobe
@@ -64,15 +66,17 @@ jobs:
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             sudo apt-get update
             sudo apt-get install -y ffmpeg
-            cp $(which ffmpeg) .
-            cp $(which ffprobe) .
-          else
+            cp "$(which ffmpeg)" .
+            cp "$(which ffprobe)" .
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
             curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.zip -o ffmpeg.zip
             unzip ffmpeg.zip
             chmod +x ffmpeg
             curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.zip -o ffprobe.zip
             unzip ffprobe.zip
             chmod +x ffprobe
+          else
+            true
           fi
 
       - name: Download PhantomJS (per-OS) and normalize names
@@ -86,7 +90,6 @@ jobs:
             echo "Downloading PhantomJS for Windows"
             curl -L "$WIN_URL" -o phantomjs-windows.zip
             powershell -Command "Expand-Archive -Path phantomjs-windows.zip -DestinationPath phantomjs-windows"
-            # Copy and normalize to phantomjs.exe at repo root
             cp phantomjs-windows/phantomjs-2.1.1-windows/bin/phantomjs.exe ./phantomjs.exe
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             echo "Downloading PhantomJS for Linux"
@@ -94,12 +97,15 @@ jobs:
             tar xjf phantomjs-linux.tar.bz2
             cp phantomjs-2.1.1-linux-x86_64/bin/phantomjs ./phantomjs
             chmod +x phantomjs
-          else
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
             echo "Downloading PhantomJS for macOS"
             curl -L "$MAC_URL" -o phantomjs-macos.zip
             unzip phantomjs-macos.zip
             cp phantomjs-2.1.1-macosx/bin/phantomjs ./phantomjs
             chmod +x phantomjs
+          else
+            echo "Unknown RUNNER_OS=$RUNNER_OS"
+            exit 1
           fi
 
       - name: Update Info.plist version (macOS only)
@@ -113,10 +119,31 @@ jobs:
       - name: Build application
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
+          # determine filenames for this runner
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ICON="ytget_gui/icon.ico"
+            PHANTOM_NAME="phantomjs.exe"
+            YTDLP_NAME="yt-dlp.exe"
+            FFMPEG_NAME="ffmpeg.exe"
+            FFPROBE_NAME="ffprobe.exe"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            ICON="ytget_gui/icon.ico"
+            PHANTOM_NAME="phantomjs"
+            YTDLP_NAME="yt-dlp"
+            FFMPEG_NAME="ffmpeg"
+            FFPROBE_NAME="ffprobe"
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
             ICON="ytget_gui/icon.icns"
+            PHANTOM_NAME="phantomjs"
+            YTDLP_NAME="yt-dlp"
+            FFMPEG_NAME="ffmpeg"
+            FFPROBE_NAME="ffprobe"
+          else
+            echo "Unsupported RUNNER_OS=$RUNNER_OS"; exit 1
+          fi
+
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
             APP_NAME="YTGet"
-            # macOS: include phantomjs (no extension), ffmpeg, ffprobe
             pyinstaller --noconfirm --onedir --windowed \
               --name "$APP_NAME" \
               --icon "$ICON" \
@@ -134,19 +161,12 @@ jobs:
               --hidden-import "mutagen.flac" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.icns:." \
-              --add-data "phantomjs:." \
-              --add-data "ffmpeg:." \
-              --add-data "ffprobe:." \
+              --add-data "${PHANTOM_NAME}:." \
+              --add-data "${FFMPEG_NAME}:." \
+              --add-data "${FFPROBE_NAME}:." \
               ytget_gui/main.py
             cp Info.plist "dist/$APP_NAME.app/Contents/Info.plist"
           else
-            ICON="ytget_gui/icon.ico"
-            # For Windows we want phantomjs.exe; for Linux use phantomjs (no ext)
-            PHANTOM_SRC="phantomjs${{ runner.os == 'Windows' && '.exe' || '' }}"
-            YTDLP_SRC="yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}"
-            FFMPEG_SRC="ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}"
-            FFPROBE_SRC="ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}"
-
             pyinstaller --noconfirm --onedir --windowed \
               --name "YTGet" \
               --icon "$ICON" \
@@ -163,11 +183,12 @@ jobs:
               --hidden-import "mutagen.flac" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.ico:." \
-              --add-data "${YTDLP_SRC}:." \
-              --add-data "${FFMPEG_SRC}:." \
-              --add-data "${FFPROBE_SRC}:." \
-              --add-data "${PHANTOM_SRC}:." \
+              --add-data "${YTDLP_NAME}:." \
+              --add-data "${FFMPEG_NAME}:." \
+              --add-data "${FFPROBE_NAME}:." \
+              --add-data "${PHANTOM_NAME}:." \
               ytget_gui/main.py
+          fi
 
       - name: Smoke test (macOS only)
         if: startsWith(matrix.os, 'macos')
@@ -186,7 +207,7 @@ jobs:
             powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             tar czf YTGet-linux.tar.gz -C dist YTGet
-          else
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
             cd dist
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
               tar czf YTGet-macOS-arm64.tar.gz YTGet.app
@@ -194,6 +215,8 @@ jobs:
               tar czf YTGet-macOS-x86_64.tar.gz YTGet.app
             fi
             cd ..
+          else
+            echo "Unsupported RUNNER_OS=$RUNNER_OS"; exit 1
           fi
 
       - name: Generate SHA-256 checksum
@@ -203,12 +226,14 @@ jobs:
             certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
-          else
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
               shasum -a 256 dist/YTGet-macOS-arm64.tar.gz > dist/YTGet-macOS-arm64.sha256
             else
               shasum -a 256 dist/YTGet-macOS-x86_64.tar.gz > dist/YTGet-macOS-x86_64.sha256
             fi
+          else
+            echo "Unsupported RUNNER_OS=$RUNNER_OS"; exit 1
           fi
 
       - name: Upload artifacts
