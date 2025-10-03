@@ -26,30 +26,37 @@ class DownloadWorker(QObject):
     error = Signal(str)
     status = Signal(str)
 
-    def __init__(self, item: Dict[str, Any], settings: AppSettings, log_flush_ms: int = 3000, status_throttle_ms: int = 2000):
+    def __init__(
+        self,
+        item: Dict[str, Any],
+        settings: AppSettings,
+        log_flush_ms: int = 300,
+        status_throttle_ms: int = 500,
+    ):
         super().__init__()
         self.item = item
         self.settings = settings
         self.process: Optional[QProcess] = None
         self._cancel_requested = False
 
-        # small bounded buffer and timer created in run to belong to worker thread
+        # Log buffer and timer (timer created in run so it lives in worker thread)
         self._log_buffer: List[Tuple[str, str]] = []
         self._log_timer: Optional[QTimer] = None
-        self._log_flush_ms = max(200, int(log_flush_ms))
+        self._log_flush_ms = max(100, int(log_flush_ms))
 
-        # lightweight compiled patterns
-        # Look for percent tokens like "12.3%" or "12 %" near the download progress
+        # Regexes and tokens
         self._percent_re = re.compile(r"([0-9]{1,3}(?:[.,][0-9]+)?)\s*%")
-        # Look for "[download]" prefix which yt-dlp commonly prints for progress lines
         self._download_tag = "[download]"
-        # quick lowercase error check
         self._error_sub = "error"
 
-        # throttle status emits
+        # status throttle
         self._last_status_text: Optional[str] = None
         self._last_status_emit = 0.0
         self._status_throttle_s = max(0.05, status_throttle_ms / 1000.0)
+
+        # flush emit caps
+        self._max_emit_bytes = 100 * 1024  # max bytes emitted per flush to avoid UI flood
+        self._max_entries_per_flush = 200   # safety cap on number of signals emitted per flush
 
     # run should be invoked in a worker thread via moveToThread
     def run(self):
@@ -63,33 +70,9 @@ class DownloadWorker(QObject):
 
             cmd = self._build_command()
 
-            # Build a minimal environment for the child process only
-            env = None
-            try:
-                env = QProcessEnvironment.systemEnvironment()
-                extras: List[str] = []
-                if getattr(self.settings, "INTERNAL_DIR", None):
-                    extras.append(str(self.settings.INTERNAL_DIR))
-                if getattr(self.settings, "BASE_DIR", None):
-                    extras.append(str(self.settings.BASE_DIR))
-                ph = getattr(self.settings, "PHANTOMJS_PATH", None)
-                if ph and hasattr(ph, "exists"):
-                    try:
-                        if ph.exists():
-                            extras.append(str(ph.parent))
-                    except Exception:
-                        pass
-                if extras:
-                    cur = env.value("PATH", os.environ.get("PATH", ""))
-                    parts = cur.split(os.pathsep) if cur else []
-                    for p in reversed(extras):
-                        if p and p not in parts:
-                            parts.insert(0, p)
-                    env.insert("PATH", os.pathsep.join(parts))
-            except Exception:
-                env = None
+            env = self._build_process_env(cmd)
 
-            # startup log and immediate flush so GUI sees it
+            # startup log and immediate flush so GUI sees it fast
             self._add_log(f"🚀 Starting Download for: {self._short(self.item.get('title',''))}\n", AppStyles.INFO_COLOR)
             self._flush_logs_now()
 
@@ -98,6 +81,7 @@ class DownloadWorker(QObject):
             self.process.setProcessChannelMode(QProcess.MergedChannels)
             if env is not None:
                 self.process.setProcessEnvironment(env)
+            # connect readyRead to our handler
             self.process.readyReadStandardOutput.connect(self._on_read)
             self.process.errorOccurred.connect(self._on_qprocess_error)
             self.process.finished.connect(self._on_finished)
@@ -137,27 +121,60 @@ class DownloadWorker(QObject):
                 except Exception:
                     pass
 
+    # Build a minimal environment for child process, adding PhantomJS only when explicitly requested
+    def _build_process_env(self, cmd: List[str]) -> Optional[QProcessEnvironment]:
+        try:
+            env = QProcessEnvironment.systemEnvironment()
+            extras: List[str] = []
+            if getattr(self.settings, "INTERNAL_DIR", None):
+                extras.append(str(self.settings.INTERNAL_DIR))
+            if getattr(self.settings, "BASE_DIR", None):
+                extras.append(str(self.settings.BASE_DIR))
+
+            # Only add phantomjs parent dir if settings explicitly want it (new flag USE_PHANTOMJS)
+            ph = getattr(self.settings, "PHANTOMJS_PATH", None)
+            use_phantom = getattr(self.settings, "USE_PHANTOMJS", False)
+            if use_phantom and ph and hasattr(ph, "exists"):
+                try:
+                    if ph.exists():
+                        extras.append(str(ph.parent))
+                except Exception:
+                    pass
+
+            if extras:
+                cur = env.value("PATH", os.environ.get("PATH", ""))
+                parts = cur.split(os.pathsep) if cur else []
+                # insert extras at front in stable order
+                for p in reversed(extras):
+                    if p and p not in parts:
+                        parts.insert(0, p)
+                env.insert("PATH", os.pathsep.join(parts))
+            return env
+        except Exception:
+            return None
+
     # lightweight read handler that extracts and throttles progress info
     def _on_read(self):
         p = self.process
         if not p:
             return
         try:
+            # read available bytes once; decoding once minimizes CPU cost
             data = p.readAllStandardOutput().data()
             if not data:
                 return
             text = data.decode(errors="ignore")
 
-            # quick error detection with lower() to avoid regex unless needed
+            # quick error detection
             is_error = self._error_sub in text.lower()
             color = AppStyles.ERROR_COLOR if is_error else AppStyles.TEXT_COLOR
-            # append chunk as-is to minimize splitting cost
+
+            # Append raw chunk to buffer (batching avoids signaling per chunk)
             self._add_log(text, color)
 
-            # attempt progress extraction only if there's a percent token or download tag
-            tail = text[-200:]  # small window where progress appears
+            # attempt progress extraction if possible, keep it cheap
+            tail = text[-300:]  # small window where progress typically lives
             if (self._download_tag in tail) or ("%" in tail):
-                # find last percent occurrence in tail
                 m = self._percent_re.search(tail)
                 pct_text: Optional[str] = None
                 if m:
@@ -167,7 +184,6 @@ class DownloadWorker(QObject):
                     except Exception:
                         pct_text = m.group(1) + "%"
 
-                # try to find simple ETA token after "ETA"
                 eta_text: Optional[str] = None
                 up = tail.upper()
                 pos = up.rfind("ETA")
@@ -188,11 +204,11 @@ class DownloadWorker(QObject):
                         except Exception:
                             pass
 
-            # keep buffer bounded; flush if large
+            # If buffer is huge, trigger immediate flush but still keep it batched
             if len(self._log_buffer) > 800:
                 self._flush_logs()
         except Exception:
-            # swallow to keep worker running
+            # swallow exceptions to keep worker alive
             pass
 
     def _on_qprocess_error(self, _code):
@@ -206,8 +222,8 @@ class DownloadWorker(QObject):
         except Exception:
             pass
 
-        # final flush
         try:
+            # final flush
             self._flush_logs()
         except Exception:
             pass
@@ -468,6 +484,7 @@ class DownloadWorker(QObject):
     # Minimal, efficient logging helpers
     def _add_log(self, text: str, color: str):
         try:
+            # keep buffer bounded
             if len(self._log_buffer) > 1500:
                 del self._log_buffer[:700]
             self._log_buffer.append((text, color))
@@ -475,21 +492,80 @@ class DownloadWorker(QObject):
             pass
 
     def _flush_logs(self):
+        # Called in worker thread by timer or synchronously by other methods
         if not self._log_buffer:
             return
         try:
-            buf = self._log_buffer[:]
+            buf = self._log_buffer[:]   # snapshot
             self._log_buffer.clear()
         except Exception:
             buf = []
+
+        # Coalesce consecutive entries with same color to reduce signal count
+        coalesced: List[Tuple[str, str]] = []
+        cur_text_parts: List[str] = []
+        cur_color: Optional[str] = None
+        emitted_bytes = 0
+        emitted_entries = 0
+
         for text, color in buf:
-            try:
-                self.log.emit(text, color)
-            except Exception:
-                pass
+            if cur_color is None:
+                cur_color = color
+                cur_text_parts = [text]
+            elif color == cur_color:
+                cur_text_parts.append(text)
+            else:
+                combined = "".join(cur_text_parts)
+                size = len(combined.encode("utf-8"))
+                if emitted_bytes + size > self._max_emit_bytes or emitted_entries >= self._max_entries_per_flush:
+                    # reached cap, push what we have and stop further emits this flush
+                    if combined:
+                        try:
+                            self.log.emit(combined, cur_color)
+                        except Exception:
+                            pass
+                    emitted_bytes += size
+                    emitted_entries += 1
+                    # stop further emits this flush, requeue remaining buf to log_buffer
+                    remaining = buf[buf.index((text, color)):]
+                    # push remaining back to front of buffer
+                    try:
+                        self._log_buffer[0:0] = remaining
+                    except Exception:
+                        # if that fails, append to buffer
+                        self._log_buffer.extend(remaining)
+                    cur_color = None
+                    cur_text_parts = []
+                    break
+                else:
+                    try:
+                        self.log.emit(combined, cur_color)
+                    except Exception:
+                        pass
+                    emitted_bytes += size
+                    emitted_entries += 1
+                    cur_color = color
+                    cur_text_parts = [text]
+
+        # emit any final coalesced chunk if we haven't hit caps
+        if cur_color and cur_text_parts and emitted_entries < self._max_entries_per_flush and emitted_bytes < self._max_emit_bytes:
+            combined = "".join(cur_text_parts)
+            size = len(combined.encode("utf-8"))
+            if emitted_bytes + size <= self._max_emit_bytes:
+                try:
+                    self.log.emit(combined, cur_color)
+                except Exception:
+                    pass
+            else:
+                # push back if too big
+                try:
+                    self._log_buffer.insert(0, (combined, cur_color))
+                except Exception:
+                    pass
 
     def _flush_logs_now(self):
         try:
+            # direct synchronous flush; keep it safe
             self._flush_logs()
         except Exception:
             pass
