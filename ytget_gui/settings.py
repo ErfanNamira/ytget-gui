@@ -19,7 +19,7 @@ from ytget_gui.utils.paths import (
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.4.9"
+    VERSION: str = "2.5.0"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
@@ -33,6 +33,7 @@ class AppSettings:
     YT_DLP_PATH: Path = field(init=False)
     FFMPEG_PATH: Path = field(init=False)
     FFPROBE_PATH: Path = field(init=False)
+    PHANTOMJS_PATH: Path = field(init=False)
 
     OUTPUT_TEMPLATE: str = field(init=False)
     PLAYLIST_TEMPLATE: str = field(init=False)
@@ -44,19 +45,29 @@ class AppSettings:
         )
     )
 
-    # VP9-first mappings for non-AV1 fallback, plus 8K.
     RESOLUTIONS: Dict[str, str] = field(
         default_factory=lambda: {
-            "🎬 4320p (8K)": "bestvideo[height=4320][vcodec=vp9]+bestaudio/bestvideo[height<=4320]+bestaudio",
-            "🎬 2160p (4K)": "251+313/bestvideo[height<=2160]+bestaudio",
-            "🎬 1440p (QHD)": "251+271/bestvideo[height<=1440]+bestaudio",
-            "🎬 1080p (FHD)": "251+248/bestvideo[height<=1080]+bestaudio",
-            "🎬 720p (HD)":  "251+247/bestvideo[height<=720]+bestaudio",
-            "🎬 480p (SD)":  "251+244/bestvideo[height<=480]+bestaudio",
+            # --- YouTube-optimized presets (keep existing) ---
+            "🔳 4320p (8K)": "bestvideo[height=4320][vcodec=vp9]+bestaudio/bestvideo[height<=4320]+bestaudio",
+            "🔳 2160p (4K)": "251+313/bestvideo[height<=2160]+bestaudio",
+            "🖼️ 1440p (QHD)": "251+271/bestvideo[height<=1440]+bestaudio",
+            "🖼️ 1080p (FHD)": "251+248/bestvideo[height<=1080]+bestaudio",
+            "📱 720p (HD)":  "251+247/bestvideo[height<=720]+bestaudio",
+            "📱 480p (SD)":  "251+244/bestvideo[height<=480]+bestaudio",
+
+            # --- Universal presets (stricter, work across any site supported by yt-dlp) ---
+            "🌐 Universal 4320p (8K)": "bestvideo[height<=4320][width<=7680]+bestaudio/best[height<=4320]",
+            "🌐 Universal 2160p (4K)": "bestvideo[height<=2160][width<=3840]+bestaudio/best[height<=2160]",
+            "🌐 Universal 1440p (QHD)": "bestvideo[height<=1440][width<=2560]+bestaudio/best[height<=1440]",
+            "🌐 Universal 1080p (FHD)": "bestvideo[height<=1080][width<=1920]+bestaudio/best[height<=1080]",
+            "🌐 Universal 720p (HD)":   "bestvideo[height<=720][width<=1280]+bestaudio/best[height<=720]",
+            "🌐 Universal 480p (SD)":   "bestvideo[height<=480][width<=854]+bestaudio/best[height<=480]",
+
+            # --- Audio / playlist presets (unchanged) ---
             "🎵 Single Audio (MP3)": "bestaudio",
-            "🎵 Single Audio (FLAC)": "audio_flac",
-            "🎵 Audio Playlist (MP3 – YouTube)": "playlist_mp3",
-            "🎵 Audio Playlist (MP3 – YouTube Music)": "youtube_music",
+            "🎧 Single Audio (FLAC)": "audio_flac",
+            "🎶 Audio Playlist (MP3 – YouTube)": "playlist_mp3",
+            "🎶 Audio Playlist (MP3 – YouTube Music)": "youtube_music",
         }
     )
 
@@ -111,6 +122,7 @@ class AppSettings:
         yt_dlp_candidate = self.BASE_DIR / executable_name("yt-dlp")
         ffmpeg_candidate = self.BASE_DIR / executable_name("ffmpeg")
         ffprobe_candidate = self.BASE_DIR / executable_name("ffprobe")
+        phantom_candidate = self.BASE_DIR / executable_name("phantomjs")
 
         # Resolve via ENV override, then system PATH, then bundled
         yt_env = os.getenv("YTGET_YT_DLP_PATH")
@@ -125,6 +137,10 @@ class AppSettings:
         self.FFPROBE_PATH = Path(fp_env) if fp_env and Path(fp_env).exists() \
             else which_or_path(ffprobe_candidate, executable_name("ffprobe"))
 
+        ph_env = os.getenv("YTGET_PHANTOMJS_PATH")
+        self.PHANTOMJS_PATH = Path(ph_env) if ph_env and Path(ph_env).exists() \
+            else which_or_path(phantom_candidate, executable_name("phantomjs"))
+            
         # Output templates
         self.OUTPUT_TEMPLATE = str((self.DOWNLOADS_DIR / "%(title)s.%(ext)s").resolve())
         self.PLAYLIST_TEMPLATE = str((self.DOWNLOADS_DIR / "%(playlist_index)s - %(title)s.%(ext)s").resolve())
@@ -215,6 +231,7 @@ class AppSettings:
             "YT_DLP_PATH": str(self.YT_DLP_PATH),
             "FFMPEG_PATH": str(self.FFMPEG_PATH),
             "FFPROBE_PATH": str(self.FFPROBE_PATH),
+            "PHANTOMJS_PATH": str(self.PHANTOMJS_PATH),            
             "COOKIES_PATH": str(self.COOKIES_PATH),
             "ARCHIVE_PATH": str(self.ARCHIVE_PATH),
         }
@@ -271,6 +288,7 @@ class AppSettings:
                 ("YT_DLP_PATH", "YT_DLP_PATH"),
                 ("FFMPEG_PATH", "FFMPEG_PATH"),
                 ("FFPROBE_PATH", "FFPROBE_PATH"),
+                ("PHANTOMJS_PATH", "PHANTOMJS_PATH"),                
                 ("COOKIES_PATH", "COOKIES_PATH"),
                 ("ARCHIVE_PATH", "ARCHIVE_PATH"),
             ):
