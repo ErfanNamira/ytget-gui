@@ -1,18 +1,22 @@
 # File: ytget_gui/workers/title_fetcher.py
+
 from __future__ import annotations
 
 import json
 import subprocess
 import platform
+import os
 from pathlib import Path
 from typing import Optional, List, Any
 
 from PySide6.QtCore import QObject, Signal
 
+from ytget_gui.settings import AppSettings
+
 
 class TitleFetcher(QObject):
     """
-    Fetch basic metadata for a YouTube URL using yt-dlp.
+    Fetch basic metadata for a URL using yt-dlp.
 
     Signals:
       - metadata_fetched(url, title, video_id, thumbnail_url, is_playlist)
@@ -21,12 +25,9 @@ class TitleFetcher(QObject):
       - finished()
     """
 
-    # url, title (legacy)
-    title_fetched = Signal(str, str)
-    # url, title, video_id, thumb_url, is_playlist
-    metadata_fetched = Signal(str, str, str, str, bool)
-    # url, error message
-    error = Signal(str, str)
+    title_fetched = Signal(str, str)                    # url, title (legacy)
+    metadata_fetched = Signal(str, str, str, str, bool) # url, title, video_id, thumb_url, is_playlist
+    error = Signal(str, str)                            # url, error message
     finished = Signal()
 
     def __init__(
@@ -36,8 +37,9 @@ class TitleFetcher(QObject):
         ffmpeg_dir: Path,
         cookies_path: Path,
         proxy_url: str,
-        cookies_from_browser: Optional[str] = None,  # e.g., "chrome", "firefox", "edge", "brave"
-        cookies_profile: Optional[str] = None,       # e.g., "Default", "default-release"
+        settings: Optional[AppSettings] = None,
+        cookies_from_browser: Optional[str] = None,
+        cookies_profile: Optional[str] = None,
     ):
         super().__init__()
         self.url = url
@@ -45,6 +47,7 @@ class TitleFetcher(QObject):
         self.ffmpeg_dir = ffmpeg_dir
         self.cookies_path = cookies_path
         self.proxy_url = proxy_url
+        self.settings = settings
         self.cookies_from_browser = cookies_from_browser
         self.cookies_profile = cookies_profile
 
@@ -80,6 +83,26 @@ class TitleFetcher(QObject):
             if self.proxy_url:
                 cmd.extend(["--proxy", self.proxy_url])
 
+            # Prepare subprocess environment so phantomjs and bundled binaries are visible immediately
+            env = os.environ.copy()
+            try:
+                if self.settings is not None:
+                    extra_paths = []
+                    extra_paths.append(str(self.settings.INTERNAL_DIR))
+                    extra_paths.append(str(self.settings.BASE_DIR))
+                    ph = getattr(self.settings, "PHANTOMJS_PATH", None)
+                    if ph and ph.exists():
+                        extra_paths.append(str(ph.parent))
+                    cur_path = env.get("PATH", "")
+                    for p in reversed(extra_paths):
+                        if p and p not in cur_path:
+                            cur_path = f"{p}{os.pathsep}{cur_path}"
+                    env["PATH"] = cur_path
+                    if os.name == "nt" and not env.get("PATHEXT"):
+                        env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+            except Exception:
+                pass
+
             # Hide child console on Windows, leave None elsewhere
             startupinfo = None
             if platform.system().lower().startswith("win"):
@@ -87,7 +110,8 @@ class TitleFetcher(QObject):
                     si = subprocess.STARTUPINFO()
                     si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                     startupinfo = si
-                except Exception:        
+                except Exception:
+                    startupinfo = None
 
             proc = subprocess.run(
                 cmd,
@@ -97,6 +121,7 @@ class TitleFetcher(QObject):
                 timeout=120,
                 startupinfo=startupinfo,
                 encoding="utf-8",
+                env=env,
             )
 
             if proc.returncode != 0:
@@ -118,7 +143,6 @@ class TitleFetcher(QObject):
                 try:
                     infos.append(json.loads(line))
                 except json.JSONDecodeError:
-                    # Skip malformed lines; continue
                     continue
 
             if not infos:
