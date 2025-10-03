@@ -1,38 +1,43 @@
 ## ✨ What’s New
 
-🎬 **Video-Cover Embedding**  
-   - Added a new Embed Thumbnail option for video downloads (.mkv, .mp4, .webm).  
-   - When enabled, yt-dlp runs --embed-thumbnail plus FFmpeg metadata flags to set the downloaded thumbnail as the file’s cover art.  
+🌍 **Support for Most Sites via yt-dlp**  
+   - Added a **Universal Mode** tag — now the app can download from almost all sites supported by yt-dlp.  
+   - Greatly expands the range of platforms you can download from with no extra setup.  
 
-🖼️ **Thumbnail Download & Conversion Controls** 
-   - Download Thumbnails toggle saves the original thumbnail alongside the media file.
-   - Convert Thumbnail to PNG toggle converts the saved thumbnail into .png format.
-   - Controls are exposed in the **Preferences → Post-processing page**.
+🪄 **Smoother, More Responsive App**  
+   - The app now stays more responsive during downloads.    
 
-## 🛠️ Bug Fixes & Improvements
-
-🎨 **Fixed Preferences Dialog Palette** 
-   - The Preferences window forces a dark, high-contrast background (#161A22) and light text (#EAEFF2), preventing unreadable text when the OS or Qt theme changes on macOS/Linux.
+🧩 **PhantomJS Support**  
+   - Built-in PhantomJS is now detected automatically, improving compatibility with more websites supported by yt-dlp.  
 
 ---
+
+## 🛠️ Fixes & Improvements
+
+- Fixed environment setup so downloads and title fetching work reliably across platforms.  
+- Improved stability of download handling and background workers.  
+- Faster, more efficient log handling to keep the interface smooth.   
+
+---
+
 ## 📥 Downloads
 
 #### 🪟 Windows · x86_64 · 150 MB  
-[⬇ Download for Windows](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-windows.zip)
+[⬇ Download for Windows](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.0/YTGet-windows.zip)
 
 #### 🐧 Linux · x86_64 · 180 MB  
-[⬇ Download for Linux](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-linux.tar.gz)
+[⬇ Download for Linux](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.0/YTGet-linux.tar.gz)
 
 #### 🍎 macOS (ARM) · arm64 · 100 MB  
-[⬇ Download for macOS ARM](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-macOS-arm64.tar.gz)
+[⬇ Download for macOS ARM](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.0/YTGet-macOS-arm64.tar.gz)
 
 #### 🍎 macOS (Intel) · x86_64 · 100 MB  
-[⬇ Download for macOS Intel](https://github.com/ErfanNamira/ytget-gui/releases/download/2.4.9/YTGet-macOS-x86_64.tar.gz)
+[⬇ Download for macOS Intel](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.0/YTGet-macOS-x86_64.tar.gz)
 
 ---
 
 ### 🆚 Updated Dependencies
-- **yt-dlp:** `2025.08.27`  
+- **yt-dlp:** `2025.09.26`  
 - **ffmpeg:** `8.0.0`  
 
 ---
@@ -40,4 +45,4 @@
 ### 📊 VirusTotal Scan
 🔗 [View scan results on VirusTotal](https://www.virustotal.com)  
 
-_The archive contains `.exe` files, which may still occasionally be flagged by certain antivirus engines as **false positives**. These are not actual threats._
+_The archive contains `.exe` files, which may still occasionally be flagged by some antivirus engines as **false positives**. These are not actual threats._  
