@@ -1,4 +1,5 @@
 # File: ytget_gui/main_window.py
+
 from __future__ import annotations
 
 import os
@@ -46,7 +47,7 @@ from PySide6.QtWidgets import (
 
 from ytget_gui.settings import AppSettings
 from ytget_gui.styles import AppStyles
-from ytget_gui.utils.validators import is_youtube_url
+from ytget_gui.utils.validators import is_supported_url, is_youtube_url
 from ytget_gui.dialogs.preferences import PreferencesDialog
 from ytget_gui.dialogs.advanced import AdvancedOptionsDialog
 from ytget_gui.dialogs.update_manager import UpdateManager
@@ -507,7 +508,7 @@ class MainWindow(QMainWindow):
         pill = QHBoxLayout(pillw)
         pill.setContentsMargins(10, 2, 6, 2)
         pill.setSpacing(6)
-        self.url_input = QLineEdit(placeholderText="Paste YouTube URL and press Enter")
+        self.url_input = QLineEdit(placeholderText="Paste a URL and press Enter")
         self.url_input.setClearButtonEnabled(False)
         self.btn_add_inline = QPushButton("Add")
         self.btn_add_inline.setObjectName("PillBtn")
@@ -601,7 +602,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(header)
 
         # Empty state
-        self.queue_empty_state = QLabel("Add YouTube links to build your queue.\nDrag to reorder.")
+        self.queue_empty_state = QLabel("Add links to build your queue.\nDrag to reorder.")
         self.queue_empty_state.setObjectName("EmptyState")
         self.queue_empty_state.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.queue_empty_state)
@@ -835,12 +836,16 @@ class MainWindow(QMainWindow):
     def _log_startup(self):
         self.log("💡 Welcome to YTGet! Paste a URL to Begin.\n", AppStyles.INFO_COLOR, "Info")
         self.log(f"📂 Download Folder: {self.settings.DOWNLOADS_DIR}\n", AppStyles.INFO_COLOR, "Info")
-        self.log(f"🔧 Using binaries from: {self.settings.FFMPEG_PATH.parent}\n", AppStyles.INFO_COLOR, "Info")
+        self.log(f"🔧 Using binaries from: {self.settings.FFMPEG_PATH.parent}\n", AppStyles.INFO_COLOR, "Info")       
 	    
         if not self.settings.YT_DLP_PATH.exists():
             self.log("⚠️ yt-dlp not found in app folder or PATH. Download it via Menu Bar → Help → Check yt-dlp Update.\n", AppStyles.WARNING_COLOR, "Warning")
         if not self.settings.FFMPEG_PATH.exists() or not self.settings.FFPROBE_PATH.exists():
             self.log("⚠️ ffmpeg/ffprobe not found in app folder or PATH. Download and place it in the _internal directory or install it system-wide.\n", AppStyles.WARNING_COLOR, "Warning")
+        if hasattr(self.settings, "PHANTOMJS_PATH") and self.settings.PHANTOMJS_PATH.exists():
+            self.log(f"🔧 PhantomJS available: {self.settings.PHANTOMJS_PATH}\n", AppStyles.INFO_COLOR, "Info")
+        else:
+            self.log("⚠️ PhantomJS not found in app folder or PATH. If a site requires it, place PhantomJS in the app folder.\n", AppStyles.WARNING_COLOR, "Warning")
 		
         if self.settings.PROXY_URL:
             self.log(f"🌐 Proxy: {self.settings.PROXY_URL}\n", AppStyles.INFO_COLOR, "Info")
@@ -923,12 +928,13 @@ class MainWindow(QMainWindow):
                 text = " ".join(urls)
             else:
                 text = event.mimeData().text()
-            if any("youtu" in t for t in text.split()):
+            tokens = text.split()
+            if any(is_supported_url(t) for t in tokens):
                 event.acceptProposedAction()
                 self.queue_pane.setProperty("dropActive", True)
                 self.queue_pane.style().unpolish(self.queue_pane)
                 self.queue_pane.style().polish(self.queue_pane)
-                return
+                return              
         super().dragEnterEvent(event)
 
     def dragLeaveEvent(self, event):
@@ -948,7 +954,7 @@ class MainWindow(QMainWindow):
         elif event.mimeData().hasText():
             urls = [t for t in event.mimeData().text().split()]
 
-        valid = [u for u in urls if is_youtube_url(u)]
+        valid = [u for u in urls if is_supported_url(u)]
         if valid:
             for u in valid:
                 self.log(f"🧾 Queued for fetch: {u[:60]}...\n", AppStyles.INFO_COLOR, "Info")
@@ -962,12 +968,12 @@ class MainWindow(QMainWindow):
     # ---------- Queue / Title / Thumbnails ----------
 
     def _on_url_text_changed(self, text: str):
-        self.btn_add_inline.setEnabled(is_youtube_url(text))
+        self.btn_add_inline.setEnabled(is_supported_url(text))
 
     def _add_to_queue(self):
         url = self.url_input.text().strip()
-        if not is_youtube_url(url):
-            self.log("⚠️ Invalid YouTube URL format.\n", AppStyles.WARNING_COLOR, "Warning")
+        if not is_supported_url(url):
+            self.log("⚠️ Invalid or unsupported URL format.\n", AppStyles.WARNING_COLOR, "Warning")
             return
 
         # Prevent duplicates already in download queue
@@ -1226,7 +1232,7 @@ class MainWindow(QMainWindow):
         self.download_thread.started.connect(self.download_worker.run)
 
         # Logs and errors
-        self.download_worker.log.connect(self.log)
+        self.download_worker.log.connect(self.log, Qt.QueuedConnection)
         self.download_worker.error.connect(lambda m: self.log(f"❌ {m}\n", AppStyles.ERROR_COLOR, "Error"))
 
         if hasattr(self.download_worker, "status"):
