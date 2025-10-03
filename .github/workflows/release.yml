@@ -51,8 +51,6 @@ jobs:
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
             chmod +x yt-dlp
-          else
-            true
           fi
 
       - name: Download ffmpeg & ffprobe
@@ -66,20 +64,18 @@ jobs:
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             sudo apt-get update
             sudo apt-get install -y ffmpeg
-            cp "$(which ffmpeg)" .
-            cp "$(which ffprobe)" .
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            cp $(which ffmpeg) .
+            cp $(which ffprobe) .
+          else
             curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.zip -o ffmpeg.zip
             unzip ffmpeg.zip
             chmod +x ffmpeg
             curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.zip -o ffprobe.zip
             unzip ffprobe.zip
             chmod +x ffprobe
-          else
-            true
           fi
 
-      - name: Download PhantomJS (per-OS) and normalize names
+      - name: Download PhantomJS (per-OS)
         shell: bash
         run: |
           WIN_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-windows.zip"
@@ -97,15 +93,12 @@ jobs:
             tar xjf phantomjs-linux.tar.bz2
             cp phantomjs-2.1.1-linux-x86_64/bin/phantomjs ./phantomjs
             chmod +x phantomjs
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+          else
             echo "Downloading PhantomJS for macOS"
             curl -L "$MAC_URL" -o phantomjs-macos.zip
             unzip phantomjs-macos.zip
             cp phantomjs-2.1.1-macosx/bin/phantomjs ./phantomjs
             chmod +x phantomjs
-          else
-            echo "Unknown RUNNER_OS=$RUNNER_OS"
-            exit 1
           fi
 
       - name: Update Info.plist version (macOS only)
@@ -119,30 +112,8 @@ jobs:
       - name: Build application
         shell: bash
         run: |
-          # determine filenames for this runner
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            ICON="ytget_gui/icon.ico"
-            PHANTOM_NAME="phantomjs.exe"
-            YTDLP_NAME="yt-dlp.exe"
-            FFMPEG_NAME="ffmpeg.exe"
-            FFPROBE_NAME="ffprobe.exe"
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            ICON="ytget_gui/icon.ico"
-            PHANTOM_NAME="phantomjs"
-            YTDLP_NAME="yt-dlp"
-            FFMPEG_NAME="ffmpeg"
-            FFPROBE_NAME="ffprobe"
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            ICON="ytget_gui/icon.icns"
-            PHANTOM_NAME="phantomjs"
-            YTDLP_NAME="yt-dlp"
-            FFMPEG_NAME="ffmpeg"
-            FFPROBE_NAME="ffprobe"
-          else
-            echo "Unsupported RUNNER_OS=$RUNNER_OS"; exit 1
-          fi
-
           if [[ "$RUNNER_OS" == "macOS" ]]; then
+            ICON="ytget_gui/icon.icns"
             APP_NAME="YTGet"
             pyinstaller --noconfirm --onedir --windowed \
               --name "$APP_NAME" \
@@ -161,12 +132,13 @@ jobs:
               --hidden-import "mutagen.flac" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.icns:." \
-              --add-data "${PHANTOM_NAME}:." \
-              --add-data "${FFMPEG_NAME}:." \
-              --add-data "${FFPROBE_NAME}:." \
+              --add-data "ffmpeg:." \
+              --add-data "ffprobe:." \
+              --add-data "phantomjs:." \
               ytget_gui/main.py
             cp Info.plist "dist/$APP_NAME.app/Contents/Info.plist"
           else
+            ICON="ytget_gui/icon.ico"
             pyinstaller --noconfirm --onedir --windowed \
               --name "YTGet" \
               --icon "$ICON" \
@@ -183,10 +155,10 @@ jobs:
               --hidden-import "mutagen.flac" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.ico:." \
-              --add-data "${YTDLP_NAME}:." \
-              --add-data "${FFMPEG_NAME}:." \
-              --add-data "${FFPROBE_NAME}:." \
-              --add-data "${PHANTOM_NAME}:." \
+              --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+              --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+              --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+              --add-data "phantomjs${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               ytget_gui/main.py
           fi
 
@@ -207,7 +179,7 @@ jobs:
             powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             tar czf YTGet-linux.tar.gz -C dist YTGet
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+          else
             cd dist
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
               tar czf YTGet-macOS-arm64.tar.gz YTGet.app
@@ -215,8 +187,6 @@ jobs:
               tar czf YTGet-macOS-x86_64.tar.gz YTGet.app
             fi
             cd ..
-          else
-            echo "Unsupported RUNNER_OS=$RUNNER_OS"; exit 1
           fi
 
       - name: Generate SHA-256 checksum
@@ -226,14 +196,12 @@ jobs:
             certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+          else
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
               shasum -a 256 dist/YTGet-macOS-arm64.tar.gz > dist/YTGet-macOS-arm64.sha256
             else
               shasum -a 256 dist/YTGet-macOS-x86_64.tar.gz > dist/YTGet-macOS-x86_64.sha256
             fi
-          else
-            echo "Unsupported RUNNER_OS=$RUNNER_OS"; exit 1
           fi
 
       - name: Upload artifacts
@@ -244,10 +212,6 @@ jobs:
             YTGet-*.*
             dist/YTGet-*.tar.gz
             dist/YTGet-*.sha256
-            phantomjs*
-            yt-dlp*
-            ffmpeg*
-            ffprobe*
 
   release:
     name: Create GitHub Release
@@ -258,7 +222,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download **all** artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
@@ -269,6 +233,6 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: "${{ github.event.inputs.tag || github.ref_name }}"
           body_path: RELEASE_NOTES.md
-          files: artifacts/**/*
+          files: artifacts/**/*  
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
