@@ -4,3 +4,4 @@ requests
 mutagen
 Pillow
 packaging
+browser_cookie3
