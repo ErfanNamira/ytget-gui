@@ -19,7 +19,7 @@ from ytget_gui.utils.paths import (
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.5.0"
+    VERSION: str = "2.5.1"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
@@ -87,6 +87,8 @@ class AppSettings:
     ORGANIZE_BY_UPLOADER: bool = False
     DATEAFTER: str = ""
     COOKIES_FROM_BROWSER: str = ""
+    COOKIES_AUTO_REFRESH: bool = False
+    COOKIES_LAST_IMPORTED: str = ""
     LIVE_FROM_START: bool = False
     YT_MUSIC_METADATA: bool = False
     PLAYLIST_ITEMS: str = ""
@@ -215,6 +217,8 @@ class AppSettings:
             "ORGANIZE_BY_UPLOADER": self.ORGANIZE_BY_UPLOADER,
             "DATEAFTER": self.DATEAFTER,
             "COOKIES_FROM_BROWSER": self.COOKIES_FROM_BROWSER,
+            "COOKIES_AUTO_REFRESH": self.COOKIES_AUTO_REFRESH,
+            "COOKIES_LAST_IMPORTED": self.COOKIES_LAST_IMPORTED,
             "LIVE_FROM_START": self.LIVE_FROM_START,
             "YT_MUSIC_METADATA": self.YT_MUSIC_METADATA,
             "PLAYLIST_ITEMS": self.PLAYLIST_ITEMS,
@@ -261,6 +265,8 @@ class AppSettings:
             self.ORGANIZE_BY_UPLOADER = config.get("ORGANIZE_BY_UPLOADER", self.ORGANIZE_BY_UPLOADER)
             self.DATEAFTER = config.get("DATEAFTER", self.DATEAFTER)
             self.COOKIES_FROM_BROWSER = config.get("COOKIES_FROM_BROWSER", self.COOKIES_FROM_BROWSER)
+            self.COOKIES_AUTO_REFRESH = config.get("COOKIES_AUTO_REFRESH", self.COOKIES_AUTO_REFRESH)
+            self.COOKIES_LAST_IMPORTED = config.get("COOKIES_LAST_IMPORTED", self.COOKIES_LAST_IMPORTED)
             self.LIVE_FROM_START = config.get("LIVE_FROM_START", self.LIVE_FROM_START)
             self.YT_MUSIC_METADATA = config.get("YT_MUSIC_METADATA", self.YT_MUSIC_METADATA)
             self.PLAYLIST_ITEMS = config.get("PLAYLIST_ITEMS", self.PLAYLIST_ITEMS)
