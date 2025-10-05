@@ -12,6 +12,7 @@ from typing import Optional, List, Any
 from PySide6.QtCore import QObject, Signal
 
 from ytget_gui.settings import AppSettings
+from ytget_gui.workers import cookies as CookieManager
 
 
 class TitleFetcher(QObject):
@@ -53,6 +54,19 @@ class TitleFetcher(QObject):
 
     def run(self):
         try:
+            # If settings request auto-refresh from browser, attempt it (best-effort)
+            try:
+                if self.settings is not None and getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
+                    ok, msg = CookieManager.refresh_before_download(self.settings)
+                    if ok:
+                        # update cookies_path in case export wrote to default
+                        self.cookies_path = getattr(self.settings, "COOKIES_PATH", self.cookies_path)
+                    else:
+                        # surface a non-fatal warning via error signal
+                        self.error.emit(self.url, f"Cookies refresh: {msg}")
+            except Exception:
+                pass
+
             # Build yt-dlp command.
             cmd: List[str] = [
                 str(self.yt_dlp_path),
@@ -65,17 +79,18 @@ class TitleFetcher(QObject):
                 self.url,
             ]
 
-            # Cookies handling: prefer --cookies-from-browser if provided, else file cookies
-            if self.cookies_from_browser:
+            # Cookies handling: prefer explicit cookies_from_browser param, else settings, else file cookies
+            cookies_from = self.cookies_from_browser or (getattr(self.settings, "COOKIES_FROM_BROWSER", "") if self.settings is not None else "")
+            if cookies_from:
                 if self.cookies_profile:
                     cmd.extend(
                         [
                             "--cookies-from-browser",
-                            f"{self.cookies_from_browser}:{self.cookies_profile}",
+                            f"{cookies_from}:{self.cookies_profile}",
                         ]
                     )
                 else:
-                    cmd.extend(["--cookies-from-browser", self.cookies_from_browser])
+                    cmd.extend(["--cookies-from-browser", cookies_from])
             elif self.cookies_path and self.cookies_path.exists() and self.cookies_path.stat().st_size > 0:
                 cmd.extend(["--cookies", str(self.cookies_path)])
 
