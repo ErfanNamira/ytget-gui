@@ -11,7 +11,7 @@ import time
 
 from ytget_gui.styles import AppStyles
 from ytget_gui.settings import AppSettings
-
+from ytget_gui.workers import cookies as CookieManager
 
 @dataclass
 class QueueItem:
@@ -67,6 +67,23 @@ class DownloadWorker(QObject):
                 self._log_timer.setInterval(self._log_flush_ms)
                 self._log_timer.timeout.connect(self._flush_logs)
                 self._log_timer.start()
+
+            # Try to refresh cookies if user enabled auto-refresh
+            try:
+                if getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
+                    ok, msg = CookieManager.refresh_before_download(self.settings)
+                    if ok:
+                        self._add_log(f"🔐 Refreshed cookies: {msg}\n", AppStyles.INFO_COLOR)
+                        try:
+                            # persist last-import info for UI (best-effort; don't fail download on save error)
+                            self.settings.COOKIES_LAST_IMPORTED = str(getattr(self.settings, "COOKIES_PATH", "") or "")
+                            self.settings.save_config()
+                        except Exception:
+                            pass
+                    else:
+                        self._add_log(f"⚠️ Cookies refresh: {msg}\n", AppStyles.WARNING_COLOR)
+            except Exception:
+                pass
 
             cmd = self._build_command()
 
