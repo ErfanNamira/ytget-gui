@@ -312,6 +312,7 @@ QScrollBar::handle:hover { background: #36436A; }
 }
 """
 
+MAX_LOG_LINES = 200
 
 class MainWindow(QMainWindow):
     # Signals to marshal work into the title-fetch worker thread
@@ -909,8 +910,58 @@ class MainWindow(QMainWindow):
                 level = "Warning"
             else:
                 level = "Info"
+
+        # Append new entry
         self._log_entries.append((text, color, level))
-        self._render_log()
+
+        # Trim oldest entries to keep at most MAX_LOG_LINES
+        if len(self._log_entries) > MAX_LOG_LINES:
+            excess = len(self._log_entries) - MAX_LOG_LINES
+            # drop 'excess' earliest entries
+            if excess >= len(self._log_entries):
+                self._log_entries = []
+            else:
+                self._log_entries = self._log_entries[excess:]
+
+        # Fast path: if filter is All, append only the last entry to the widget
+        try:
+            current_filter = self.filter_combo.currentText() if self.filter_combo else "All"
+        except Exception:
+            current_filter = "All"
+
+        if current_filter == "All":
+            # Append last entry directly to console widget
+            last_text, last_color, _ = self._log_entries[-1]
+            self._append_to_console(last_text, last_color)
+
+            # Keep QTextEdit document roughly in sync with MAX_LOG_LINES:
+            # remove oldest blocks if the document grew beyond MAX_LOG_LINES.
+            doc = self.log_output.document()
+            try:
+                # blockCount counts text blocks (rough proxy for lines)
+                if doc.blockCount() > MAX_LOG_LINES:
+                    # remove the difference by deleting from the start
+                    remove_count = doc.blockCount() - MAX_LOG_LINES
+                    cursor = self.log_output.textCursor()
+                    cursor.movePosition(QTextCursor.MoveOperation.Start)
+                    # Select and remove blocks one by one
+                    for _ in range(remove_count):
+                        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                        cursor.removeSelectedText()
+                        # remove the remaining newline char
+                        try:
+                            cursor.deleteChar()
+                        except Exception:
+                            pass
+                    # ensure cursor is at end so appended text stays visible
+                    cursor.movePosition(QTextCursor.MoveOperation.End)
+                    self.log_output.setTextCursor(cursor)
+            except Exception:
+                # If anything goes wrong here, fall back to full re-render
+                self._render_log()
+        else:
+            # Filtered view: re-render from trimmed in-memory list
+            self._render_log()
 
     def _paste_into_url(self):
         text = QGuiApplication.clipboard().text()
