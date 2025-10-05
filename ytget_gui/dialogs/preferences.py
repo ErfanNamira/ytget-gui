@@ -1,4 +1,5 @@
 # File: ytget_gui/dialogs/preferences.py
+
 from __future__ import annotations
 
 import datetime
@@ -11,7 +12,7 @@ from PySide6.QtCore import QDate
 from ytget_gui.styles import AppStyles
 from ytget_gui.settings import AppSettings
 from ytget_gui.dialogs.advanced import UISwitch
-
+from ytget_gui.workers import cookies as CookieManager
 
 _SPONSORBLOCK_CATEGORIES = {
     "Sponsor": "sponsor",
@@ -419,6 +420,34 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.cookies_browser_combo.setAccessibleName("Import cookies from browser")
         self._base_tips[self.cookies_browser_combo] = "Import cookies directly from a supported browser profile"
         pf.addWidget(self._form_row("Import from browser", self.cookies_browser_combo))
+
+        # Manual import row: browser selector + Import Now button
+        self.import_cookies_combo = QtWidgets.QComboBox()
+        self.import_cookies_combo.setObjectName("combo")
+        self.import_cookies_combo.addItems(["", "chrome", "chromium", "edge", "firefox", "opera", "brave", "vivaldi", "safari", "whale"])
+        self.import_cookies_combo.setAccessibleName("Browser for import")
+
+        self.import_cookies_btn = QtWidgets.QPushButton("Import YouTube cookies now")
+        self.import_cookies_btn.setMinimumHeight(36)
+        self.import_cookies_btn.clicked.connect(self._on_import_cookies)
+
+        imp_row = QtWidgets.QWidget()
+        imp_h = QtWidgets.QHBoxLayout(imp_row)
+        imp_h.setContentsMargins(0, 0, 0, 0)
+        imp_h.setSpacing(8)
+        imp_h.addWidget(self.import_cookies_combo, 1)
+        imp_h.addWidget(self.import_cookies_btn, 0)
+
+        pf.addWidget(self._form_row("Import cookies", imp_row, "Export fresh cookies from a local browser profile"))
+
+        self.cookies_auto_refresh = QtWidgets.QCheckBox("Refresh cookies before each download")
+        self.cookies_auto_refresh.setObjectName("check")
+        self.cookies_auto_refresh.setToolTip("Attempt to export fresh cookies from the selected browser before each download")
+        pf.addWidget(self._form_row("", self.cookies_auto_refresh))
+
+        self.cookies_last_label = QtWidgets.QLabel("")
+        self.cookies_last_label.setObjectName("formDescription")
+        pf.addWidget(self.cookies_last_label)
 
         proxy_card = self._card(
             proxy_form,
@@ -983,6 +1012,22 @@ class PreferencesDialog(QtWidgets.QDialog):
         if path:
             self.cookies_path_input.setText(path)
 
+    def _on_import_cookies(self) -> None:
+        browser = self.import_cookies_combo.currentText().strip() or self.cookies_browser_combo.currentText().strip()
+        if not browser:
+            QtWidgets.QMessageBox.information(self, "Select browser", "Please choose a browser profile to import from.")
+            return
+
+        out = Path(self.settings.BASE_DIR) / "cookies.txt"
+        ok, msg = CookieManager.export_for_browser(browser, out)
+        if ok:
+            self.cookies_path_input.setText(str(out))
+            # store a simple label (you can change to timestamp if desired)
+            self.cookies_last_label.setText(f"Last imported: {out.name}")
+            QtWidgets.QMessageBox.information(self, "Imported cookies", msg)
+        else:
+            QtWidgets.QMessageBox.warning(self, "Import failed", msg)
+
     def _browse_archive(self) -> None:
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
@@ -1142,6 +1187,9 @@ class PreferencesDialog(QtWidgets.QDialog):
             self.proxy_input,
             self.cookies_path_input,
             self.cookies_browser_combo,
+            self.import_cookies_combo,
+            self.cookies_auto_refresh,
+            self.cookies_last_label,
             self.limit_rate_input,
             self.retries_spin,
             # SponsorBlock
@@ -1315,6 +1363,9 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.proxy_input.setText(getattr(self.settings, "PROXY_URL", "") or "")
         self.cookies_path_input.setText(str(getattr(self.settings, "COOKIES_PATH", "") or ""))
         self.cookies_browser_combo.setCurrentText(getattr(self.settings, "COOKIES_FROM_BROWSER", "") or "")
+        self.cookies_auto_refresh.setChecked(bool(getattr(self.settings, "COOKIES_AUTO_REFRESH", False)))
+        last = getattr(self.settings, "COOKIES_LAST_IMPORTED", "")
+        self.cookies_last_label.setText(f"Last imported: {last}" if last else "")        
         self.retries_spin.setValue(int(getattr(self.settings, "RETRIES", 3)))
         self.limit_rate_input.setText(getattr(self.settings, "LIMIT_RATE", "") or "")
 
@@ -1440,6 +1491,8 @@ class PreferencesDialog(QtWidgets.QDialog):
             "PROXY_URL": self.proxy_input.text().strip(),
             "COOKIES_PATH": Path(self.cookies_path_input.text().strip()) if self.cookies_path_input.text().strip() else Path(""),
             "COOKIES_FROM_BROWSER": self.cookies_browser_combo.currentText().strip(),
+            "COOKIES_AUTO_REFRESH": self.cookies_auto_refresh.isChecked(),
+            "COOKIES_LAST_IMPORTED": self.cookies_last_label.text().replace("Last imported: ", "") if self.cookies_last_label.text() else "",
             "SPONSORBLOCK_CATEGORIES": sb,
             "CHAPTERS_MODE": ch_mode,
             "WRITE_SUBS": self.subtitles_enabled.isChecked(),
