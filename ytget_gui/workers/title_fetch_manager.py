@@ -11,8 +11,8 @@ from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
-
 from ytget_gui.settings import AppSettings
+from ytget_gui.workers import cookies as CookieManager
 
 
 class TitleFetchQueue(QObject):
@@ -99,6 +99,20 @@ class TitleFetchQueue(QObject):
         cookies_path: Path = self.settings.COOKIES_PATH
         proxy_url: str = self.settings.PROXY_URL or ""
 
+        # Attempt to refresh cookies if configured
+        try:
+            if getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
+                ok, msg = CookieManager.refresh_before_download(self.settings)
+                if ok:
+                    # update cookies_path variable in case refresh wrote to a default location
+                    cookies_path = getattr(self.settings, "COOKIES_PATH", cookies_path)
+                else:
+                    # notify but proceed
+                    self.error.emit(url, f"Cookies refresh: {msg}")
+        except Exception:
+            # swallow so metadata fetching still proceeds
+            pass
+
         cmd: List[str] = [
             str(yt_dlp_path),
             "--ffmpeg-location", str(ffmpeg_dir),
@@ -109,8 +123,11 @@ class TitleFetchQueue(QObject):
             url,
         ]
 
-        # Cookies
-        if cookies_path and cookies_path.exists() and cookies_path.stat().st_size > 0:
+        # Cookies: prefer --cookies-from-browser if configured, else cookie file
+        cfb = getattr(self.settings, "COOKIES_FROM_BROWSER", "") or ""
+        if cfb:
+            cmd.extend(["--cookies-from-browser", cfb])
+        elif cookies_path and cookies_path.exists() and cookies_path.stat().st_size > 0:
             cmd.extend(["--cookies", str(cookies_path)])
 
         # Proxy
