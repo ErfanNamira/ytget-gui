@@ -100,15 +100,29 @@ class TitleFetchQueue(QObject):
         proxy_url: str = self.settings.PROXY_URL or ""
 
         # Attempt to refresh cookies if configured
-        try:
+        try:                                      
             if getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
                 ok, msg = CookieManager.refresh_before_download(self.settings)
                 if ok:
-                    # update cookies_path variable in case refresh wrote to a default location
-                    cookies_path = getattr(self.settings, "COOKIES_PATH", cookies_path)
+                    # Ensure cookies_path variable points to exported file; update settings and persist timestamp
+                    try:
+                        exported_path = getattr(self.settings, "COOKIES_PATH", None)
+                        if not exported_path or str(exported_path) == "":
+                            exported_path = Path(getattr(self.settings, "BASE_DIR", Path("."))) / "cookies.txt"
+                        # update runtime settings
+                        self.settings.COOKIES_PATH = Path(exported_path)
+                        from datetime import datetime
+                        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                        self.settings.COOKIES_LAST_IMPORTED = ts
+                        if hasattr(self.settings, "save_config"):
+                            self.settings.save_config()
+                        # reflect change locally for this function
+                        cookies_path = getattr(self.settings, "COOKIES_PATH", cookies_path)
+                    except Exception:
+                        cookies_path = getattr(self.settings, "COOKIES_PATH", cookies_path)
                 else:
                     # notify but proceed
-                    self.error.emit(url, f"Cookies refresh: {msg}")
+                    self.error.emit(url, f"Cookies refresh: {msg}")                  
         except Exception:
             # swallow so metadata fetching still proceeds
             pass
