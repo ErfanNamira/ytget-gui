@@ -14,7 +14,6 @@ jobs:
   build:
     name: Build (${{ matrix.os }} - ${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     strategy:
       matrix:
         include:
@@ -166,9 +165,9 @@ jobs:
               --hidden-import "browser_cookie3.firefox" \
               --hidden-import "browser_cookie3.edge" \
               --hidden-import "browser_cookie3.opera" \
-              --hidden-import "browser_cookie3.common" \  
+              --hidden-import "browser_cookie3.common" \
               --hidden-import "browser_cookie3.safari" \
-              --hidden-import "browser_cookie3.utils" \              
+              --hidden-import "browser_cookie3.utils" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.ico:." \
               --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
