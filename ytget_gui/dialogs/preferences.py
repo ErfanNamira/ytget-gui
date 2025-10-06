@@ -1019,12 +1019,31 @@ class PreferencesDialog(QtWidgets.QDialog):
             return
 
         out = Path(self.settings.BASE_DIR) / "cookies.txt"
-        ok, msg = CookieManager.export_for_browser(browser, out)
+        ok, msg = CookieManager.export_for_browser(browser, out)   
         if ok:
             self.cookies_path_input.setText(str(out))
-            # store a simple label (you can change to timestamp if desired)
-            self.cookies_last_label.setText(f"Last imported: {out.name}")
-            QtWidgets.QMessageBox.information(self, "Imported cookies", msg)
+
+            # Use a timestamp label for last import
+            from datetime import datetime
+            ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            label_text = f"Last imported: {out.name} ({ts})"
+            self.cookies_last_label.setText(label_text)
+
+            # Update running settings and persist immediately
+            try:
+                # Keep stored metadata in settings in a stable form
+                if hasattr(self.settings, "COOKIES_LAST_IMPORTED"):
+                    # store the timestamped label (human readable)
+                    self.settings.COOKIES_LAST_IMPORTED = label_text.replace("Last imported: ", "")
+                if hasattr(self.settings, "COOKIES_PATH"):
+                    # keep settings.COOKIES_PATH in sync with exported file
+                    self.settings.COOKIES_PATH = out
+                if hasattr(self.settings, "save_config"):
+                    self.settings.save_config()
+            except Exception:
+                pass
+
+            QtWidgets.QMessageBox.information(self, "Imported cookies", msg)                       
         else:
             QtWidgets.QMessageBox.warning(self, "Import failed", msg)
 
@@ -1533,6 +1552,14 @@ class PreferencesDialog(QtWidgets.QDialog):
                 except Exception:
                     # هgnore non-writable attributes
                     pass
+        try:
+            # Persist settings so choices like COOKIES_FROM_BROWSER and COOKIES_AUTO_REFRESH
+            # are saved immediately to disk (config.json)
+            if hasattr(self.settings, "save_config"):
+                self.settings.save_config()
+        except Exception:
+            # Swallow persistence errors to avoid blocking the UI
+            pass
 
     def validate_and_accept(self) -> None:
         self._validate_all()
