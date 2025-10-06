@@ -69,19 +69,34 @@ class DownloadWorker(QObject):
                 self._log_timer.start()
 
             # Try to refresh cookies if user enabled auto-refresh
-            try:
+            try:                       
                 if getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
                     ok, msg = CookieManager.refresh_before_download(self.settings)
                     if ok:
+                        # Inform UI
                         self._add_log(f"🔐 Refreshed cookies: {msg}\n", AppStyles.INFO_COLOR)
+
+                        # Make settings reflect export: set COOKIES_PATH to exported file if present,
+                        # set COOKIES_LAST_IMPORTED to UTC timestamp, and persist config.
                         try:
-                            # persist last-import info for UI (best-effort; don't fail download on save error)
-                            self.settings.COOKIES_LAST_IMPORTED = str(getattr(self.settings, "COOKIES_PATH", "") or "")
-                            self.settings.save_config()
+                            # If refresh_before_download wrote to settings.COOKIES_PATH or BASE_DIR/cookies.txt,
+                            # ensure settings.COOKIES_PATH is a Path instance pointing at the file.
+                            exported_path = getattr(self.settings, "COOKIES_PATH", None)
+                            if not exported_path or str(exported_path) == "":
+                                exported_path = Path(getattr(self.settings, "BASE_DIR", Path("."))) / "cookies.txt"
+                            self.settings.COOKIES_PATH = Path(exported_path)
+
+                            from datetime import datetime
+                            ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                            self.settings.COOKIES_LAST_IMPORTED = ts
+
+                            if hasattr(self.settings, "save_config"):
+                                self.settings.save_config()
                         except Exception:
+                            # best-effort only
                             pass
                     else:
-                        self._add_log(f"⚠️ Cookies refresh: {msg}\n", AppStyles.WARNING_COLOR)
+                        self._add_log(f"⚠️ Cookies refresh: {msg}\n", AppStyles.WARNING_COLOR)                      
             except Exception:
                 pass
 
