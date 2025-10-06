@@ -59,8 +59,25 @@ class TitleFetcher(QObject):
                 if self.settings is not None and getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
                     ok, msg = CookieManager.refresh_before_download(self.settings)
                     if ok:
-                        # update cookies_path in case export wrote to default
-                        self.cookies_path = getattr(self.settings, "COOKIES_PATH", self.cookies_path)
+                        # Ensure settings reflect exported cookies and persist a timestamp (best-effort)
+                        try:
+                            exported_path = getattr(self.settings, "COOKIES_PATH", None)
+                            if not exported_path or str(exported_path) == "":
+                                exported_path = Path(getattr(self.settings, "BASE_DIR", Path("."))) / "cookies.txt"
+                            self.settings.COOKIES_PATH = Path(exported_path)
+
+                            from datetime import datetime
+                            ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+                            self.settings.COOKIES_LAST_IMPORTED = ts
+
+                            if hasattr(self.settings, "save_config"):
+                                self.settings.save_config()
+
+                            # update local cookies_path variable used by this fetcher
+                            self.cookies_path = getattr(self.settings, "COOKIES_PATH", self.cookies_path)
+                        except Exception:
+                            # best-effort only; don't block metadata fetching
+                            self.cookies_path = getattr(self.settings, "COOKIES_PATH", self.cookies_path)
                     else:
                         # surface a non-fatal warning via error signal
                         self.error.emit(self.url, f"Cookies refresh: {msg}")
