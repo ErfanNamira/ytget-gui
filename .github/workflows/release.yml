@@ -130,6 +130,14 @@ jobs:
               --hidden-import "webbrowser" \
               --hidden-import "mutagen.id3" \
               --hidden-import "mutagen.flac" \
+              --hidden-import "browser_cookie3" \
+              --hidden-import "browser_cookie3.chrome" \
+              --hidden-import "browser_cookie3.firefox" \
+              --hidden-import "browser_cookie3.edge" \
+              --hidden-import "browser_cookie3.opera" \
+              --hidden-import "browser_cookie3.common" \
+              --hidden-import "browser_cookie3.safari" \
+              --hidden-import "browser_cookie3.utils" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.icns:." \
               --add-data "ffmpeg:." \
@@ -153,6 +161,14 @@ jobs:
               --hidden-import "webbrowser" \
               --hidden-import "mutagen.id3" \
               --hidden-import "mutagen.flac" \
+              --hidden-import "browser_cookie3" \
+              --hidden-import "browser_cookie3.chrome" \
+              --hidden-import "browser_cookie3.firefox" \
+              --hidden-import "browser_cookie3.edge" \
+              --hidden-import "browser_cookie3.opera" \
+              --hidden-import "browser_cookie3.common" \  
+              --hidden-import "browser_cookie3.safari" \
+              --hidden-import "browser_cookie3.utils" \              
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.ico:." \
               --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
