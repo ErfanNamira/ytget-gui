@@ -1,3 +1,8 @@
+### v 2.5.1.3 - Persisted cookie settings and worker sync
+* Persist cookie-related preferences immediately when changed in the Preferences dialog.
+* Record a timestamped “last imported” cookie marker when cookies are exported from a browser.
+* Ensure all worker modules that may refresh cookies (download, title-fetch, metadata) update AppSettings and persist the new cookie info as a best-effort operation.
+
 ### v 2.5.1.2 - Dynamic cookies, safer exports, and automatic refresh
 * Added a secure cookie management flow that imports browser cookies, prunes them to avoid oversized headers, and optionally refreshes them automatically before metadata fetches and downloads.
 * Integrated cookie refresh into title/metadata fetch workers and the download worker so authenticated downloads are more reliable without repeated manual exports.
