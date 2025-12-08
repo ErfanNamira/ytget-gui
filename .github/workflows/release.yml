@@ -23,7 +23,7 @@ jobs:
             arch: x86_64
           - os: macos-latest
             arch: arm64
-          - os: macos-13
+          - os: macos-15-intel
             arch: x86_64
 
     steps:
@@ -126,7 +126,6 @@ jobs:
             echo "Failed to fetch Deno release info"; exit 1
           fi
 
-          # Determine asset name pattern based on runner.os and matrix.arch
           ASSET_PATTERN=""
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
@@ -142,7 +141,6 @@ jobs:
             fi
           fi
 
-          # Use jq to find the first matching asset browser_download_url
           asset_url=$(echo "$release_json" | jq -r --arg pattern "$ASSET_PATTERN" '
             .assets[] | select(.name | test($pattern; "i")) | .browser_download_url' | head -n1)
 
@@ -155,7 +153,6 @@ jobs:
           echo "Found Deno asset: $asset_url"
           curl -L "$asset_url" -o deno.zip
           unzip -q deno.zip -d deno-extract
-          # find the deno binary and copy it to repo root
           DENO_BIN=$(find deno-extract -type f -name deno -print -quit || true)
           if [[ -z "$DENO_BIN" ]]; then
             echo "Deno binary not found in archive"; ls -la deno-extract; exit 1
@@ -173,10 +170,8 @@ jobs:
         run: |
           $release = Invoke-RestMethod -Uri $env:GITHUB_API -UseBasicParsing
           if (-not $release) { Write-Error "Failed to fetch Deno release info"; exit 1 }
-          # Windows asset name typically: deno-x86_64-pc-windows-msvc.zip
           $asset = $release.assets | Where-Object { $_.name -match "deno-.*windows.*\\.zip" } | Select-Object -First 1
           if (-not $asset) {
-            # fallback to common name
             $asset = $release.assets | Where-Object { $_.name -eq "deno-x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
           }
           if (-not $asset) { Write-Error "No Windows Deno asset found in latest release"; exit 1 }
