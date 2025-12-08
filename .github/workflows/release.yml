@@ -62,14 +62,14 @@ jobs:
             cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName")" .
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             sudo apt-get update
-            sudo apt-get install -y ffmpeg
+            sudo apt-get install -y ffmpeg unzip
             cp $(which ffmpeg) .
             cp $(which ffprobe) .
           else
-            curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.zip -o ffmpeg.zip
+            curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.1.7z -o ffmpeg.zip
             unzip ffmpeg.zip
             chmod +x ffmpeg
-            curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.zip -o ffprobe.zip
+            curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.1.7z -o ffprobe.zip
             unzip ffprobe.zip
             chmod +x ffprobe
           fi
@@ -99,6 +99,96 @@ jobs:
             cp phantomjs-2.1.1-macosx/bin/phantomjs ./phantomjs
             chmod +x phantomjs
           fi
+
+      - name: Install jq (Linux/macOS) for JSON parsing
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y jq unzip
+          else
+            # macOS
+            brew --version >/dev/null 2>&1 || /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            brew install jq unzip || true
+          fi
+
+      - name: Download latest Deno (non-Windows)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GITHUB_API: https://api.github.com/repos/denoland/deno/releases/latest
+        run: |
+          set -euo pipefail
+          echo "Querying latest Deno release from $GITHUB_API"
+          release_json=$(curl -sL "$GITHUB_API")
+          if [[ -z "$release_json" ]]; then
+            echo "Failed to fetch Deno release info"; exit 1
+          fi
+
+          # Determine asset name pattern based on runner.os and matrix.arch
+          ASSET_PATTERN=""
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
+              ASSET_PATTERN="deno-.*x86_64.*linux.*\\.zip|deno-x86_64-unknown-linux-gnu.zip"
+            else
+              ASSET_PATTERN="deno-.*aarch64.*linux.*\\.zip|deno-aarch64-unknown-linux-gnu.zip"
+            fi
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+              ASSET_PATTERN="deno-.*aarch64.*apple.*darwin.*\\.zip|deno-aarch64-apple-darwin.zip"
+            else
+              ASSET_PATTERN="deno-.*x86_64.*apple.*darwin.*\\.zip|deno-x86_64-apple-darwin.zip"
+            fi
+          fi
+
+          # Use jq to find the first matching asset browser_download_url
+          asset_url=$(echo "$release_json" | jq -r --arg pattern "$ASSET_PATTERN" '
+            .assets[] | select(.name | test($pattern; "i")) | .browser_download_url' | head -n1)
+
+          if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+            echo "No matching Deno asset found for this runner/arch. Dumping assets for debugging:"
+            echo "$release_json" | jq -r '.assets[].name'
+            exit 1
+          fi
+
+          echo "Found Deno asset: $asset_url"
+          curl -L "$asset_url" -o deno.zip
+          unzip -q deno.zip -d deno-extract
+          # find the deno binary and copy it to repo root
+          DENO_BIN=$(find deno-extract -type f -name deno -print -quit || true)
+          if [[ -z "$DENO_BIN" ]]; then
+            echo "Deno binary not found in archive"; ls -la deno-extract; exit 1
+          fi
+          cp "$DENO_BIN" .
+          chmod +x deno
+          echo "Deno placed at: $(pwd)/deno"
+          ./deno --version || true
+
+      - name: Download latest Deno (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          GITHUB_API: https://api.github.com/repos/denoland/deno/releases/latest
+        run: |
+          $release = Invoke-RestMethod -Uri $env:GITHUB_API -UseBasicParsing
+          if (-not $release) { Write-Error "Failed to fetch Deno release info"; exit 1 }
+          # Windows asset name typically: deno-x86_64-pc-windows-msvc.zip
+          $asset = $release.assets | Where-Object { $_.name -match "deno-.*windows.*\\.zip" } | Select-Object -First 1
+          if (-not $asset) {
+            # fallback to common name
+            $asset = $release.assets | Where-Object { $_.name -eq "deno-x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
+          }
+          if (-not $asset) { Write-Error "No Windows Deno asset found in latest release"; exit 1 }
+          $url = $asset.browser_download_url
+          Write-Host "Downloading Deno from $url"
+          Invoke-WebRequest -Uri $url -OutFile deno.zip
+          Expand-Archive -Path deno.zip -DestinationPath deno-extract
+          $deno = Get-ChildItem -Path deno-extract -Recurse -Filter deno.exe | Select-Object -First 1
+          if ($null -eq $deno) { Write-Error "deno.exe not found in archive"; exit 1 }
+          Copy-Item $deno.FullName -Destination . -Force
+          Write-Host "Deno placed at: $(Resolve-Path .\deno.exe)"
+          & .\deno.exe --version
 
       - name: Update Info.plist version (macOS only)
         if: startsWith(matrix.os, 'macos')
@@ -142,6 +232,7 @@ jobs:
               --add-data "ffmpeg:." \
               --add-data "ffprobe:." \
               --add-data "phantomjs:." \
+              --add-data "deno:." \
               ytget_gui/main.py
             cp Info.plist "dist/$APP_NAME.app/Contents/Info.plist"
           else
@@ -174,6 +265,7 @@ jobs:
               --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               --add-data "phantomjs${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+              --add-data "deno${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               ytget_gui/main.py
           fi
 
@@ -215,7 +307,7 @@ jobs:
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
               shasum -a 256 dist/YTGet-macOS-arm64.tar.gz > dist/YTGet-macOS-arm64.sha256
             else
-              shasum -a 256 dist/YTGet-macOS-x86_64.tar.gz > dist/YTGet-macOS-x86_64.sha256
+              shasum -a 256 dist/YTGet-macOS-x86_64.tar.gz > dist/YTGet-x86_64.sha256
             fi
           fi
 
