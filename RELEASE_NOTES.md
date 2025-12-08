@@ -1,52 +1,53 @@
 ## ✨ What’s New
 
-🍪 **Smart Cookie Management & Auto Refresh**  
-   - Introduced a **dynamic cookie system** that automatically imports and prunes browser cookies for optimal reliability.  
-   - Integrated **automatic cookie refresh** into title fetching, metadata retrieval, and download workers — no more repeated manual exports.  
-   - Fixed issues with large cookie headers (HTTP 413 errors) and improved the overall import/export user experience.  
-
-🕒 **Persistent Cookie Preferences**  
-   - Cookie-related preferences are now **saved instantly** when changed in the Preferences dialog.  
-   - Added a **“Last Imported” timestamp** marker whenever cookies are exported from a browser.  
-   - All workers that handle cookies now **sync changes to AppSettings** and persist them automatically for a smoother experience.  
-
-⚙️ **Console Log Optimization**  
-   - Added a hard limit of **200 log lines** to keep memory usage low and the UI snappy.  
-   - Improved performance by appending logs directly when viewing “All,” reducing unnecessary re-renders.  
-   - Old log entries are trimmed automatically to prevent unbounded growth.  
+🍃 **Deno JavaScript Runtime Integration**  
+- **Automatic Deno detection**: the app now detects a bundled or configured `deno` binary and exposes its availability in the startup console.  
+- **yt-dlp uses local Deno**: when present, `yt-dlp` is invoked with `--js-runtimes deno:/path/to/deno` so JS‑based extractors run against the local Deno runtime.  
+- **Process PATH injection**: the Deno parent directory is added to the child process `PATH` (same approach as PhantomJS) so subprocesses can locate Deno reliably.
 
 ---
 
-## 🛠️ Fixes & Improvements
+## 🛠️ Build & CI Changes
 
-- Improved synchronization between workers and cookie storage.  
-- Reduced memory use and improved UI responsiveness during long sessions.  
-- Safer cookie exports and cleaner import logic for various browsers.  
-- Enhanced app stability and reduced redundant refresh operations.  
+🔁 **Latest Deno fetched at build time**  
+- GitHub Actions workflow updated to query the Deno releases API and download the **latest** Deno release during CI.  
+- The workflow selects the correct asset for each runner/arch, extracts the ZIP, and places the `deno`/`deno.exe` binary beside `ffmpeg`, `ffprobe`, `phantomjs`, and `yt-dlp`.
+
+---
+
+## ✅ Fixes & Improvements
+
+- **Backward compatible**: if Deno is absent, app behavior is unchanged; `yt-dlp` falls back to its default JS runtime behavior.  
+- **Cross‑platform support**: detection, packaging, and PATH injection implemented for Windows, macOS, and Linux.  
+- **User guidance**: startup warnings include the official Deno installation docs to help users install a runtime when needed.  
+- **Safe guards**: all Deno-related additions are wrapped in `try/except` to avoid breaking existing flows.
+
+---
+
+## 🆚 Updated Dependencies
+
+- **yt-dlp:** `2025.12.08`
+- **ffmpeg:** `8.0.1`  
+- **deno:**  `2.5.6`
 
 ---
 
 ## 📥 Downloads
 
 #### 🪟 Windows · x86_64 · 150 MB  
-[⬇ Download for Windows](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.1/YTGet-windows.zip)
+[⬇ Download for Windows](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.2/YTGet-windows.zip)
 
 #### 🐧 Linux · x86_64 · 180 MB  
-[⬇ Download for Linux](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.1/YTGet-linux.tar.gz)
+[⬇ Download for Linux](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.2/YTGet-linux.tar.gz)
 
 #### 🍎 macOS (ARM) · arm64 · 100 MB  
-[⬇ Download for macOS ARM](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.1/YTGet-macOS-arm64.tar.gz)
+[⬇ Download for macOS ARM](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.2/YTGet-macOS-arm64.tar.gz)
 
 #### 🍎 macOS (Intel) · x86_64 · 100 MB  
-[⬇ Download for macOS Intel](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.1/YTGet-macOS-x86_64.tar.gz)
+[⬇ Download for macOS Intel](https://github.com/ErfanNamira/ytget-gui/releases/download/2.5.2/YTGet-macOS-x86_64.tar.gz)
 
 ---
 
-### 🆚 Updated Dependencies
-- **yt-dlp:** `2025.09.26`  
-- **ffmpeg:** `8.0.0`  
-
----
 
 ### 📊 VirusTotal Scan
 🔗 [View scan results on VirusTotal](https://www.virustotal.com)  
