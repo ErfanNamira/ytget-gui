@@ -172,6 +172,15 @@ class DownloadWorker(QObject):
                         extras.append(str(ph.parent))
                 except Exception:
                     pass
+                    
+            # Add deno parent dir if deno binary is present
+            deno = getattr(self.settings, "DENO_PATH", None)
+            if deno and hasattr(deno, "exists"):
+                try:
+                    if deno.exists():
+                        extras.append(str(deno.parent))
+                except Exception:
+                    pass
 
             if extras:
                 cur = env.value("PATH", os.environ.get("PATH", ""))
@@ -460,6 +469,14 @@ class DownloadWorker(QObject):
 
         if getattr(s, "CUSTOM_FFMPEG_ARGS", ""):
             cmd.extend(["--postprocessor-args", f"ffmpeg:{s.CUSTOM_FFMPEG_ARGS}"])
+
+        # If a Deno binary is available, instruct yt-dlp to use it for JS runtimes
+        try:
+            deno_path = getattr(s, "DENO_PATH", None)
+            if deno_path and Path(deno_path).exists():
+                cmd.extend(["--js-runtimes", f"deno:{str(deno_path)}"])
+        except Exception:
+            pass
 
         cmd.append(it.get("url", ""))
 
