@@ -4,15 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag Name to Release (optional — overrides DENO_TAG)'
-        required: false
+        description: 'Tag Name to Release'
+        required: true
 
 permissions:
   contents: write
-
-env:
-  # Default Deno tag; override by passing "tag" when dispatching the workflow
-  DENO_TAG: v2.5.6
 
 jobs:
   build:
@@ -23,12 +19,19 @@ jobs:
         include:
           - os: windows-latest
             arch: x86_64
+            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-pc-windows-msvc.zip
+
           - os: ubuntu-latest
             arch: x86_64
+            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-unknown-linux-gnu.zip
+
           - os: macos-latest
             arch: arm64
-          - os: macos-15-intel
+            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-aarch64-apple-darwin.zip
+
+          - os: macos-15
             arch: x86_64
+            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-apple-darwin.zip
 
     steps:
       - name: Checkout repository
@@ -39,166 +42,83 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Download Deno
+        shell: bash
+        run: |
+          echo "Downloading Deno from ${{ matrix.deno_url }}"
+          curl -L "${{ matrix.deno_url }}" -o deno.zip
+          
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell -Command "Expand-Archive -Path deno.zip -DestinationPath deno_dir"
+            cp deno_dir/deno.exe ./deno.exe
+          else
+            unzip deno.zip -d deno_dir
+            cp deno_dir/deno ./deno
+            chmod +x deno
+          fi
+
       - name: Download yt-dlp
         if: runner.os != 'macOS'
         shell: bash
         run: |
-          set -euo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            curl -L -o yt-dlp.exe "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            curl -L -o yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
+            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
             chmod +x yt-dlp
           fi
 
-      - name: Download ffmpeg & ffprobe (robust)
+      - name: Download ffmpeg & ffprobe
         shell: bash
         run: |
-          set -euo pipefail
-          echo "Runner OS: $RUNNER_OS"
-
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            WIN_URL="https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-            echo "Downloading ffmpeg from $WIN_URL"
-            curl -L -o ffmpeg.zip "$WIN_URL"
-            powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extract"
-            powershell -Command "Get-ChildItem -Path ffmpeg-extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1 | ForEach-Object { Copy-Item -Path $_.FullName -Destination '.' }"
-            powershell -Command "Get-ChildItem -Path ffmpeg-extract -Recurse -Filter ffprobe.exe | Select-Object -First 1 | ForEach-Object { Copy-Item -Path $_.FullName -Destination '.' }"
+            curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+            powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ."
+            cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName")" .
+            cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName")" .
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-              cp "$(which ffmpeg)" .
-              cp "$(which ffprobe)" .
-            else
-              echo "Downloading static ffmpeg (johnvansickle) for Linux"
-              curl -L -o ffmpeg.tar.xz "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
-              mkdir -p ffmpeg-extract
-              tar -xJf ffmpeg.tar.xz -C ffmpeg-extract --strip-components=1
-              cp ffmpeg-extract/ffmpeg .
-              cp ffmpeg-extract/ffprobe .
-              chmod +x ffmpeg ffprobe
-            fi
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+            cp $(which ffmpeg) .
+            cp $(which ffprobe) .
           else
-            # macOS
-            if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
-              cp "$(which ffmpeg)" .
-              cp "$(which ffprobe)" .
-            else
-              echo "Downloading ffmpeg for macOS (evermeet)"
-              curl -L -o ffmpeg.zip "https://evermeet.cx/ffmpeg/ffmpeg-8.0.zip"
-              unzip -q ffmpeg.zip -d ffmpeg-extract
-              chmod +x ffmpeg-extract/ffmpeg || true
-              cp ffmpeg-extract/ffmpeg .
-              if [[ -f ffmpeg-extract/ffprobe ]]; then
-                chmod +x ffmpeg-extract/ffprobe || true
-                cp ffmpeg-extract/ffprobe .
-              fi
-            fi
+            curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.1.zip -o ffmpeg.zip
+            unzip ffmpeg.zip
+            chmod +x ffmpeg
+            curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.1.zip -o ffprobe.zip
+            unzip ffprobe.zip
+            chmod +x ffprobe
           fi
 
-          # Sanity check
-          if [[ -f ffmpeg ]] || [[ -f ffmpeg.exe ]]; then
-            echo "ffmpeg ready"
-            if [[ -f ffmpeg ]]; then ./ffmpeg --version | head -n1 || true; fi
-            if [[ -f ffmpeg.exe ]]; then ./ffmpeg.exe --version | head -n1 || true; fi
-          else
-            echo "ERROR: ffmpeg binary not found after extraction"
-            ls -la
-            exit 1
-          fi
-
-      - name: Download PhantomJS (per-OS)
+      - name: Download PhantomJS
         shell: bash
         run: |
-          set -euo pipefail
           WIN_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-windows.zip"
           MAC_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-macosx.zip"
           LINUX_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-linux-x86_64.tar.bz2"
 
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            echo "Downloading PhantomJS for Windows"
-            curl -L -o phantomjs-windows.zip "$WIN_URL"
-            powershell -Command "Expand-Archive -Path phantomjs-windows.zip -DestinationPath phantomjs-windows"
-            cp phantomjs-windows/phantomjs-2.1.1-windows/bin/phantomjs.exe ./phantomjs.exe
+            curl -L "$WIN_URL" -o phantomjs.zip
+            powershell -Command "Expand-Archive -Path phantomjs.zip -DestinationPath phantomjs_dir"
+            cp phantomjs_dir/phantomjs-2.1.1-windows/bin/phantomjs.exe ./phantomjs.exe
+
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            echo "Downloading PhantomJS for Linux"
-            curl -L -o phantomjs-linux.tar.bz2 "$LINUX_URL"
-            tar xjf phantomjs-linux.tar.bz2
+            curl -L "$LINUX_URL" -o phantomjs.tar.bz2
+            tar xjf phantomjs.tar.bz2
             cp phantomjs-2.1.1-linux-x86_64/bin/phantomjs ./phantomjs
             chmod +x phantomjs
+
           else
-            echo "Downloading PhantomJS for macOS"
-            curl -L -o phantomjs-macos.zip "$MAC_URL"
-            unzip -q phantomjs-macos.zip
+            curl -L "$MAC_URL" -o phantomjs.zip
+            unzip phantomjs.zip
             cp phantomjs-2.1.1-macosx/bin/phantomjs ./phantomjs
             chmod +x phantomjs
-          fi
-
-      - name: Download Deno (static URLs you provided)
-        shell: bash
-        env:
-          # Use workflow input 'tag' if provided, otherwise fall back to env.DENO_TAG
-          DENO_TAG_RUNTIME: ${{ github.event.inputs.tag || env.DENO_TAG }}
-        run: |
-          set -euo pipefail
-          echo "Using DENO tag: ${DENO_TAG_RUNTIME}"
-
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            URL="https://github.com/denoland/deno/releases/download/${DENO_TAG_RUNTIME}/deno-x86_64-pc-windows-msvc.zip"
-            echo "Downloading Deno (Windows) from $URL"
-            curl -L -o deno.zip "$URL"
-            powershell -Command "Expand-Archive -Path deno.zip -DestinationPath deno-extract"
-            powershell -Command "Get-ChildItem -Path deno-extract -Recurse -Filter deno.exe | Select-Object -First 1 | ForEach-Object { Copy-Item -Path $_.FullName -Destination '.' }"
-            echo "Deno placed at: $(pwd)/deno.exe"
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
-              URL="https://github.com/denoland/deno/releases/download/${DENO_TAG_RUNTIME}/deno-x86_64-unknown-linux-gnu.zip"
-            else
-              URL="https://github.com/denoland/deno/releases/download/${DENO_TAG_RUNTIME}/deno-aarch64-unknown-linux-gnu.zip"
-            fi
-            echo "Downloading Deno (Linux) from $URL"
-            curl -L -o deno.zip "$URL"
-            unzip -q deno.zip -d deno-extract
-            DENO_BIN=$(find deno-extract -type f -name deno -print -quit || true)
-            if [[ -z "$DENO_BIN" ]]; then
-              echo "Deno binary not found in archive"; ls -la deno-extract; exit 1
-            fi
-            cp "$DENO_BIN" .
-            chmod +x deno
-            echo "Deno placed at: $(pwd)/deno"
-          else
-            # macOS
-            if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-              URL="https://github.com/denoland/deno/releases/download/${DENO_TAG_RUNTIME}/deno-aarch64-apple-darwin.zip"
-            else
-              URL="https://github.com/denoland/deno/releases/download/${DENO_TAG_RUNTIME}/deno-x86_64-apple-darwin.zip"
-            fi
-            echo "Downloading Deno (macOS) from $URL"
-            curl -L -o deno.zip "$URL"
-            unzip -q deno.zip -d deno-extract
-            DENO_BIN=$(find deno-extract -type f -name deno -print -quit || true)
-            if [[ -z "$DENO_BIN" ]]; then
-              echo "Deno binary not found in archive"; ls -la deno-extract; exit 1
-            fi
-            cp "$DENO_BIN" .
-            chmod +x deno
-            echo "Deno placed at: $(pwd)/deno"
-          fi
-
-          # quick verification (best-effort)
-          if [[ -f deno ]] || [[ -f deno.exe ]]; then
-            echo "Deno binary present:"
-            if [[ -f deno ]]; then ./deno --version || true; fi
-            if [[ -f deno.exe ]]; then ./deno.exe --version || true; fi
-          else
-            echo "ERROR: deno binary not found after extraction"
-            ls -la
-            exit 1
           fi
 
       - name: Update Info.plist version (macOS only)
@@ -212,7 +132,6 @@ jobs:
       - name: Build application
         shell: bash
         run: |
-          set -euo pipefail
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             ICON="ytget_gui/icon.icns"
             APP_NAME="YTGet"
@@ -222,23 +141,10 @@ jobs:
               --clean --noupx \
               --version-file "version_info.txt" \
               --osx-bundle-identifier "com.erfannamira.ytget" \
-              --hidden-import "PySide6.QtCore" \
-              --hidden-import "PySide6.QtGui" \
-              --hidden-import "PySide6.QtWidgets" \
+              --hidden-import "PySide6.*" \
               --hidden-import "requests" \
-              --hidden-import "mutagen" \
+              --hidden-import "mutagen.*" \
               --hidden-import "PIL" \
-              --hidden-import "webbrowser" \
-              --hidden-import "mutagen.id3" \
-              --hidden-import "mutagen.flac" \
-              --hidden-import "browser_cookie3" \
-              --hidden-import "browser_cookie3.chrome" \
-              --hidden-import "browser_cookie3.firefox" \
-              --hidden-import "browser_cookie3.edge" \
-              --hidden-import "browser_cookie3.opera" \
-              --hidden-import "browser_cookie3.common" \
-              --hidden-import "browser_cookie3.safari" \
-              --hidden-import "browser_cookie3.utils" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.icns:." \
               --add-data "ffmpeg:." \
@@ -246,7 +152,9 @@ jobs:
               --add-data "phantomjs:." \
               --add-data "deno:." \
               ytget_gui/main.py
+
             cp Info.plist "dist/$APP_NAME.app/Contents/Info.plist"
+
           else
             ICON="ytget_gui/icon.ico"
             pyinstaller --noconfirm --onedir --windowed \
@@ -254,23 +162,10 @@ jobs:
               --icon "$ICON" \
               --clean --noupx \
               --version-file "version_info.txt" \
-              --hidden-import "PySide6.QtCore" \
-              --hidden-import "PySide6.QtGui" \
-              --hidden-import "PySide6.QtWidgets" \
+              --hidden-import "PySide6.*" \
               --hidden-import "requests" \
-              --hidden-import "mutagen" \
+              --hidden-import "mutagen.*" \
               --hidden-import "PIL" \
-              --hidden-import "webbrowser" \
-              --hidden-import "mutagen.id3" \
-              --hidden-import "mutagen.flac" \
-              --hidden-import "browser_cookie3" \
-              --hidden-import "browser_cookie3.chrome" \
-              --hidden-import "browser_cookie3.firefox" \
-              --hidden-import "browser_cookie3.edge" \
-              --hidden-import "browser_cookie3.opera" \
-              --hidden-import "browser_cookie3.common" \
-              --hidden-import "browser_cookie3.safari" \
-              --hidden-import "browser_cookie3.utils" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.ico:." \
               --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
@@ -294,7 +189,6 @@ jobs:
       - name: Package build
         shell: bash
         run: |
-          set -euo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
@@ -312,7 +206,6 @@ jobs:
       - name: Generate SHA-256 checksum
         shell: bash
         run: |
-          set -euo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
@@ -321,7 +214,7 @@ jobs:
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
               shasum -a 256 dist/YTGet-macOS-arm64.tar.gz > dist/YTGet-macOS-arm64.sha256
             else
-              shasum -a 256 dist/YTGet-macOS-x86_64.tar.gz > dist/YTGet-x86_64.sha256
+              shasum -a 256 dist/YTGet-macOS-x86_64.tar.gz > dist/YTGet-macOS-x86_64.sha256
             fi
           fi
 
@@ -354,6 +247,6 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: "${{ github.event.inputs.tag || github.ref_name }}"
           body_path: RELEASE_NOTES.md
-          files: artifacts/**/*
+          files: artifacts/**/*  
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
