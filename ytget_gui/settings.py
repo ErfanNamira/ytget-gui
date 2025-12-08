@@ -19,7 +19,7 @@ from ytget_gui.utils.paths import (
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.5.1"
+    VERSION: str = "2.5.2"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
@@ -34,6 +34,7 @@ class AppSettings:
     FFMPEG_PATH: Path = field(init=False)
     FFPROBE_PATH: Path = field(init=False)
     PHANTOMJS_PATH: Path = field(init=False)
+    DENO_PATH: Path = field(init=False)
 
     OUTPUT_TEMPLATE: str = field(init=False)
     PLAYLIST_TEMPLATE: str = field(init=False)
@@ -125,6 +126,7 @@ class AppSettings:
         ffmpeg_candidate = self.BASE_DIR / executable_name("ffmpeg")
         ffprobe_candidate = self.BASE_DIR / executable_name("ffprobe")
         phantom_candidate = self.BASE_DIR / executable_name("phantomjs")
+        deno_candidate = self.BASE_DIR / executable_name("deno")
 
         # Resolve via ENV override, then system PATH, then bundled
         yt_env = os.getenv("YTGET_YT_DLP_PATH")
@@ -142,6 +144,10 @@ class AppSettings:
         ph_env = os.getenv("YTGET_PHANTOMJS_PATH")
         self.PHANTOMJS_PATH = Path(ph_env) if ph_env and Path(ph_env).exists() \
             else which_or_path(phantom_candidate, executable_name("phantomjs"))
+
+        deno_env = os.getenv("YTGET_DENO_PATH")
+        self.DENO_PATH = Path(deno_env) if deno_env and Path(deno_env).exists() \
+            else which_or_path(deno_candidate, executable_name("deno"))
             
         # Output templates
         self.OUTPUT_TEMPLATE = str((self.DOWNLOADS_DIR / "%(title)s.%(ext)s").resolve())
@@ -235,7 +241,8 @@ class AppSettings:
             "YT_DLP_PATH": str(self.YT_DLP_PATH),
             "FFMPEG_PATH": str(self.FFMPEG_PATH),
             "FFPROBE_PATH": str(self.FFPROBE_PATH),
-            "PHANTOMJS_PATH": str(self.PHANTOMJS_PATH),            
+            "PHANTOMJS_PATH": str(self.PHANTOMJS_PATH),   
+            "DENO_PATH": str(self.DENO_PATH),            
             "COOKIES_PATH": str(self.COOKIES_PATH),
             "ARCHIVE_PATH": str(self.ARCHIVE_PATH),
         }
@@ -294,7 +301,8 @@ class AppSettings:
                 ("YT_DLP_PATH", "YT_DLP_PATH"),
                 ("FFMPEG_PATH", "FFMPEG_PATH"),
                 ("FFPROBE_PATH", "FFPROBE_PATH"),
-                ("PHANTOMJS_PATH", "PHANTOMJS_PATH"),                
+                ("PHANTOMJS_PATH", "PHANTOMJS_PATH"),   
+                ("DENO_PATH", "DENO_PATH"),                
                 ("COOKIES_PATH", "COOKIES_PATH"),
                 ("ARCHIVE_PATH", "ARCHIVE_PATH"),
             ):
