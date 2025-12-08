@@ -1,3 +1,8 @@
+### v 2.5.2.0 **Deno JavaScript Runtime Integration**  
+- **Automatic Deno detection**: the app now detects a bundled or configured `deno` binary and exposes its availability in the startup console.  
+- **yt-dlp uses local Deno**: when present, `yt-dlp` is invoked with `--js-runtimes deno:/path/to/deno` so JS‑based extractors run against the local Deno runtime.  
+- **Process PATH injection**: the Deno parent directory is added to the child process `PATH` (same approach as PhantomJS) so subprocesses can locate Deno reliably.
+
 ### v 2.5.1.3 - Persisted cookie settings and worker sync
 * Persist cookie-related preferences immediately when changed in the Preferences dialog.
 * Record a timestamped “last imported” cookie marker when cookies are exported from a browser.
