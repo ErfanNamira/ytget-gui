@@ -35,7 +35,7 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -45,57 +45,92 @@ jobs:
         if: runner.os != 'macOS'
         shell: bash
         run: |
+          set -euo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+            curl -L -o yt-dlp.exe "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+            curl -L -o yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
             chmod +x yt-dlp
           fi
 
-      - name: Download ffmpeg & ffprobe
+      - name: Download ffmpeg & ffprobe (robust)
         shell: bash
         run: |
+          set -euo pipefail
+          echo "Runner OS: $RUNNER_OS"
+
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-            powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ."
-            cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName")" .
-            cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName")" .
+            WIN_URL="https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+            echo "Downloading ffmpeg from $WIN_URL"
+            curl -L -o ffmpeg.zip "$WIN_URL"
+            powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extract"
+            powershell -Command "Get-ChildItem -Path ffmpeg-extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1 | ForEach-Object { Copy-Item -Path $_.FullName -Destination '.' }"
+            powershell -Command "Get-ChildItem -Path ffmpeg-extract -Recurse -Filter ffprobe.exe | Select-Object -First 1 | ForEach-Object { Copy-Item -Path $_.FullName -Destination '.' }"
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y ffmpeg unzip
-            cp $(which ffmpeg) .
-            cp $(which ffprobe) .
+            if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+              cp "$(which ffmpeg)" .
+              cp "$(which ffprobe)" .
+            else
+              echo "Downloading static ffmpeg (johnvansickle) for Linux"
+              curl -L -o ffmpeg.tar.xz "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+              mkdir -p ffmpeg-extract
+              tar -xJf ffmpeg.tar.xz -C ffmpeg-extract --strip-components=1
+              cp ffmpeg-extract/ffmpeg .
+              cp ffmpeg-extract/ffprobe .
+              chmod +x ffmpeg ffprobe
+            fi
           else
-            curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.1.7z -o ffmpeg.zip
-            unzip ffmpeg.zip
-            chmod +x ffmpeg
-            curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.1.7z -o ffprobe.zip
-            unzip ffprobe.zip
-            chmod +x ffprobe
+            # macOS
+            if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+              cp "$(which ffmpeg)" .
+              cp "$(which ffprobe)" .
+            else
+              echo "Downloading ffmpeg for macOS (evermeet)"
+              curl -L -o ffmpeg.zip "https://evermeet.cx/ffmpeg/ffmpeg-8.0.zip"
+              unzip -q ffmpeg.zip -d ffmpeg-extract
+              chmod +x ffmpeg-extract/ffmpeg || true
+              cp ffmpeg-extract/ffmpeg .
+              if [[ -f ffmpeg-extract/ffprobe ]]; then
+                chmod +x ffmpeg-extract/ffprobe || true
+                cp ffmpeg-extract/ffprobe .
+              fi
+            fi
+          fi
+
+          # Sanity check
+          if [[ -f ffmpeg ]] || [[ -f ffmpeg.exe ]]; then
+            echo "ffmpeg ready"
+            if [[ -f ffmpeg ]]; then ./ffmpeg --version | head -n1 || true; fi
+            if [[ -f ffmpeg.exe ]]; then ./ffmpeg.exe --version | head -n1 || true; fi
+          else
+            echo "ERROR: ffmpeg binary not found after extraction"
+            ls -la
+            exit 1
           fi
 
       - name: Download PhantomJS (per-OS)
         shell: bash
         run: |
+          set -euo pipefail
           WIN_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-windows.zip"
           MAC_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-macosx.zip"
           LINUX_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-linux-x86_64.tar.bz2"
 
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             echo "Downloading PhantomJS for Windows"
-            curl -L "$WIN_URL" -o phantomjs-windows.zip
+            curl -L -o phantomjs-windows.zip "$WIN_URL"
             powershell -Command "Expand-Archive -Path phantomjs-windows.zip -DestinationPath phantomjs-windows"
             cp phantomjs-windows/phantomjs-2.1.1-windows/bin/phantomjs.exe ./phantomjs.exe
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             echo "Downloading PhantomJS for Linux"
-            curl -L "$LINUX_URL" -o phantomjs-linux.tar.bz2
+            curl -L -o phantomjs-linux.tar.bz2 "$LINUX_URL"
             tar xjf phantomjs-linux.tar.bz2
             cp phantomjs-2.1.1-linux-x86_64/bin/phantomjs ./phantomjs
             chmod +x phantomjs
           else
             echo "Downloading PhantomJS for macOS"
-            curl -L "$MAC_URL" -o phantomjs-macos.zip
-            unzip phantomjs-macos.zip
+            curl -L -o phantomjs-macos.zip "$MAC_URL"
+            unzip -q phantomjs-macos.zip
             cp phantomjs-2.1.1-macosx/bin/phantomjs ./phantomjs
             chmod +x phantomjs
           fi
@@ -104,13 +139,25 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          set -euo pipefail
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             sudo apt-get update
             sudo apt-get install -y jq unzip
           else
-            # macOS
-            brew --version >/dev/null 2>&1 || /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            brew install jq unzip || true
+            # macOS: try brew, fallback to downloading jq binary if brew unavailable
+            if command -v brew >/dev/null 2>&1; then
+              brew install jq unzip || true
+            else
+              echo "Homebrew not found; attempting to install jq via curl"
+              JQ_URL="https://github.com/stedolan/jq/releases/latest/download/jq-osx-amd64"
+              if [ -w /usr/local/bin ]; then
+                curl -L -o /usr/local/bin/jq "$JQ_URL"
+                chmod +x /usr/local/bin/jq || true
+              else
+                curl -L -o /usr/bin/jq "$JQ_URL" || true
+                chmod +x /usr/bin/jq || true
+              fi
+            fi
           fi
 
       - name: Download latest Deno (non-Windows)
@@ -151,7 +198,7 @@ jobs:
           fi
 
           echo "Found Deno asset: $asset_url"
-          curl -L "$asset_url" -o deno.zip
+          curl -L -o deno.zip "$asset_url"
           unzip -q deno.zip -d deno-extract
           DENO_BIN=$(find deno-extract -type f -name deno -print -quit || true)
           if [[ -z "$DENO_BIN" ]]; then
@@ -196,6 +243,7 @@ jobs:
       - name: Build application
         shell: bash
         run: |
+          set -euo pipefail
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             ICON="ytget_gui/icon.icns"
             APP_NAME="YTGet"
@@ -277,6 +325,7 @@ jobs:
       - name: Package build
         shell: bash
         run: |
+          set -euo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
@@ -294,6 +343,7 @@ jobs:
       - name: Generate SHA-256 checksum
         shell: bash
         run: |
+          set -euo pipefail
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
@@ -324,7 +374,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download **all** artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
@@ -335,6 +385,6 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: "${{ github.event.inputs.tag || github.ref_name }}"
           body_path: RELEASE_NOTES.md
-          files: artifacts/**/*  
+          files: artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
