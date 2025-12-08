@@ -4,11 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag Name to Release'
-        required: true
+        description: 'Tag Name to Release (optional — overrides DENO_TAG)'
+        required: false
 
 permissions:
   contents: write
+
+env:
+  # Default Deno tag; override by passing "tag" when dispatching the workflow
+  DENO_TAG: v2.5.6
 
 jobs:
   build:
@@ -135,102 +139,67 @@ jobs:
             chmod +x phantomjs
           fi
 
-      - name: Install jq (Linux/macOS) for JSON parsing
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y jq unzip
-          else
-            # macOS: try brew, fallback to downloading jq binary if brew unavailable
-            if command -v brew >/dev/null 2>&1; then
-              brew install jq unzip || true
-            else
-              echo "Homebrew not found; attempting to install jq via curl"
-              JQ_URL="https://github.com/stedolan/jq/releases/latest/download/jq-osx-amd64"
-              if [ -w /usr/local/bin ]; then
-                curl -L -o /usr/local/bin/jq "$JQ_URL"
-                chmod +x /usr/local/bin/jq || true
-              else
-                curl -L -o /usr/bin/jq "$JQ_URL" || true
-                chmod +x /usr/bin/jq || true
-              fi
-            fi
-          fi
-
-      - name: Download latest Deno (non-Windows)
-        if: runner.os != 'Windows'
+      - name: Download Deno (static URLs you provided)
         shell: bash
         env:
-          GITHUB_API: https://api.github.com/repos/denoland/deno/releases/latest
+          # Use workflow input 'tag' if provided, otherwise fall back to env.DENO_TAG
+          DENO_TAG_RUNTIME: ${{ github.event.inputs.tag || env.DENO_TAG }}
         run: |
           set -euo pipefail
-          echo "Querying latest Deno release from $GITHUB_API"
-          release_json=$(curl -sL "$GITHUB_API")
-          if [[ -z "$release_json" ]]; then
-            echo "Failed to fetch Deno release info"; exit 1
-          fi
+          echo "Using DENO tag: ${DENO_TAG_RUNTIME}"
 
-          ASSET_PATTERN=""
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            URL="https://github.com/denoland/deno/releases/download/${DENO_TAG_RUNTIME}/deno-x86_64-pc-windows-msvc.zip"
+            echo "Downloading Deno (Windows) from $URL"
+            curl -L -o deno.zip "$URL"
+            powershell -Command "Expand-Archive -Path deno.zip -DestinationPath deno-extract"
+            powershell -Command "Get-ChildItem -Path deno-extract -Recurse -Filter deno.exe | Select-Object -First 1 | ForEach-Object { Copy-Item -Path $_.FullName -Destination '.' }"
+            echo "Deno placed at: $(pwd)/deno.exe"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
             if [[ "${{ matrix.arch }}" == "x86_64" ]]; then
-              ASSET_PATTERN="deno-.*x86_64.*linux.*\\.zip|deno-x86_64-unknown-linux-gnu.zip"
+              URL="https://github.com/denoland/deno/releases/download/${DENO_TAG_RUNTIME}/deno-x86_64-unknown-linux-gnu.zip"
             else
-              ASSET_PATTERN="deno-.*aarch64.*linux.*\\.zip|deno-aarch64-unknown-linux-gnu.zip"
+              URL="https://github.com/denoland/deno/releases/download/${DENO_TAG_RUNTIME}/deno-aarch64-unknown-linux-gnu.zip"
             fi
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            echo "Downloading Deno (Linux) from $URL"
+            curl -L -o deno.zip "$URL"
+            unzip -q deno.zip -d deno-extract
+            DENO_BIN=$(find deno-extract -type f -name deno -print -quit || true)
+            if [[ -z "$DENO_BIN" ]]; then
+              echo "Deno binary not found in archive"; ls -la deno-extract; exit 1
+            fi
+            cp "$DENO_BIN" .
+            chmod +x deno
+            echo "Deno placed at: $(pwd)/deno"
+          else
+            # macOS
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-              ASSET_PATTERN="deno-.*aarch64.*apple.*darwin.*\\.zip|deno-aarch64-apple-darwin.zip"
+              URL="https://github.com/denoland/deno/releases/download/${DENO_TAG_RUNTIME}/deno-aarch64-apple-darwin.zip"
             else
-              ASSET_PATTERN="deno-.*x86_64.*apple.*darwin.*\\.zip|deno-x86_64-apple-darwin.zip"
+              URL="https://github.com/denoland/deno/releases/download/${DENO_TAG_RUNTIME}/deno-x86_64-apple-darwin.zip"
             fi
+            echo "Downloading Deno (macOS) from $URL"
+            curl -L -o deno.zip "$URL"
+            unzip -q deno.zip -d deno-extract
+            DENO_BIN=$(find deno-extract -type f -name deno -print -quit || true)
+            if [[ -z "$DENO_BIN" ]]; then
+              echo "Deno binary not found in archive"; ls -la deno-extract; exit 1
+            fi
+            cp "$DENO_BIN" .
+            chmod +x deno
+            echo "Deno placed at: $(pwd)/deno"
           fi
 
-          asset_url=$(echo "$release_json" | jq -r --arg pattern "$ASSET_PATTERN" '
-            .assets[] | select(.name | test($pattern; "i")) | .browser_download_url' | head -n1)
-
-          if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
-            echo "No matching Deno asset found for this runner/arch. Dumping assets for debugging:"
-            echo "$release_json" | jq -r '.assets[].name'
+          # quick verification (best-effort)
+          if [[ -f deno ]] || [[ -f deno.exe ]]; then
+            echo "Deno binary present:"
+            if [[ -f deno ]]; then ./deno --version || true; fi
+            if [[ -f deno.exe ]]; then ./deno.exe --version || true; fi
+          else
+            echo "ERROR: deno binary not found after extraction"
+            ls -la
             exit 1
           fi
-
-          echo "Found Deno asset: $asset_url"
-          curl -L -o deno.zip "$asset_url"
-          unzip -q deno.zip -d deno-extract
-          DENO_BIN=$(find deno-extract -type f -name deno -print -quit || true)
-          if [[ -z "$DENO_BIN" ]]; then
-            echo "Deno binary not found in archive"; ls -la deno-extract; exit 1
-          fi
-          cp "$DENO_BIN" .
-          chmod +x deno
-          echo "Deno placed at: $(pwd)/deno"
-          ./deno --version || true
-
-      - name: Download latest Deno (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        env:
-          GITHUB_API: https://api.github.com/repos/denoland/deno/releases/latest
-        run: |
-          $release = Invoke-RestMethod -Uri $env:GITHUB_API -UseBasicParsing
-          if (-not $release) { Write-Error "Failed to fetch Deno release info"; exit 1 }
-          $asset = $release.assets | Where-Object { $_.name -match "deno-.*windows.*\\.zip" } | Select-Object -First 1
-          if (-not $asset) {
-            $asset = $release.assets | Where-Object { $_.name -eq "deno-x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
-          }
-          if (-not $asset) { Write-Error "No Windows Deno asset found in latest release"; exit 1 }
-          $url = $asset.browser_download_url
-          Write-Host "Downloading Deno from $url"
-          Invoke-WebRequest -Uri $url -OutFile deno.zip
-          Expand-Archive -Path deno.zip -DestinationPath deno-extract
-          $deno = Get-ChildItem -Path deno-extract -Recurse -Filter deno.exe | Select-Object -First 1
-          if ($null -eq $deno) { Write-Error "deno.exe not found in archive"; exit 1 }
-          Copy-Item $deno.FullName -Destination . -Force
-          Write-Host "Deno placed at: $(Resolve-Path .\deno.exe)"
-          & .\deno.exe --version
 
       - name: Update Info.plist version (macOS only)
         if: startsWith(matrix.os, 'macos')
