@@ -847,6 +847,38 @@ class MainWindow(QMainWindow):
             self.log(f"🔧 PhantomJS available: {self.settings.PHANTOMJS_PATH}\n", AppStyles.INFO_COLOR, "Info")
         else:
             self.log("⚠️ PhantomJS not found in app folder or PATH. If a site requires it, place PhantomJS in the app folder.\n", AppStyles.WARNING_COLOR, "Warning")
+            
+        # Deno availability
+        try:
+            deno_attr = getattr(self.settings, "DENO_PATH", None)
+            if deno_attr:
+                deno_path = Path(deno_attr)
+                if deno_path.exists():
+                    self.log(f"🔧 Deno available: {deno_path}\n", AppStyles.INFO_COLOR, "Info")
+                else:
+                    self.log(
+                        "⚠️ Deno not found at configured path. Install Deno: https://docs.deno.com/runtime/getting_started/installation/ "
+                        "or set the YTGET_DENO_PATH environment variable to the full path to the deno binary.\n",
+                        AppStyles.WARNING_COLOR,
+                        "Warning",
+                    )
+            else:
+                # Try bundled candidate beside BASE_DIR (deno.exe on Windows)
+                bundled = Path(self.settings.BASE_DIR) / ("deno.exe" if os.name == "nt" else "deno")
+                if bundled.exists():
+                    self.log(f"🔧 Deno available (bundled): {bundled}\n", AppStyles.INFO_COLOR, "Info")
+                else:
+                    # Not found on bundled path; try to detect via settings resolution (best-effort)
+                    # If AppSettings.load_config / __post_init__ sets DENO_PATH, it would have been used above.
+                    self.log(
+                        "⚠️ Deno not found in app folder or PATH. Some sites may require a JS runtime. "
+                        "Install Deno: https://docs.deno.com/runtime/getting_started/installation/ or set YTGET_DENO_PATH.\n",
+                        AppStyles.WARNING_COLOR,
+                        "Warning",
+                    )
+        except Exception:
+            # best-effort only; do not interrupt startup
+            pass            
 		
         if self.settings.PROXY_URL:
             self.log(f"🌐 Proxy: {self.settings.PROXY_URL}\n", AppStyles.INFO_COLOR, "Info")
