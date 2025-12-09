@@ -35,11 +35,14 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Install Python dependencies and Nuitka
+      - name: Install Python dependencies and Nuitka (stable)
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
-          pip install "nuitka>=2.9.0"
+          # Install the latest stable Nuitka available on PyPI (2.8.9 at time of writing)
+          pip install "nuitka==2.8.9"
+          # If you prefer to install the latest development version from GitHub, uncomment:
+          # pip install --upgrade git+https://github.com/Nuitka/Nuitka.git
           python -V
           python -m nuitka --version
         shell: pwsh
@@ -83,9 +86,11 @@ jobs:
           if (Test-Path $out) { Remove-Item -Recurse -Force $out }
           New-Item -ItemType Directory -Force -Path $out | Out-Null
 
+          # Use the DIST env var for output-dir to avoid quoting issues
+          $distArg = "--output-dir=$out"
           python -m nuitka `
             --standalone `
-            --output-dir="%DIST%" `
+            $distArg `
             --enable-plugin=pyside6 `
             --include-package=ytget_gui `
             --include-data-dir=ytget_gui=ytget_gui `
