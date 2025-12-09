@@ -3,12 +3,8 @@ name: Build Windows Installer YTGet
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   build-windows:
-    name: Build Windows Installer
     runs-on: windows-latest
 
     steps:
@@ -26,24 +22,8 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Download yt-dlp
-        run: |
-          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
-
-      - name: Download ffmpeg & ffprobe
-        run: |
-          curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
-          powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_dir"
-          copy (Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName .
-          copy (Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName .
-
-      - name: Download Deno
-        run: |
-          curl -L https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-pc-windows-msvc.zip -o deno.zip
-          powershell -Command "Expand-Archive -Path deno.zip -DestinationPath deno_dir"
-          copy deno_dir/deno.exe .
-
       - name: Build application with PyInstaller
+        shell: cmd
         run: |
           pyinstaller --noconfirm --onedir --windowed ^
             --name "YTGet" ^
@@ -56,33 +36,58 @@ jobs:
             --hidden-import "PIL" ^
             --add-data "ytget_gui;ytget_gui" ^
             --add-data "ytget_gui/icon.ico;." ^
-            --add-data "yt-dlp.exe;." ^
-            --add-data "ffmpeg.exe;." ^
-            --add-data "ffprobe.exe;." ^
-            --add-data "deno.exe;." ^
             ytget_gui/main.py
 
-      - name: Create Installer (Inno Setup)
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Create Inno Setup script
         run: |
-          curl -L https://jrsoftware.org/download.php/is.exe -o is.exe
-          .\is.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
-          # Generate Inno Setup script dynamically
           echo [Setup] > installer.iss
           echo AppName=YTGet >> installer.iss
           echo AppVersion=1.0.0 >> installer.iss
           echo DefaultDirName={pf}\YTGet >> installer.iss
           echo OutputDir=dist >> installer.iss
+          echo OutputBaseFilename=YTGetSetup >> installer.iss
           echo Compression=lzma2/ultra64 >> installer.iss
           echo SolidCompression=yes >> installer.iss
           echo [Files] >> installer.iss
           echo Source: "dist\YTGet\*"; DestDir: "{app}"; Flags: recursesubdirs >> installer.iss
           echo [Icons] >> installer.iss
           echo Name: "{group}\YTGet"; Filename: "{app}\YTGet.exe" >> installer.iss
-          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          echo [Run] >> installer.iss
+          echo Filename: "{app}\YTGet.exe"; Description: "Launch YTGet"; Flags: nowait postinstall skipifsilent >> installer.iss
+          echo [Code] >> installer.iss
+          echo procedure DownloadFile(URL, Dest: string); >> installer.iss
+          echo var >> installer.iss
+          echo   WinHttpReq: Variant; >> installer.iss
+          echo   Stream: TFileStream; >> installer.iss
+          echo begin >> installer.iss
+          echo   WinHttpReq := CreateOleObject('MSXML2.XMLHTTP'); >> installer.iss
+          echo   WinHttpReq.Open('GET', URL, False); >> installer.iss
+          echo   WinHttpReq.Send; >> installer.iss
+          echo   if WinHttpReq.Status = 200 then begin >> installer.iss
+          echo     Stream := TFileStream.Create(Dest, fmCreate); >> installer.iss
+          echo     Stream.WriteBuffer(WinHttpReq.ResponseBody[0], Length(WinHttpReq.ResponseBody)); >> installer.iss
+          echo     Stream.Free; >> installer.iss
+          echo   end; >> installer.iss
+          echo end; >> installer.iss
+          echo procedure CurStepChanged(CurStep: TSetupStep); >> installer.iss
+          echo begin >> installer.iss
+          echo   if CurStep = ssPostInstall then begin >> installer.iss
+          echo     DownloadFile('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe', ExpandConstant('{app}\yt-dlp.exe')); >> installer.iss
+          echo     DownloadFile('https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip', ExpandConstant('{tmp}\ffmpeg.zip')); >> installer.iss
+          echo     // TODO: unzip ffmpeg.zip and copy ffmpeg.exe + ffprobe.exe into {app} >> installer.iss
+          echo     DownloadFile('https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-pc-windows-msvc.zip', ExpandConstant('{tmp}\deno.zip')); >> installer.iss
+          echo     // TODO: unzip deno.zip and copy deno.exe into {app} >> installer.iss
+          echo   end; >> installer.iss
+          echo end; >> installer.iss
+
+      - name: Build Installer
+        run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
 
       - name: Generate SHA-256 checksum
-        run: |
-          certutil -hashfile dist\YTGetSetup.exe SHA256 > dist\YTGetSetup.sha256
+        run: certutil -hashfile dist\YTGetSetup.exe SHA256 > dist\YTGetSetup.sha256
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
