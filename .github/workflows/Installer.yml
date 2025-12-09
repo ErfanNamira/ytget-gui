@@ -83,7 +83,6 @@ jobs:
       - name: Build application with PyInstaller
         shell: pwsh
         run: |
-          # One-dir build (easier to include resources). Change to --onefile if desired.
           pyinstaller --noconfirm --onedir --windowed `
             --name $env:APP_NAME `
             --icon build\icon.ico `
@@ -92,7 +91,6 @@ jobs:
             --add-data "ytget_gui\icon.ico;." `
             ytget_gui\main.py
 
-          # Copy helper binaries into dist folder so NSIS can include them if desired
           $distApp = Join-Path -Path "dist" -ChildPath $env:APP_NAME
           if (-not (Test-Path $distApp)) { Write-Error "Expected build output not found: $distApp"; exit 1 }
           Copy-Item build\yt-dlp.exe -Destination $distApp -Force
@@ -100,10 +98,11 @@ jobs:
           Copy-Item build\ffprobe.exe -Destination $distApp -Force
           Copy-Item build\deno.exe -Destination $distApp -Force
 
-      - name: Create NSIS installer script
+      - name: Write NSIS installer script to file
         shell: pwsh
         run: |
-          $nsis = @'
+          $nsisPath = "build\installer.nsi"
+          $nsisContent = @'
 ; NSIS installer for YTGet
 !include "MUI2.nsh"
 !define APP_NAME "YTGet"
@@ -175,8 +174,8 @@ Section "Uninstall"
 SectionEnd
 '@
 
-          $nsisPath = "build\installer.nsi"
-          $nsis | Out-File -FilePath $nsisPath -Encoding ASCII
+          # Write as ASCII to avoid encoding issues with makensis
+          $nsisContent | Out-File -FilePath $nsisPath -Encoding ASCII
           Write-Host "NSIS script written to $nsisPath"
 
       - name: Build NSIS installer
