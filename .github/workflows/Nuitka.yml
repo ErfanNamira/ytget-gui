@@ -1,0 +1,99 @@
+name: Build & Release YTGet (Nuitka)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag Name to Release'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }} - ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x86_64
+            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-pc-windows-msvc.zip
+          - os: ubuntu-latest
+            arch: x86_64
+            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-unknown-linux-gnu.zip
+          - os: macos-latest
+            arch: arm64
+            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-aarch64-apple-darwin.zip
+          - os: macos-15
+            arch: x86_64
+            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-apple-darwin.zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python and build tools
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nuitka wheel setuptools
+          # On Linux/macOS ensure gcc/clang present; on Windows use MSVC (setup by runner)
+
+      - name: Download external binaries
+        run: |
+          # same download steps you already have for deno, ffmpeg, yt-dlp, phantomjs
+          # copy them into repo root as deno, ffmpeg, ffprobe, yt-dlp, phantomjs
+
+      - name: Build with Nuitka
+        shell: bash
+        run: |
+          APP_NAME=YTGet
+          ENTRY=ytget_gui/main.py
+          # create a clean build dir
+          rm -rf build dist
+          python -m nuitka --standalone \
+            --output-dir=dist/$APP_NAME \
+            --enable-plugin=pyside6 \
+            --include-package=ytget_gui \
+            --include-data-dir=ytget_gui=ytget_gui \
+            --include-data-file=ytget_gui/icon.ico=icon.ico \
+            --remove-output \
+            --assume-yes-for-downloads \
+            $ENTRY
+
+      - name: Copy external tools into dist
+        run: |
+          cp deno dist/$APP_NAME/
+          cp ffmpeg dist/$APP_NAME/
+          cp ffprobe dist/$APP_NAME/
+          cp yt-dlp dist/$APP_NAME/
+          cp phantomjs dist/$APP_NAME/
+          chmod +x dist/$APP_NAME/* || true
+
+      - name: Package build
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            tar czf YTGet-linux.tar.gz -C dist YTGet
+          else
+            cd dist
+            tar czf YTGet-macOS-${{ matrix.arch }}.tar.gz YTGet
+            cd ..
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            YTGet-*.*
+            dist/YTGet-*.tar.gz
+            dist/YTGet-*.sha256
