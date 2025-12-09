@@ -1,0 +1,267 @@
+name: Build & Release YTGet (Windows Installer)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag Name to Release'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: YTGet
+  APP_EXE: YTGet.exe
+  ICON_PATH: ytget_gui/icon.ico
+  VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+  # Optional: change to pinned URLs if you want fixed versions
+  YTDLP_URL: https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+  FFMPEG_ZIP_URL: https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+  DENO_ZIP_URL: https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip
+
+jobs:
+  build-windows-installer:
+    name: Build Windows installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools and utilities
+        shell: pwsh
+        run: |
+          # Install required packages: pyinstaller, 7zip, nsis via Chocolatey
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1')) || true
+          choco feature enable -n allowGlobalConfirmation
+          choco install -y 7zip nsis visualstudio2019buildtools
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Prepare build environment
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force build dist -ErrorAction SilentlyContinue
+          mkdir build
+          mkdir dist
+          # Copy icon if exists
+          if (Test-Path $env:ICON_PATH) { Copy-Item $env:ICON_PATH -Destination build\icon.ico -Force }
+
+      - name: Download helper binaries for bundling (build-time copies)
+        shell: pwsh
+        run: |
+          # Download yt-dlp (include in build so offline installer can include it if desired)
+          Invoke-WebRequest -Uri $env:YTDLP_URL -OutFile build\yt-dlp.exe -UseBasicParsing
+
+          # Download ffmpeg zip and extract ffmpeg.exe and ffprobe.exe into build\
+          Invoke-WebRequest -Uri $env:FFMPEG_ZIP_URL -OutFile build\ffmpeg.zip -UseBasicParsing
+          Expand-Archive -Path build\ffmpeg.zip -DestinationPath build\ffmpeg_tmp
+          $ffmpegExe = Get-ChildItem -Path build\ffmpeg_tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $ffprobeExe = Get-ChildItem -Path build\ffmpeg_tmp -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          Copy-Item $ffmpegExe.FullName -Destination build\ffmpeg.exe -Force
+          Copy-Item $ffprobeExe.FullName -Destination build\ffprobe.exe -Force
+          Remove-Item -Recurse -Force build\ffmpeg_tmp, build\ffmpeg.zip
+
+          # Download deno zip and extract deno.exe into build\
+          Invoke-WebRequest -Uri $env:DENO_ZIP_URL -OutFile build\deno.zip -UseBasicParsing
+          Expand-Archive -Path build\deno.zip -DestinationPath build\deno_tmp
+          $denoExe = Get-ChildItem -Path build\deno_tmp -Recurse -Filter deno.exe | Select-Object -First 1
+          Copy-Item $denoExe.FullName -Destination build\deno.exe -Force
+          Remove-Item -Recurse -Force build\deno_tmp, build\deno.zip
+
+      - name: Build application with PyInstaller
+        shell: pwsh
+        run: |
+          # Use one-dir for easier installer packaging; change to --onefile if you prefer single exe
+          pyinstaller --noconfirm --onedir --windowed `
+            --name $env:APP_NAME `
+            --icon build\icon.ico `
+            --clean `
+            --add-data "ytget_gui;ytget_gui" `
+            --add-data "ytget_gui\icon.ico;." `
+            ytget_gui\main.py
+
+          # Copy helper binaries into dist folder so NSIS can include them if desired
+          Copy-Item build\yt-dlp.exe -Destination "dist\$env:APP_NAME\" -Force
+          Copy-Item build\ffmpeg.exe -Destination "dist\$env:APP_NAME\" -Force
+          Copy-Item build\ffprobe.exe -Destination "dist\$env:APP_NAME\" -Force
+          Copy-Item build\deno.exe -Destination "dist\$env:APP_NAME\" -Force
+
+      - name: Create NSIS installer script
+        shell: pwsh
+        run: |
+          $nsis = @'
+; NSIS installer for YTGet
+; Installs application and downloads runtime dependencies (yt-dlp, ffmpeg, deno) at install time.
+!define APP_NAME "${APP_NAME}"
+!define VERSION "${VERSION}"
+!define INSTALL_DIR "$PROGRAMFILES\${APP_NAME}"
+!define YTDLP_URL "${YTDLP_URL}"
+!define FFMPEG_ZIP_URL "${FFMPEG_ZIP_URL}"
+!define DENO_ZIP_URL "${DENO_ZIP_URL}"
+
+SetCompressor /SOLID lzma
+Name "${APP_NAME} ${VERSION}"
+OutFile "dist\${APP_NAME}_installer_${VERSION}.exe"
+InstallDir "${INSTALL_DIR}"
+ShowInstDetails show
+
+Page directory
+Page instfiles
+
+Section "Install"
+  SetOutPath "$INSTDIR"
+  ; Copy application files shipped in the installer
+  File /r "dist\${APP_NAME}\*"
+
+  ; Create bin folder for runtime helpers
+  CreateDirectory "$INSTDIR\bin"
+
+  ; Download yt-dlp
+  nsisdl::download "${YTDLP_URL}" "$INSTDIR\bin\yt-dlp.exe"
+  Pop $0
+  ; If download failed, show message but continue
+  StrCmp $0 "OK" 0 +2
+  ; Make executable attribute (Windows: nothing to do)
+
+  ; Download ffmpeg zip and extract
+  nsisdl::download "${FFMPEG_ZIP_URL}" "$INSTDIR\ffmpeg.zip"
+  Pop $0
+  StrCmp $0 "OK" 0 +2
+  ; Use PowerShell to extract the first ffmpeg.exe and ffprobe.exe into bin
+  ExecWait 'powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory(\"$INSTDIR\\ffmpeg.zip\",\"$INSTDIR\\ffmpeg_tmp\")"'
+  ExecWait 'powershell -NoProfile -Command "Get-ChildItem -Path \"$INSTDIR\\ffmpeg_tmp\" -Recurse -Filter ffmpeg.exe | Select-Object -First 1 | ForEach-Object { Copy-Item $_.FullName -Destination \"$INSTDIR\\bin\\ffmpeg.exe\" -Force }"'
+  ExecWait 'powershell -NoProfile -Command "Get-ChildItem -Path \"$INSTDIR\\ffmpeg_tmp\" -Recurse -Filter ffprobe.exe | Select-Object -First 1 | ForEach-Object { Copy-Item $_.FullName -Destination \"$INSTDIR\\bin\\ffprobe.exe\" -Force }"'
+  RMDir /r "$INSTDIR\ffmpeg_tmp"
+  Delete "$INSTDIR\ffmpeg.zip"
+
+  ; Download deno and extract deno.exe
+  nsisdl::download "${DENO_ZIP_URL}" "$INSTDIR\deno.zip"
+  Pop $0
+  StrCmp $0 "OK" 0 +2
+  ExecWait 'powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory(\"$INSTDIR\\deno.zip\",\"$INSTDIR\\deno_tmp\")"'
+  ExecWait 'powershell -NoProfile -Command "Get-ChildItem -Path \"$INSTDIR\\deno_tmp\" -Recurse -Filter deno.exe | Select-Object -First 1 | ForEach-Object { Copy-Item $_.FullName -Destination \"$INSTDIR\\bin\\deno.exe\" -Force }"'
+  RMDir /r "$INSTDIR\deno_tmp"
+  Delete "$INSTDIR\deno.zip"
+
+  ; Add bin to PATH for current user (safe, non-admin)
+  ReadRegStr $R0 HKCU "Environment" "Path"
+  StrCpy $R1 "$INSTDIR\\bin"
+  ; Append if not present
+  StrStr $R0 $R1 $R2
+  StrCmp $R2 "" 0 +2
+  ; Already present
+  Goto +2
+  ; Append
+  StrCpy $R0 "$R0;$R1"
+  WriteRegStr HKCU "Environment" "Path" "$R0"
+
+  ; Create Start Menu shortcut
+  CreateDirectory "$SMPROGRAMS\${APP_NAME}"
+  CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
+
+SectionEnd
+
+Section "Uninstall"
+  Delete "$INSTDIR\${APP_EXE}"
+  RMDir /r "$INSTDIR"
+  Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
+  RMDir "$SMPROGRAMS\${APP_NAME}"
+  ; Remove PATH entry (best-effort)
+  ReadRegStr $R0 HKCU "Environment" "Path"
+  StrCpy $R1 "$INSTDIR\\bin"
+  StrReplace $R0 $R0 "$R1;" ""
+  StrReplace $R0 $R0 ";$R1" ""
+  StrReplace $R0 $R0 "$R1" ""
+  WriteRegStr HKCU "Environment" "Path" "$R0"
+SectionEnd
+'@
+
+          $nsisPath = "build\installer.nsi"
+          $nsis | Out-File -FilePath $nsisPath -Encoding ASCII
+          Write-Host "NSIS script written to $nsisPath"
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          # Ensure makensis is available
+          $nsisExe = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
+          if (-not $nsisExe) { Write-Error "makensis not found in PATH"; exit 1 }
+          & makensis.exe "build\installer.nsi"
+          if ($LASTEXITCODE -ne 0) { Write-Error "NSIS build failed"; exit $LASTEXITCODE }
+
+      - name: Optional: Sign installer (if secrets provided)
+        if: secrets.WINDOWS_SIGNING_CERT && secrets.WINDOWS_SIGNING_PASSWORD
+        shell: pwsh
+        env:
+          SIGN_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
+          SIGN_PASS: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+        run: |
+          # Decode PFX and sign the installer using signtool (assumes Windows SDK installed)
+          $pfxPath = "build\codesign.pfx"
+          [System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String($env:SIGN_CERT))
+          $installer = "dist\${APP_NAME}_installer_${VERSION}.exe"
+          $signtool = "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe"
+          if (-not (Test-Path $signtool)) {
+            Write-Host "signtool not found; skipping signing"
+            exit 0
+          }
+          & $signtool sign /f $pfxPath /p $env:SIGN_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $installer
+          if ($LASTEXITCODE -ne 0) { Write-Error "Signing failed"; exit $LASTEXITCODE }
+
+      - name: Produce 7z LZMA2 compressed archive (maximum compression)
+        shell: pwsh
+        run: |
+          $seven = (Get-Command 7z.exe).Source
+          if (-not $seven) { Write-Error "7z not found"; exit 1 }
+          $installer = "dist\${APP_NAME}_installer_${VERSION}.exe"
+          & $seven a -t7z -m0=lzma2 -mx=9 -mfb=64 -md=32m -ms=on "dist\${APP_NAME}_installer_${VERSION}.7z" $installer
+          if ($LASTEXITCODE -ne 0) { Write-Error "7z compression failed"; exit $LASTEXITCODE }
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $installer = "dist\${APP_NAME}_installer_${VERSION}.exe"
+          $archive = "dist\${APP_NAME}_installer_${VERSION}.7z"
+          Get-FileHash $installer -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $($_.Path)" } > "dist\${APP_NAME}_installer_${VERSION}.sha256"
+          Get-FileHash $archive -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $($_.Path)" } >> "dist\${APP_NAME}_installer_${VERSION}.sha256"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-${{ env.VERSION }}
+          path: |
+            dist/${{ env.APP_NAME }}_installer_${{ env.VERSION }}.exe
+            dist/${{ env.APP_NAME }}_installer_${{ env.VERSION }}.7z
+            dist/${{ env.APP_NAME }}_installer_${{ env.VERSION }}.sha256
+            dist/${{ env.APP_NAME }}\**
+
+  release:
+    name: Create GitHub Release
+    needs: build-windows-installer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Create GitHub Release and upload installer
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: "${{ github.event.inputs.tag || github.ref_name }}"
+          body_path: RELEASE_NOTES.md
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
