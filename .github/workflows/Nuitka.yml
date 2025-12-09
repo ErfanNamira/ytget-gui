@@ -1,4 +1,4 @@
-name: Build & Release YTGet (Nuitka)
+name: Build & Release YTGet (Nuitka Windows)
 
 on:
   workflow_dispatch:
@@ -13,58 +13,27 @@ permissions:
 env:
   APP_NAME: YTGet
   ENTRY_POINT: ytget_gui/main.py
-  TOOLS_DIR: ${{ github.workspace }}/tools
-  DIST_ROOT: ${{ github.workspace }}/dist
+  TOOLS_DIR: ${{ github.workspace }}\tools
+  DIST_ROOT: ${{ github.workspace }}\dist
 
 jobs:
-  build:
-    name: Build (${{ matrix.os }} - ${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: windows-latest
-            arch: x86_64
-            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-pc-windows-msvc.zip
-          - os: ubuntu-latest
-            arch: x86_64
-            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-unknown-linux-gnu.zip
-          - os: macos-latest
-            arch: arm64
-            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-aarch64-apple-darwin.zip
-          - os: macos-15
-            arch: x86_64
-            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-apple-darwin.zip
-
+  build-windows:
+    name: Build (windows-latest - x86_64)
+    runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Prepare workspace folders
         run: |
-          mkdir -p "${{ env.TOOLS_DIR }}"
-          mkdir -p "${{ env.DIST_ROOT }}"
+          New-Item -ItemType Directory -Force -Path "${{ env.TOOLS_DIR }}" | Out-Null
+          New-Item -ItemType Directory -Force -Path "${{ env.DIST_ROOT }}" | Out-Null
+        shell: pwsh
 
-      - name: Set up Python
+      - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-
-      - name: Install system build tools Linux
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config python3-dev patchelf
-
-      - name: Install system build tools macOS
-        if: runner.os == 'macOS'
-        run: |
-          xcode-select --install || true
-
-      - name: Ensure MSVC on Windows
-        if: runner.os == 'Windows'
-        run: |
-          echo "Windows runner provides MSVC toolchain by default"
 
       - name: Install Python dependencies and Nuitka
         run: |
@@ -73,175 +42,116 @@ jobs:
           pip install "nuitka>=2.9.0"
           python -V
           python -m nuitka --version
+        shell: pwsh
 
       - name: Download Deno into tools
-        shell: bash
         run: |
-          echo "Downloading Deno to tools directory"
-          curl -L "${{ matrix.deno_url }}" -o "${{ env.TOOLS_DIR }}/deno.zip"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            powershell -Command "Expand-Archive -Path '${{ env.TOOLS_DIR }}\\deno.zip' -DestinationPath '${{ env.TOOLS_DIR }}\\deno_dir'"
-            cp "${{ env.TOOLS_DIR }}/deno_dir/deno.exe" "${{ env.TOOLS_DIR }}/deno.exe"
-          else
-            unzip "${{ env.TOOLS_DIR }}/deno.zip" -d "${{ env.TOOLS_DIR }}/deno_dir"
-            cp "${{ env.TOOLS_DIR }}/deno_dir/deno" "${{ env.TOOLS_DIR }}/deno"
-            chmod +x "${{ env.TOOLS_DIR }}/deno"
-          fi
+          $denoUrl = 'https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-pc-windows-msvc.zip'
+          Invoke-WebRequest -Uri $denoUrl -OutFile "${{ env.TOOLS_DIR }}\deno.zip"
+          Expand-Archive -Path "${{ env.TOOLS_DIR }}\deno.zip" -DestinationPath "${{ env.TOOLS_DIR }}\deno_dir" -Force
+          Copy-Item -Path "${{ env.TOOLS_DIR }}\deno_dir\deno.exe" -Destination "${{ env.TOOLS_DIR }}\deno.exe" -Force
+        shell: pwsh
 
       - name: Download yt-dlp into tools
-        if: runner.os != 'macOS'
-        shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o "${{ env.TOOLS_DIR }}/yt-dlp.exe"
-          else
-            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o "${{ env.TOOLS_DIR }}/yt-dlp"
-            chmod +x "${{ env.TOOLS_DIR }}/yt-dlp"
-          fi
+          $yt = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
+          Invoke-WebRequest -Uri $yt -OutFile "${{ env.TOOLS_DIR }}\yt-dlp.exe"
+        shell: pwsh
 
-      - name: Install or copy ffmpeg and ffprobe into tools
-        shell: bash
+      - name: Download ffmpeg & ffprobe into tools
         run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o "${{ env.TOOLS_DIR }}/ffmpeg.zip"
-            powershell -Command "Expand-Archive -Path '${{ env.TOOLS_DIR }}\\ffmpeg.zip' -DestinationPath '${{ env.TOOLS_DIR }}\\ffmpeg_dir'"
-            cp "$(powershell -Command "(Get-ChildItem -Path '${{ env.TOOLS_DIR }}\\ffmpeg_dir' -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName")" "${{ env.TOOLS_DIR }}/ffmpeg.exe"
-            cp "$(powershell -Command "(Get-ChildItem -Path '${{ env.TOOLS_DIR }}\\ffmpeg_dir' -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName")" "${{ env.TOOLS_DIR }}/ffprobe.exe"
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y ffmpeg
-            cp "$(which ffmpeg)" "${{ env.TOOLS_DIR }}/ffmpeg"
-            cp "$(which ffprobe)" "${{ env.TOOLS_DIR }}/ffprobe"
-          else
-            curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.1.zip -o "${{ env.TOOLS_DIR }}/ffmpeg.zip"
-            unzip "${{ env.TOOLS_DIR }}/ffmpeg.zip" -d "${{ env.TOOLS_DIR }}"
-            chmod +x "${{ env.TOOLS_DIR }}/ffmpeg"
-            curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.1.zip -o "${{ env.TOOLS_DIR }}/ffprobe.zip"
-            unzip "${{ env.TOOLS_DIR }}/ffprobe.zip" -d "${{ env.TOOLS_DIR }}"
-            chmod +x "${{ env.TOOLS_DIR }}/ffprobe"
-          fi
+          $ffUrl = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+          Invoke-WebRequest -Uri $ffUrl -OutFile "${{ env.TOOLS_DIR }}\ffmpeg.zip"
+          Expand-Archive -Path "${{ env.TOOLS_DIR }}\ffmpeg.zip" -DestinationPath "${{ env.TOOLS_DIR }}\ffmpeg_dir" -Force
+          $ffmpeg = Get-ChildItem -Path "${{ env.TOOLS_DIR }}\ffmpeg_dir" -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $ffprobe = Get-ChildItem -Path "${{ env.TOOLS_DIR }}\ffmpeg_dir" -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          Copy-Item -Path $ffmpeg.FullName -Destination "${{ env.TOOLS_DIR }}\ffmpeg.exe" -Force
+          Copy-Item -Path $ffprobe.FullName -Destination "${{ env.TOOLS_DIR }}\ffprobe.exe" -Force
+        shell: pwsh
 
       - name: Download PhantomJS into tools
-        shell: bash
         run: |
-          WIN_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-windows.zip"
-          MAC_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-macosx.zip"
-          LINUX_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-linux-x86_64.tar.bz2"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            curl -L "$WIN_URL" -o "${{ env.TOOLS_DIR }}/phantomjs.zip"
-            powershell -Command "Expand-Archive -Path '${{ env.TOOLS_DIR }}\\phantomjs.zip' -DestinationPath '${{ env.TOOLS_DIR }}\\phantomjs_dir'"
-            cp "${{ env.TOOLS_DIR }}/phantomjs_dir/phantomjs-2.1.1-windows/bin/phantomjs.exe" "${{ env.TOOLS_DIR }}/phantomjs.exe"
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            curl -L "$LINUX_URL" -o "${{ env.TOOLS_DIR }}/phantomjs.tar.bz2"
-            tar xjf "${{ env.TOOLS_DIR }}/phantomjs.tar.bz2" -C "${{ env.TOOLS_DIR }}"
-            cp "${{ env.TOOLS_DIR }}/phantomjs-2.1.1-linux-x86_64/bin/phantomjs" "${{ env.TOOLS_DIR }}/phantomjs"
-            chmod +x "${{ env.TOOLS_DIR }}/phantomjs"
-          else
-            curl -L "$MAC_URL" -o "${{ env.TOOLS_DIR }}/phantomjs.zip"
-            unzip "${{ env.TOOLS_DIR }}/phantomjs.zip" -d "${{ env.TOOLS_DIR }}"
-            cp "${{ env.TOOLS_DIR }}/phantomjs-2.1.1-macosx/bin/phantomjs" "${{ env.TOOLS_DIR }}/phantomjs"
-            chmod +x "${{ env.TOOLS_DIR }}/phantomjs"
-          fi
+          $winUrl = 'https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-windows.zip'
+          Invoke-WebRequest -Uri $winUrl -OutFile "${{ env.TOOLS_DIR }}\phantomjs.zip"
+          Expand-Archive -Path "${{ env.TOOLS_DIR }}\phantomjs.zip" -DestinationPath "${{ env.TOOLS_DIR }}\phantomjs_dir" -Force
+          Copy-Item -Path "${{ env.TOOLS_DIR }}\phantomjs_dir\phantomjs-2.1.1-windows\bin\phantomjs.exe" -Destination "${{ env.TOOLS_DIR }}\phantomjs.exe" -Force
+        shell: pwsh
 
-      - name: Build with Nuitka standalone folder
-        shell: bash
-        env:
-          NUITKA_OUTPUT_DIR: "${{ env.DIST_ROOT }}/${{ env.APP_NAME }}"
+      - name: Build with Nuitka (standalone folder)
         run: |
-          set -e
-          rm -rf "${{ env.DIST_ROOT }}/${{ env.APP_NAME }}"
-          mkdir -p "${{ env.DIST_ROOT }}/${{ env.APP_NAME }}"
-          python -m nuitka \
-            --standalone \
-            --output-dir="${{ env.DIST_ROOT }}/${{ env.APP_NAME }}" \
-            --enable-plugin=pyside6 \
-            --include-package=ytget_gui \
-            --include-data-dir=ytget_gui=ytget_gui \
-            --include-data-file=ytget_gui/icon.ico=icon.ico \
-            --nofollow-import-to=tests \
-            --remove-output \
-            --assume-yes-for-downloads \
+          $out = "${{ env.DIST_ROOT }}\${{ env.APP_NAME }}"
+          if (Test-Path $out) { Remove-Item -Recurse -Force $out }
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          python -m nuitka `
+            --standalone `
+            --output-dir="%DIST%" `
+            --enable-plugin=pyside6 `
+            --include-package=ytget_gui `
+            --include-data-dir=ytget_gui=ytget_gui `
+            --include-data-file=ytget_gui/icon.ico=icon.ico `
+            --nofollow-import-to=tests `
+            --remove-output `
+            --assume-yes-for-downloads `
             "${{ env.ENTRY_POINT }}"
+        env:
+          DIST: ${{ env.DIST_ROOT }}\${{ env.APP_NAME }}
+        shell: pwsh
 
       - name: Copy external tools into dist folder
-        shell: bash
         run: |
-          set -e
-          TOOLS="${{ env.TOOLS_DIR }}"
-          DIST="${{ env.DIST_ROOT }}/${{ env.APP_NAME }}"
-          cp -a "${TOOLS}/deno"* "${DIST}/" || true
-          cp -a "${TOOLS}/yt-dlp"* "${DIST}/" || true
-          cp -a "${TOOLS}/ffmpeg"* "${DIST}/" || true
-          cp -a "${TOOLS}/ffprobe"* "${DIST}/" || true
-          cp -a "${TOOLS}/phantomjs"* "${DIST}/" || true
-          chmod +x "${DIST}/deno" "${DIST}/yt-dlp" "${DIST}/ffmpeg" "${DIST}/ffprobe" "${DIST}/phantomjs" || true
+          $tools = "${{ env.TOOLS_DIR }}"
+          $dist = "${{ env.DIST_ROOT }}\${{ env.APP_NAME }}"
+          Copy-Item -Path (Join-Path $tools 'deno.exe') -Destination $dist -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path (Join-Path $tools 'yt-dlp.exe') -Destination $dist -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path (Join-Path $tools 'ffmpeg.exe') -Destination $dist -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path (Join-Path $tools 'ffprobe.exe') -Destination $dist -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path (Join-Path $tools 'phantomjs.exe') -Destination $dist -Force -ErrorAction SilentlyContinue
+        shell: pwsh
 
-      - name: Strip binaries where possible
-        shell: bash
+      - name: Smoke test (basic)
         run: |
-          if [[ "$RUNNER_OS" == "Linux" || "$RUNNER_OS" == "macOS" ]]; then
-            find "${{ env.DIST_ROOT }}/${{ env.APP_NAME }}" -type f -exec bash -c 'file "$1" | grep -E "ELF|Mach-O" >/dev/null && strip --strip-all "$1" || true' _ {} \;
-          else
-            echo "Skipping strip on Windows"
-          fi
+          $dist = "${{ env.DIST_ROOT }}\${{ env.APP_NAME }}"
+          $exe = Get-ChildItem -Path $dist -Recurse -Filter "${{ env.APP_NAME }}.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -ne $exe) {
+            & $exe.FullName --version
+          } else {
+            Write-Host "No main executable found for smoke test; continuing."
+          }
+        shell: pwsh
 
-      - name: Smoke test executable basic
-        shell: bash
+      - name: Package build (zip)
         run: |
-          DIST="${{ env.DIST_ROOT }}/${{ env.APP_NAME }}"
-          if [[ "$RUNNER_OS" == "macOS" || "$RUNNER_OS" == "Linux" ]]; then
-            EXEC=$(find "${DIST}" -type f -perm /111 -name "${{ env.APP_NAME }}" -print -quit || true)
-            if [[ -n "$EXEC" ]]; then
-              "$EXEC" --version || true
-            else
-              echo "No executable found for smoke test"
-            fi
-          else
-            echo "Skipping smoke test on Windows"
-          fi
-
-      - name: Package build
-        shell: bash
-        run: |
-          DIST="${{ env.DIST_ROOT }}/${{ env.APP_NAME }}"
-          cd "${{ env.DIST_ROOT }}"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            powershell -Command "Compress-Archive -Path '${{ env.DIST_ROOT }}\\${{ env.APP_NAME }}\\*' -DestinationPath '${{ github.workspace }}/YTGet-windows.zip' -CompressionLevel Optimal"
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            tar czf "${{ github.workspace }}/YTGet-linux.tar.gz" -C "${{ env.DIST_ROOT }}" "${{ env.APP_NAME }}"
-          else
-            tar czf "${{ github.workspace }}/YTGet-macOS-${{ matrix.arch }}.tar.gz" -C "${{ env.DIST_ROOT }}" "${{ env.APP_NAME }}"
-          fi
+          $dist = "${{ env.DIST_ROOT }}\${{ env.APP_NAME }}"
+          $zip = "${{ github.workspace }}\YTGet-windows.zip"
+          if (Test-Path $zip) { Remove-Item -Force $zip }
+          Compress-Archive -Path (Join-Path $dist '*') -DestinationPath $zip -Force -CompressionLevel Optimal
+        shell: pwsh
 
       - name: Generate SHA-256 checksum
-        shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            certutil -hashfile "${{ github.workspace }}/YTGet-windows.zip" SHA256 > "${{ github.workspace }}/YTGet-windows.sha256"
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            shasum -a 256 "${{ github.workspace }}/YTGet-linux.tar.gz" > "${{ github.workspace }}/YTGet-linux.sha256"
-          else
-            shasum -a 256 "${{ github.workspace }}/YTGet-macOS-${{ matrix.arch }}.tar.gz" > "${{ github.workspace }}/YTGet-macOS-${{ matrix.arch }}.sha256"
-          fi
+          $zip = "${{ github.workspace }}\YTGet-windows.zip"
+          certutil -hashfile $zip SHA256 | Out-File -FilePath "${{ github.workspace }}\YTGet-windows.sha256" -Encoding ascii
+        shell: pwsh
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          name: build-windows-x86_64
           path: |
-            YTGet-*.*
-            "${{ env.DIST_ROOT }}/**/*"
+            YTGet-windows.zip
+            YTGet-windows.sha256
+            dist/**
 
   release:
     name: Create GitHub Release
-    needs: build
+    needs: build-windows
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
