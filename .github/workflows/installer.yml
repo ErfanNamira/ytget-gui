@@ -96,10 +96,12 @@ jobs:
           "@ | Out-File -Encoding ASCII installer.iss
 
       - name: Build Installer
-        run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
       - name: Generate SHA-256 checksum
-        run: certutil -hashfile dist\YTGetSetup.exe SHA256 > dist\YTGetSetup.sha256
+        run: |
+          certutil -hashfile dist\YTGetSetup.exe SHA256 > dist\YTGetSetup.sha256
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
