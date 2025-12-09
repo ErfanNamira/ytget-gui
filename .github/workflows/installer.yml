@@ -1,0 +1,93 @@
+name: Build Windows Installer YTGet
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Download yt-dlp
+        run: |
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+
+      - name: Download ffmpeg & ffprobe
+        run: |
+          curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+          powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_dir"
+          copy (Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName .
+          copy (Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName .
+
+      - name: Download Deno
+        run: |
+          curl -L https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-pc-windows-msvc.zip -o deno.zip
+          powershell -Command "Expand-Archive -Path deno.zip -DestinationPath deno_dir"
+          copy deno_dir/deno.exe .
+
+      - name: Build application with PyInstaller
+        run: |
+          pyinstaller --noconfirm --onedir --windowed ^
+            --name "YTGet" ^
+            --icon "ytget_gui/icon.ico" ^
+            --clean --noupx ^
+            --version-file "version_info.txt" ^
+            --hidden-import "PySide6.*" ^
+            --hidden-import "requests" ^
+            --hidden-import "mutagen.*" ^
+            --hidden-import "PIL" ^
+            --add-data "ytget_gui;ytget_gui" ^
+            --add-data "ytget_gui/icon.ico;." ^
+            --add-data "yt-dlp.exe;." ^
+            --add-data "ffmpeg.exe;." ^
+            --add-data "ffprobe.exe;." ^
+            --add-data "deno.exe;." ^
+            ytget_gui/main.py
+
+      - name: Create Installer (Inno Setup)
+        run: |
+          curl -L https://jrsoftware.org/download.php/is.exe -o is.exe
+          .\is.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+          # Generate Inno Setup script dynamically
+          echo [Setup] > installer.iss
+          echo AppName=YTGet >> installer.iss
+          echo AppVersion=1.0.0 >> installer.iss
+          echo DefaultDirName={pf}\YTGet >> installer.iss
+          echo OutputDir=dist >> installer.iss
+          echo Compression=lzma2/ultra64 >> installer.iss
+          echo SolidCompression=yes >> installer.iss
+          echo [Files] >> installer.iss
+          echo Source: "dist\YTGet\*"; DestDir: "{app}"; Flags: recursesubdirs >> installer.iss
+          echo [Icons] >> installer.iss
+          echo Name: "{group}\YTGet"; Filename: "{app}\YTGet.exe" >> installer.iss
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Generate SHA-256 checksum
+        run: |
+          certutil -hashfile dist\YTGetSetup.exe SHA256 > dist\YTGetSetup.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTGet-Windows-Installer
+          path: |
+            dist\YTGetSetup.exe
+            dist\YTGetSetup.sha256
