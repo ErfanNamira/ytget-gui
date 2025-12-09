@@ -23,19 +23,18 @@ jobs:
           pip install pyinstaller
 
       - name: Build application with PyInstaller
-        shell: cmd
         run: |
-          pyinstaller --noconfirm --onedir --windowed ^
-            --name "YTGet" ^
-            --icon "ytget_gui/icon.ico" ^
-            --clean --noupx ^
-            --version-file "version_info.txt" ^
-            --hidden-import "PySide6.*" ^
-            --hidden-import "requests" ^
-            --hidden-import "mutagen.*" ^
-            --hidden-import "PIL" ^
-            --add-data "ytget_gui;ytget_gui" ^
-            --add-data "ytget_gui/icon.ico;." ^
+          pyinstaller --noconfirm --onedir --windowed `
+            --name "YTGet" `
+            --icon "ytget_gui/icon.ico" `
+            --clean --noupx `
+            --version-file "version_info.txt" `
+            --hidden-import "PySide6.*" `
+            --hidden-import "requests" `
+            --hidden-import "mutagen.*" `
+            --hidden-import "PIL" `
+            --add-data "ytget_gui;ytget_gui" `
+            --add-data "ytget_gui/icon.ico;." `
             ytget_gui/main.py
 
       - name: Install Inno Setup
@@ -43,45 +42,58 @@ jobs:
 
       - name: Create Inno Setup script
         run: |
-          echo [Setup] > installer.iss
-          echo AppName=YTGet >> installer.iss
-          echo AppVersion=1.0.0 >> installer.iss
-          echo DefaultDirName={pf}\YTGet >> installer.iss
-          echo OutputDir=dist >> installer.iss
-          echo OutputBaseFilename=YTGetSetup >> installer.iss
-          echo Compression=lzma2/ultra64 >> installer.iss
-          echo SolidCompression=yes >> installer.iss
-          echo [Files] >> installer.iss
-          echo Source: "dist\YTGet\*"; DestDir: "{app}"; Flags: recursesubdirs >> installer.iss
-          echo [Icons] >> installer.iss
-          echo Name: "{group}\YTGet"; Filename: "{app}\YTGet.exe" >> installer.iss
-          echo [Run] >> installer.iss
-          echo Filename: "{app}\YTGet.exe"; Description: "Launch YTGet"; Flags: nowait postinstall skipifsilent >> installer.iss
-          echo [Code] >> installer.iss
-          echo procedure DownloadFile(URL, Dest: string); >> installer.iss
-          echo var >> installer.iss
-          echo   WinHttpReq: Variant; >> installer.iss
-          echo   Stream: TFileStream; >> installer.iss
-          echo begin >> installer.iss
-          echo   WinHttpReq := CreateOleObject('MSXML2.XMLHTTP'); >> installer.iss
-          echo   WinHttpReq.Open('GET', URL, False); >> installer.iss
-          echo   WinHttpReq.Send; >> installer.iss
-          echo   if WinHttpReq.Status = 200 then begin >> installer.iss
-          echo     Stream := TFileStream.Create(Dest, fmCreate); >> installer.iss
-          echo     Stream.WriteBuffer(WinHttpReq.ResponseBody[0], Length(WinHttpReq.ResponseBody)); >> installer.iss
-          echo     Stream.Free; >> installer.iss
-          echo   end; >> installer.iss
-          echo end; >> installer.iss
-          echo procedure CurStepChanged(CurStep: TSetupStep); >> installer.iss
-          echo begin >> installer.iss
-          echo   if CurStep = ssPostInstall then begin >> installer.iss
-          echo     DownloadFile('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe', ExpandConstant('{app}\yt-dlp.exe')); >> installer.iss
-          echo     DownloadFile('https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip', ExpandConstant('{tmp}\ffmpeg.zip')); >> installer.iss
-          echo     // TODO: unzip ffmpeg.zip and copy ffmpeg.exe + ffprobe.exe into {app} >> installer.iss
-          echo     DownloadFile('https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-pc-windows-msvc.zip', ExpandConstant('{tmp}\deno.zip')); >> installer.iss
-          echo     // TODO: unzip deno.zip and copy deno.exe into {app} >> installer.iss
-          echo   end; >> installer.iss
-          echo end; >> installer.iss
+          @"
+          [Setup]
+          AppName=YTGet
+          AppVersion=1.0.0
+          DefaultDirName={pf}\YTGet
+          OutputDir=dist
+          OutputBaseFilename=YTGetSetup
+          Compression=lzma2/ultra64
+          SolidCompression=yes
+
+          [Files]
+          Source: "dist\YTGet\*"; DestDir: "{app}"; Flags: recursesubdirs
+
+          [Icons]
+          Name: "{group}\YTGet"; Filename: "{app}\YTGet.exe"
+
+          [Run]
+          Filename: "{app}\YTGet.exe"; Description: "Launch YTGet"; Flags: nowait postinstall skipifsilent
+
+          [Code]
+          procedure DownloadFile(URL, Dest: string);
+          var
+            WinHttpReq: Variant;
+            Stream: TFileStream;
+          begin
+            WinHttpReq := CreateOleObject('MSXML2.XMLHTTP');
+            WinHttpReq.Open('GET', URL, False);
+            WinHttpReq.Send;
+            if WinHttpReq.Status = 200 then begin
+              Stream := TFileStream.Create(Dest, fmCreate);
+              Stream.WriteBuffer(WinHttpReq.ResponseBody[0], Length(WinHttpReq.ResponseBody));
+              Stream.Free;
+            end;
+          end;
+
+          procedure CurStepChanged(CurStep: TSetupStep);
+          begin
+            if CurStep = ssPostInstall then begin
+              // yt-dlp direct exe
+              DownloadFile('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe',
+                           ExpandConstant('{app}\yt-dlp.exe'));
+
+              // ffmpeg zip (needs unzip logic)
+              DownloadFile('https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
+                           ExpandConstant('{tmp}\ffmpeg.zip'));
+
+              // deno zip (needs unzip logic)
+              DownloadFile('https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-pc-windows-msvc.zip',
+                           ExpandConstant('{tmp}\deno.zip'));
+            end;
+          end;
+          "@ | Out-File -Encoding ASCII installer.iss
 
       - name: Build Installer
         run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
