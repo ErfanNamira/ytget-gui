@@ -19,19 +19,19 @@ jobs:
         include:
           - os: windows-latest
             arch: x86_64
-            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-pc-windows-msvc.zip
+            deno_url: https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip
 
           - os: ubuntu-latest
             arch: x86_64
-            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-unknown-linux-gnu.zip
+            deno_url: https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip
 
           - os: macos-latest
             arch: arm64
-            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-aarch64-apple-darwin.zip
+            deno_url: https://github.com/denoland/deno/releases/latest/download/deno-aarch64-apple-darwin.zip
 
           - os: macos-15
             arch: x86_64
-            deno_url: https://github.com/denoland/deno/releases/download/v2.5.6/deno-x86_64-apple-darwin.zip
+            deno_url: https://github.com/denoland/deno/releases/latest/download/deno-x86_64-apple-darwin.zip
 
     steps:
       - name: Checkout repository
