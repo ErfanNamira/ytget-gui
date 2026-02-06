@@ -19,7 +19,7 @@ from ytget_gui.utils.paths import (
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.5.2"
+    VERSION: str = "2.5.3"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
