@@ -1,3 +1,6 @@
+### v 2.5.3.0 **Dependency Updates**
+- **Updated runtimes**: Deno upgraded to v2.6.8 and yt-dlp upgraded to 2026.02.04.
+
 ### v 2.5.2.0 **Deno JavaScript Runtime Integration**  
 - **Automatic Deno detection**: the app now detects a bundled or configured `deno` binary and exposes its availability in the startup console.  
 - **yt-dlp uses local Deno**: when present, `yt-dlp` is invoked with `--js-runtimes deno:/path/to/deno` so JS‑based extractors run against the local Deno runtime.  
