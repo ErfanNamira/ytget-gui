@@ -310,6 +310,20 @@ class DownloadWorker(QObject):
     def is_short_video(url: str) -> bool:
         return "youtube.com/shorts/" in (url or "")
 
+    def _is_hls_preferred_site(self, url: str) -> bool:
+        """
+        Return True when HLS should be preferred for this URL.
+        Controlled by settings.PREFER_HLS and settings.HLS_PREFERRED_DOMAINS.
+        """
+        try:
+            if not getattr(self.settings, "PREFER_HLS", False):
+                return False
+            u = (url or "").lower()
+            domains = getattr(self.settings, "HLS_PREFERRED_DOMAINS", []) or []
+            return any(d in u for d in domains)
+        except Exception:
+            return False
+
     def _is_audio_download(self) -> bool:
         code = self.item.get("format_code", "")
         return code in ("bestaudio", "playlist_mp3", "youtube_music", "audio_flac")
@@ -428,7 +442,49 @@ class DownloadWorker(QObject):
             preferred = (getattr(s, "VIDEO_FORMAT", "").lstrip(".")) or "mkv"
             if preferred not in {"mkv", "mp4", "webm"}:
                 preferred = "mkv"
-            cmd.extend(["-f", format_code or "best", "--merge-output-format", preferred])
+
+            url = it.get("url", "") or ""
+            chosen_format: Optional[str] = None
+
+            # If user explicitly selected an hls- format code, use it directly
+            if isinstance(format_code, str) and format_code.startswith("hls-"):
+                chosen_format = format_code
+
+            try:
+                if not chosen_format and self._is_hls_preferred_site(url):
+                    # Respect height-based codes like "1080p" while preferring HLS
+                    if isinstance(format_code, str) and format_code.endswith("p"):
+                        try:
+                            height = int(format_code.rstrip("p"))
+                            chosen_format = (
+                                f"bestvideo[protocol^=m3u8][height<={height}]+bestaudio/"
+                                f"best[protocol^=m3u8][height<={height}]/best[protocol^=m3u8]/best"
+                            )
+                        except Exception:
+                            chosen_format = "bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/best"
+                    else:
+                        chosen_format = "bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/best"
+
+                    # Prefer ffmpeg for HLS and use mpegts container for compatibility
+                    cmd.append("--hls-prefer-native")
+                    cmd.append("--hls-use-mpegts")
+
+                    # Add common headers that some HLS endpoints require
+                    # Use site root as Referer; keep headers limited and only for HLS-preferred domains
+                    try:
+                        host = re.sub(r"^https?://", "", url.split("/")[2]) if "/" in url else ""
+                        referer = f"https://{host}" if host else "https://example.com"
+                    except Exception:
+                        referer = "https://example.com"
+                    cmd.extend(["--add-header", f"Referer: {referer}"])
+                    cmd.extend(["--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)"])
+            except Exception:
+                chosen_format = None
+
+            if not chosen_format:
+                chosen_format = format_code or "best"
+
+            cmd.extend(["-f", chosen_format, "--merge-output-format", preferred])
             if getattr(s, "ADD_METADATA", False):
                 cmd.append("--add-metadata")
 
