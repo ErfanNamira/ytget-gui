@@ -1,3 +1,6 @@
+### v 2.5.4.0 **Unreleased**
+- **Prefer HTTP Live Streaming (HLS)**: Prefer HLS/m3u8 streams on configured domains to avoid 404s.
+
 ### v 2.5.3.0 **Dependency Updates**
 - **Updated runtimes**: Deno upgraded to v2.6.8 and yt-dlp upgraded to 2026.02.04.
 
