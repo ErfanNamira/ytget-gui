@@ -19,7 +19,7 @@ from ytget_gui.utils.paths import (
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.5.3"
+    VERSION: str = "2.5.4"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
@@ -103,6 +103,9 @@ class AppSettings:
     CONVERT_THUMBNAILS: bool = True
     THUMBNAIL_FORMAT: str = "png"
     EMBED_THUMBNAIL: bool = True
+    # HLS preference controls
+    PREFER_HLS: bool = True
+    HLS_PREFERRED_DOMAINS: List[str] = field(default_factory=lambda: ["pornhub.com"])
 
     def __post_init__(self):
         # Prepare paths
@@ -245,6 +248,8 @@ class AppSettings:
             "DENO_PATH": str(self.DENO_PATH),            
             "COOKIES_PATH": str(self.COOKIES_PATH),
             "ARCHIVE_PATH": str(self.ARCHIVE_PATH),
+            "PREFER_HLS": self.PREFER_HLS,
+            "HLS_PREFERRED_DOMAINS": self.HLS_PREFERRED_DOMAINS,
         }
         with open(self.CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
@@ -287,6 +292,8 @@ class AppSettings:
             self.CONVERT_THUMBNAILS   = config.get("CONVERT_THUMBNAILS", self.CONVERT_THUMBNAILS)
             self.THUMBNAIL_FORMAT     = config.get("THUMBNAIL_FORMAT", self.THUMBNAIL_FORMAT)
             self.EMBED_THUMBNAIL      = config.get("EMBED_THUMBNAIL", self.EMBED_THUMBNAIL)
+            self.PREFER_HLS = config.get("PREFER_HLS", self.PREFER_HLS)
+            self.HLS_PREFERRED_DOMAINS = config.get("HLS_PREFERRED_DOMAINS", self.HLS_PREFERRED_DOMAINS)
 
             # Override download dir if set
             dl_dir = config.get("DOWNLOADS_DIR")
