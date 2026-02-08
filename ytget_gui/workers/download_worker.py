@@ -105,7 +105,7 @@ class DownloadWorker(QObject):
             env = self._build_process_env(cmd)
 
             # startup log and immediate flush so GUI sees it fast
-            self._add_log(f"🚀 Starting Download for: {self._short(self.item.get('title',''))}\n", AppStyles.INFO_COLOR)
+            self.log.emit(f"\nStarting Download for: {(self.item.get('title', 'Unknown'))}", AppStyles.SUCCESS_COLOR)
             self._flush_logs_now()
 
             # Setup QProcess
@@ -324,9 +324,16 @@ class DownloadWorker(QObject):
         except Exception:
             return False
 
-    def _is_audio_download(self) -> bool:
-        code = self.item.get("format_code", "")
-        return code in ("bestaudio", "playlist_mp3", "youtube_music", "audio_flac")
+    def _is_audio_download(self, code: Optional[str] = None) -> bool:
+        """
+        Return True if the provided format code (or the item's format_code if None)
+        corresponds to an audio-only selection.
+        """
+        try:
+            code = code if code is not None else self.item.get("format_code", "")
+            return str(code) in ("bestaudio", "playlist_mp3", "youtube_music", "audio_flac")
+        except Exception:
+            return False
 
     def _should_force_title(self, is_playlist: bool) -> bool:
         s = self.settings
@@ -364,9 +371,34 @@ class DownloadWorker(QObject):
         ]
 
         format_code = it.get("format_code", "")
-        is_playlist = "list=" in it.get("url", "") or format_code in ("playlist_mp3", "youtube_music")
-        is_audio = self._is_audio_download()
-        is_flac = (format_code == "audio_flac")
+        # Normalize format_code so it is a valid yt-dlp format selector string.
+        # Accepts three common inputs from the UI:
+        # 1) preset label keys from AppSettings.RESOLUTIONS (map to their value)
+        # 2) numeric height tokens like "1080p" (convert to format chain)
+        # 3) already-valid format strings
+        try:
+            if isinstance(format_code, str) and format_code in getattr(s, "RESOLUTIONS", {}):
+                # User selected a preset label from the UI; map to the actual selector
+                format_code = s.RESOLUTIONS.get(format_code, format_code)
+            else:
+                # If user provided a simple height token like "1080p", convert it
+                m = re.match(r"^(\d+)p$", str(format_code).strip())
+                if m:
+                    try:
+                        height = int(m.group(1))
+                        format_code = s.get_format_for_resolution(height)
+                    except Exception:
+                        # leave format_code unchanged on error
+                        pass
+        except Exception:
+            # keep original format_code if anything goes wrong
+            pass        
+
+        # Determine playlist/audio flags from the normalized format_code and URL
+        is_playlist = "list=" in (it.get("url", "") or "") or format_code in ("playlist_mp3", "youtube_music")
+        # Use the normalized format_code when deciding audio vs video
+        is_audio = self._is_audio_download(format_code)
+        is_flac = (isinstance(format_code, str) and format_code == "audio_flac")
 
         if s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0:
             cmd.extend(["--cookies", str(s.COOKIES_PATH)])
@@ -621,7 +653,7 @@ class DownloadWorker(QObject):
             elif color == cur_color:
                 cur_text_parts.append(text)
             else:
-                combined = "".join(cur_text_parts)
+                combined = "\n".join(cur_text_parts)
                 size = len(combined.encode("utf-8"))
                 if emitted_bytes + size > self._max_emit_bytes or emitted_entries >= self._max_entries_per_flush:
                     # reached cap, push what we have and stop further emits this flush
@@ -655,7 +687,7 @@ class DownloadWorker(QObject):
 
         # emit any final coalesced chunk if we haven't hit caps
         if cur_color and cur_text_parts and emitted_entries < self._max_entries_per_flush and emitted_bytes < self._max_emit_bytes:
-            combined = "".join(cur_text_parts)
+            combined = "\n".join(cur_text_parts)
             size = len(combined.encode("utf-8"))
             if emitted_bytes + size <= self._max_emit_bytes:
                 try:
