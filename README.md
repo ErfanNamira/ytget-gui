@@ -14,6 +14,17 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 
 ---
 
+## 🖼 Screenshots
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.4%20(1).JPG" width="220" />
+  <img src="https://raw.githubusercontent.com/ErfanNamira/ytget-gui/refs/heads/main/Images/2.6.0.JPG" width="220" />
+  <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.4%20(3).JPG" width="220" />
+  <img src="https://raw.githubusercontent.com/ErfanNamira/ytget/refs/heads/main/Images/YTGet2.4.3.JPG" width="220" />
+</p>
+
+---
+
 ## 📊 Repository Stats
 
 ### 🌟 Community
@@ -206,16 +217,6 @@ sudo apt update && sudo apt install ffmpeg
 - 🗃 **Channel Organization** — Auto-sort videos into uploader folders.  
 - ⚡ **Performance Enhancements** — Smart rate limiting and retry logic.
 
----
-
-## 🖼 Screenshots
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.4%20(1).JPG" width="220" />
-  <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.4%20(2).JPG" width="220" />
-  <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.4%20(3).JPG" width="220" />
-  <img src="https://raw.githubusercontent.com/ErfanNamira/ytget/refs/heads/main/Images/YTGet2.4.3.JPG" width="220" />
-</p>
 
 ---
 
