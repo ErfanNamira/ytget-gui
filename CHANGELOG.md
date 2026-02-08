@@ -1,4 +1,33 @@
-### v 2.5.4.0 **Unreleased**
+### v 2.6.0 **Thumbnail Reliability, UI Polish & Performance**
+- **Fixed thumbnail fetching**
+  - Thumbnails are now correctly fetched and displayed for YouTube videos and playlists.
+  - Implemented **canonical URL normalization** for metadata and thumbnail extraction.
+    - URLs containing `v=<video_id>` are converted to  
+      `https://www.youtube.com/watch?v=<video_id>`
+    - Prevents yt-dlp from misinterpreting playlist parameters such as  
+      `&list=...` and `&start_radio=1`.
+  - Greatly improves reliability for mixed playlist/watch URLs.
+
+- **yt-dlp metadata pipeline improvements**
+  - Metadata extraction and thumbnail writing now both use the canonicalized URL.
+  - Cleaner error handling and reduced log noise.
+
+- **UI improvement – automatic URL elision in QueueCard**
+  - Long URLs are middle-elided using `QFontMetrics.elidedText`.
+  - Prevents horizontal scrollbars and layout breakage.
+  - Full URLs are preserved in a tooltip for easy copying.
+
+- **Stability fix – prevent crash caused by invalid UTF-8 output**
+  - Fixed crashes caused by malformed UTF-8 bytes in `yt-dlp` output.
+  - Replaced all `subprocess.run(..., text=True, encoding="utf-8")` calls with binary mode (`text=False`) to avoid premature decoding in Python’s reader thread.
+
+- **Performance – log buffering & throttling**
+  - Implemented high-performance log buffering in `DownloadWorker` to prevent UI freezes during high-frequency output.
+  - Added configurable throttles:
+    - `_log_flush_ms` (default: 300 ms)
+    - `status_throttle_ms` (default: 500 ms)
+  - Introduced safety caps (`_max_entries_per_flush`, `_max_emit_bytes`) to keep the log window responsive during massive output bursts.
+    
 - **Prefer HTTP Live Streaming (HLS)**: Prefer HLS/m3u8 streams on configured domains to avoid 404s.
 
 ### v 2.5.3.0 **Dependency Updates**
