@@ -55,6 +55,7 @@ from ytget_gui.workers.download_worker import DownloadWorker
 from ytget_gui.workers.cover_crop_worker import CoverCropWorker
 from ytget_gui.widgets.queue_card import QueueCard
 from ytget_gui.workers.title_fetch_manager import TitleFetchQueue
+from ytget_gui.workers.thumb_fetcher import ThumbFetcher
 
 def short(text: str, n: int = 50) -> str:
     return text[:n] + "..." if len(text) > n else text
@@ -369,7 +370,7 @@ class MainWindow(QMainWindow):
         # Thumbnail cache folder and async jobs
         self.thumb_cache_dir: Path = self.settings.BASE_DIR / "cache" / "thumbs"
         self.thumb_cache_dir.mkdir(parents=True, exist_ok=True)
-        self._thumb_jobs: Dict[str, QThread] = {}
+        self._thumb_jobs: Dict[str, Tuple[QThread, object]] = {}
 
         self.queue: List[Dict[str, Any]] = []
         self.current_download_item: Optional[Dict[str, Any]] = None
@@ -433,6 +434,101 @@ class MainWindow(QMainWindow):
         self._load_permanent_queue()
         self._restore_window()
         self._log_startup()
+
+    def log(self, text: str, color: str = AppStyles.INFO_COLOR, level: str = "Info"):
+        """
+        Normalize and store log entries. 
+        """
+        if text is None:
+            return
+
+        # 1. Split by actual newlines to handle multi-line messages
+        raw_lines = str(text).splitlines()
+        
+        for raw_line in raw_lines:
+            # Clean up whitespace
+            s = " ".join(raw_line.split()).strip()
+            if not s:
+                continue
+
+            # 2. Icon Logic - MORE SPECIFIC CHECKS
+            prefix = ""
+            
+            # CHECK 1: The Rocket - Only for the main start line
+            clean_check = s.replace("🚀", "").strip()
+            if clean_check.startswith("Starting Download for:"):
+                prefix = "🚀 "
+            
+            # CHECK 2: Standard Status Icons
+            elif level and str(level).lower() == "warning":
+                prefix = "⚠️ "
+            elif level and str(level).lower() == "error":
+                prefix = "❌ "
+            elif level and str(level).lower() in ["success", "process"]:
+                # Only add checkmark if it's not already the "Starting Download" line
+                prefix = "✅ "
+
+            # CHECK 3: Action Icons (Merging/Deleting)
+            elif "merger" in s.lower() or "merging" in s.lower():
+                prefix = "📦 "
+            elif "deleting" in s.lower():
+                prefix = "🧹 "
+
+            # 3. Construct Final String
+            # Remove any existing rocket from 's' so we don't double it up
+            final_content = s.replace("🚀", "").strip()
+            final_text = f"{prefix}{final_content}".strip()
+            
+            final_color = color if color else AppStyles.INFO_COLOR
+            final_level = level if level else "Info"
+
+            # 4. Store in buffer
+            if not hasattr(self, "_log_entries"):
+                self._log_entries = []
+            self._log_entries.append((final_text, final_color, final_level))
+
+            # Buffer limit
+            max_lines = getattr(self.settings, "MAX_LOG_LINES", 500)
+            if len(self._log_entries) > max_lines:
+                self._log_entries = self._log_entries[-max_lines:]
+
+            # 5. UI Render
+            filt_text = self.filter_combo.currentText() if hasattr(self, "filter_combo") else "All"
+            if filt_text == "All":
+                self._append_to_console(final_text, final_color)
+            else:
+                self._render_log()
+
+    def _render_log(self):
+        """Full buffer re-render (used for filtering)."""
+        try:
+            if not hasattr(self, "_log_entries") or not self.log_output:
+                return
+            filt_text = self.filter_combo.currentText() if hasattr(self, "filter_combo") else "All"
+            
+            self.log_output.blockSignals(True)
+            self.log_output.clear()
+            for text, color, level in self._log_entries:
+                if filt_text != "All" and level != filt_text:
+                    continue
+                self._append_to_console(text, color)
+            self.log_output.blockSignals(False)
+            self.log_output.moveCursor(QTextCursor.End)
+        except Exception:
+            pass
+
+    def _append_to_console(self, text: str, color: str = AppStyles.INFO_COLOR):
+        """Appends exactly one line safely."""
+        try:
+            if not self.log_output: return
+            self.log_output.moveCursor(QTextCursor.End)
+            self.log_output.setTextColor(QColor(color))
+
+            self.log_output.append(text)
+            self.log_output.setTextColor(QColor(AppStyles.INFO_COLOR)) # Reset
+            self.log_output.ensureCursorVisible()
+        except Exception:
+            pass
 
     # ---------- UI scaffold
 
@@ -826,11 +922,276 @@ class MainWindow(QMainWindow):
         self.enqueue_titles.connect(self.title_queue.enqueue_many, Qt.QueuedConnection)
 
         # Results to UI (run in GUI thread)
-        self.title_queue.metadata_fetched.connect(self._on_metadata_fetched)
+        self.title_queue.metadata_fetched.connect(self._on_metadata_fetched, Qt.QueuedConnection)
         self.title_queue.error.connect(self._on_title_error)
         self.title_queue.started_one.connect(self._on_title_started)
 
         self.title_queue_thread.start()
+
+    @Slot(str, str, str, str, bool)
+    def _on_metadata_fetched(self, url: str, title: str, video_id: str, thumb_url: str, is_playlist: bool):
+        """
+        Called from the TitleFetchQueue worker thread (signal marshalled to GUI thread).
+        Ensure a QueueCard exists for this URL, persist metadata, and only then start thumbnail fetch.
+        """
+        try:
+            key = url or ""
+        except Exception:
+            key = url or ""
+
+        # Find existing list item for this URL (if added earlier)
+        list_item = None
+        try:
+            for i in range(self.queue_list.count()):
+                it = self.queue_list.item(i)
+                data = it.data(Qt.UserRole)
+                if data and isinstance(data, dict) and data.get("url") == key:
+                    list_item = it
+                    break
+        except Exception:
+            list_item = None
+        
+        # Get the readable label (e.g. "YouTube 1080p")
+        current_label = self.format_box.currentText()
+        # Translate it to the yt-dlp format string using settings (default to 'best' if not found)
+        chosen_format = self.settings.RESOLUTIONS.get(current_label, "best")
+        # --------------------------------------------------
+
+        # If no list item exists, create one and append to queue_list and in-memory queue
+        if list_item is None:
+            try:
+                qitem = {
+                    "url": key,
+                    "title": title,
+                    "video_id": video_id,
+                    "thumbnail_url": thumb_url,
+                    # --- FIX: Save the format code here ---
+                    "format_code": chosen_format, 
+                    "status": "Pending",
+                    "progress": 0,
+                    "thumb_path": "",
+                    "is_playlist": bool(is_playlist),
+                }
+                self.queue.append(qitem)
+
+                lw_item = QListWidgetItem()
+                lw_item.setSizeHint(QSize(0, 110))
+                lw_item.setData(Qt.UserRole, qitem)
+                
+                # Create the card widget
+                card = QueueCard(title=title, url=key, status="Pending", progress=0, show_thumbnail=True)
+                card.set_context_actions([
+                    ("Open in browser", lambda u=key: webbrowser.open(u)),
+                    ("Copy URL", lambda u=key: QGuiApplication.clipboard().setText(u)),
+                ])
+                
+                self.queue_list.addItem(lw_item)
+                self.queue_list.setItemWidget(lw_item, card)
+                list_item = lw_item
+
+                try:
+                    self.count_chip.setText(str(self.queue_list.count()))
+                    self.queue_empty_state.setVisible(self.queue_list.count() == 0)
+                except Exception:
+                    pass
+
+                # Keep the user-facing confirmation that an item was added
+                self.log(f"✅ Added to queue: {short(title, 60)}", AppStyles.INFO_COLOR, "Info")
+                try:
+                    self._save_queue_permanent()
+                except Exception:
+                    pass
+            except Exception as e:
+                # Surface only a warning if card creation fails
+                self.log(f"Failed to create queue card for {key}: {e}", AppStyles.WARNING_COLOR, "Warning")
+                return
+
+        # Update stored metadata on the list item and in-memory queue
+        try:
+            data = list_item.data(Qt.UserRole) or {}
+            if isinstance(data, dict):
+                data.update({"title": title, "video_id": video_id, "thumbnail_url": thumb_url})
+                list_item.setData(Qt.UserRole, data)
+                
+                for q in self.queue:
+                    if q.get("url") == key:
+                        q.update({"title": title, "video_id": video_id, "thumbnail_url": thumb_url})
+                        break
+        except Exception:
+            pass
+
+        # If a cached thumb_path already exists in data, set it immediately on the card
+        try:
+            data = list_item.data(Qt.UserRole) or {}
+            thumb_path = data.get("thumb_path") if isinstance(data, dict) else None
+            card_widget = self.queue_list.itemWidget(list_item)
+            if thumb_path and card_widget:
+                try:
+                    card_widget.set_thumbnail_path(str(thumb_path))
+                    return
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Refresh UI and state (preserve original behavior)
+        try:
+            self._refresh_queue_list()
+        except Exception:
+            pass
+        try:
+            self._update_button_states()
+        except Exception:
+            pass
+        try:
+            self._update_global_progress_bar()
+        except Exception:
+            pass
+
+        # No cached thumbnail: start thumb job now that the card exists
+        try:
+            if key and key not in self._thumb_jobs:
+                # start job without extra noisy logging
+                self._start_thumb_job(key)
+            else:
+                # no-op if already running or key empty
+                pass
+        except Exception:
+            # suppressed: thumbnail job start failed (non-fatal)
+            pass
+
+    # --- Thumbnail job manager -------------------------------------------------
+    def _start_thumb_job(self, url: str):
+        if not url or url in self._thumb_jobs:
+            return
+
+        worker = ThumbFetcher(url, self.thumb_cache_dir, self.settings, timeout=60)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+
+        # Start worker when thread starts
+        thread.started.connect(worker.run)
+
+        # Connect signals to GUI handlers
+        # worker.started.connect(lambda u: self.log(f"Thumb started: {u}"))
+        worker.finished.connect(self._on_thumb_finished)
+        worker.error.connect(self._on_thumb_error)
+
+        # Cleanup when finished
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        # Keep strong reference to both thread and worker so GC doesn't collect them
+        self._thumb_jobs[url] = (thread, worker)
+
+        thread.start()
+
+    @Slot(str, str)
+    def _on_thumb_finished(self, url: str, path: str):
+        # Remove thread+worker reference
+        try:
+            t_w = self._thumb_jobs.pop(url, None)
+            if t_w:
+                try:
+                    # t_w may be (thread, worker)
+                    if isinstance(t_w, tuple) or isinstance(t_w, list):
+                        thread_ref = t_w[0]
+                    else:
+                        thread_ref = t_w
+                    if getattr(thread_ref, "isRunning", None) and thread_ref.isRunning():
+                        try:
+                            thread_ref.quit()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Persist thumb_path into the queue item so future rebuilds reuse it
+        try:
+            for i in range(self.queue_list.count()):
+                lw_item = self.queue_list.item(i)
+                data = lw_item.data(Qt.UserRole)
+                if data and isinstance(data, dict) and data.get("url") == url:
+                    data["thumb_path"] = path
+                    lw_item.setData(Qt.UserRole, data)
+                    # Also update in-memory queue list if you keep a separate list
+                    try:
+                        for q in self.queue:
+                            if q.get("url") == url:
+                                q["thumb_path"] = path
+                                break
+                    except Exception:
+                        pass
+                    break
+        except Exception:
+            pass
+
+        if not path:
+            self.log(f"Thumbnail fetch finished for {url} but no path returned", AppStyles.WARNING_COLOR, "Warning")
+            return
+
+        p = Path(path)
+        try:
+            if not p.exists() or p.stat().st_size == 0:
+                self.log(f"Thumbnail file missing or empty: {path}", AppStyles.WARNING_COLOR, "Warning")
+                return
+        except Exception as e:
+            self.log(f"Error checking thumbnail file {path}: {e}", AppStyles.WARNING_COLOR, "Warning")
+            return
+
+        pix = QPixmap(str(p))
+        if pix.isNull():
+            self.log(f"Failed to load pixmap from {path}", AppStyles.WARNING_COLOR, "Warning")
+            return
+
+        card = self._find_card_by_url(url)
+        if card:
+            try:
+                card.set_thumbnail_pixmap(pix)
+                # self.log(f"Thumbnail set for {url}", AppStyles.INFO_COLOR, "Info")
+            except Exception as e:
+                self.log(f"Failed to set thumbnail on card for {url}: {e}", AppStyles.WARNING_COLOR, "Warning")
+
+    @Slot(str, str)
+    def _on_thumb_error(self, url: str, message: str):
+        # Remove thread+worker reference
+        try:
+            t_w = self._thumb_jobs.pop(url, None)
+            if t_w:
+                try:
+                    if isinstance(t_w, tuple) or isinstance(t_w, list):
+                        thread_ref = t_w[0]
+                    else:
+                        thread_ref = t_w
+                    if getattr(thread_ref, "isRunning", None) and thread_ref.isRunning():
+                        try:
+                            thread_ref.quit()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # self.log(f"Thumbnail error for {url}: {message}", AppStyles.WARNING_COLOR, "Warning")
+
+    def _find_card_by_url(self, url: str):
+        # Iterate queue_list items and return the QueueCard whose .url matches
+        for i in range(self.queue_list.count()):
+            item = self.queue_list.item(i)
+            widget = self.queue_list.itemWidget(item)
+            if not widget:
+                continue
+            try:
+                card_url = getattr(widget, "url", None)
+                if card_url and card_url == url:
+                    return widget
+            except Exception:
+                continue
+        return None
 
     # ---------- Startup / Logging with filter ----------
 
@@ -916,85 +1277,6 @@ class MainWindow(QMainWindow):
         self._log_entries.clear()
         self._render_log()
 
-    def _render_log(self):
-        target = self.filter_combo.currentText() if self.filter_combo else "All"
-        self.log_output.clear()
-        for text, color, level in self._log_entries:
-            if target == "All" or level == target:
-                self._append_to_console(text, color)
-
-    def _append_to_console(self, text: str, color: str):
-        self.log_output.setTextColor(QPalette().color(QPalette.Text))  # reset
-        cursor = self.log_output.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        fmt = self.log_output.currentCharFormat()
-        fmt.setForeground(QColor(color))
-        self.log_output.setCurrentCharFormat(fmt)
-        cursor.insertText(text)
-        self.log_output.ensureCursorVisible()
-
-    def log(self, text: str, color: str = AppStyles.TEXT_COLOR, level: str = "Info"):
-        # Normalize level based on color if caller didn't specify
-        if level == "Info":
-            if color == getattr(AppStyles, "ERROR_COLOR", "#ff6b6b"):
-                level = "Error"
-            elif color == getattr(AppStyles, "WARNING_COLOR", "#ffc857"):
-                level = "Warning"
-            else:
-                level = "Info"
-
-        # Append new entry
-        self._log_entries.append((text, color, level))
-
-        # Trim oldest entries to keep at most MAX_LOG_LINES
-        if len(self._log_entries) > MAX_LOG_LINES:
-            excess = len(self._log_entries) - MAX_LOG_LINES
-            # drop 'excess' earliest entries
-            if excess >= len(self._log_entries):
-                self._log_entries = []
-            else:
-                self._log_entries = self._log_entries[excess:]
-
-        # Fast path: if filter is All, append only the last entry to the widget
-        try:
-            current_filter = self.filter_combo.currentText() if self.filter_combo else "All"
-        except Exception:
-            current_filter = "All"
-
-        if current_filter == "All":
-            # Append last entry directly to console widget
-            last_text, last_color, _ = self._log_entries[-1]
-            self._append_to_console(last_text, last_color)
-
-            # Keep QTextEdit document roughly in sync with MAX_LOG_LINES:
-            # remove oldest blocks if the document grew beyond MAX_LOG_LINES.
-            doc = self.log_output.document()
-            try:
-                # blockCount counts text blocks (rough proxy for lines)
-                if doc.blockCount() > MAX_LOG_LINES:
-                    # remove the difference by deleting from the start
-                    remove_count = doc.blockCount() - MAX_LOG_LINES
-                    cursor = self.log_output.textCursor()
-                    cursor.movePosition(QTextCursor.MoveOperation.Start)
-                    # Select and remove blocks one by one
-                    for _ in range(remove_count):
-                        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-                        cursor.removeSelectedText()
-                        # remove the remaining newline char
-                        try:
-                            cursor.deleteChar()
-                        except Exception:
-                            pass
-                    # ensure cursor is at end so appended text stays visible
-                    cursor.movePosition(QTextCursor.MoveOperation.End)
-                    self.log_output.setTextCursor(cursor)
-            except Exception:
-                # If anything goes wrong here, fall back to full re-render
-                self._render_log()
-        else:
-            # Filtered view: re-render from trimmed in-memory list
-            self._render_log()
-
     def _paste_into_url(self):
         text = QGuiApplication.clipboard().text()
         if text:
@@ -1078,33 +1360,9 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_title_started(self, url: str):
         self.log(f"🔎 Fetching title for: {url[:60]}...\n", AppStyles.INFO_COLOR, "Info")
-
-    def _on_metadata_fetched(self, url: str, title: str, video_id: str, thumb_url: str, is_playlist: bool):
-        fmt_text = self.format_box.currentText()
-        item = {
-            "url": url,
-            "title": title,
-            "format_code": self.settings.RESOLUTIONS[fmt_text],
-            "status": "Pending",
-            "progress": 0,
-            "video_id": video_id or "",
-            "thumbnail_url": thumb_url or "",
-            "thumb_path": "",
-            "is_playlist": bool(is_playlist),
-        }
-        self.queue.append(item)
-        self._save_queue_permanent()
-        self.log(f"✅ Added to queue: {short(title)}\n", AppStyles.SUCCESS_COLOR, "Info")
-
-        # Kick off thumbnail
-        self._ensure_thumbnail(item)
-
-        self._refresh_queue_list()
-        self._update_button_states()
-        self._update_global_progress_bar()
-
+        
     def _on_title_fetched(self, url: str, title: str):
-        # Legacy path (no id/thumbnail provided)
+        # Legacy path (no id/thumbnail)
         fmt_text = self.format_box.currentText()
         item = {
             "url": url,
@@ -1130,75 +1388,128 @@ class MainWindow(QMainWindow):
         self.btn_add_inline.setEnabled(True)
 
     def _thumb_path_for_item(self, it: Dict[str, Any]) -> Path:
+        """
+        Return a conservative expected cache path for quick existence checks.
+        The ThumbFetcher may write different extensions; this function is used
+        only to detect an existing cached file quickly (prefers .jpg).
+        """
         vid = (it or {}).get("video_id") or ""
         if not vid:
             # fallback name derived from URL to still benefit from cache
-            key = (it.get("url", "").split("v=")[-1].split("&")[0]) or "unknown"
+            key = (it.get("url", "").split("v=")[-1].split("&")[0]) or ""
+            if not key:
+                # hashed fallback
+                import hashlib
+                key = hashlib.sha1(it.get("url", "").encode("utf-8")).hexdigest()
             return self.thumb_cache_dir / f"{key}.jpg"
         return self.thumb_cache_dir / f"{vid}.jpg"
 
     def _ensure_thumbnail(self, it: Dict[str, Any]):
+        """
+        Ensure a thumbnail is available for the queue item.
+        Uses the new ThumbFetcher worker which emits (url, path) on finished.
+        """
         # Optionally skip playlist thumbs
         if it.get("is_playlist"):
             return
 
-        vid = it.get("video_id") or ""
         dest = self._thumb_path_for_item(it)
 
-        # If cached already, use it
-        if dest.exists() and dest.stat().st_size > 0:
-            it["thumb_path"] = str(dest)
-            self._save_queue_permanent()
-            self._update_card_thumbnail(it)
-            return
+        # If cached already (quick check for .jpg), try to find any matching file with other extensions
+        try:
+            if dest.exists() and dest.stat().st_size > 0:
+                it["thumb_path"] = str(dest)
+                self._save_queue_permanent()
+                self._update_card_thumbnail(it)
+                return
+            # also check for other common extensions using video_id or key
+            base = dest.with_suffix("")  # path without suffix
+            for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"):
+                cand = base.with_suffix(ext)
+                if cand.exists() and cand.stat().st_size > 0:
+                    it["thumb_path"] = str(cand)
+                    self._save_queue_permanent()
+                    self._update_card_thumbnail(it)
+                    return
+        except Exception:
+            pass
 
-        # Download asynchronously
+        # If no thumbnail yet, start async fetcher
         try:
             from ytget_gui.workers.thumb_fetcher import ThumbFetcher
         except Exception as e:
             self.log(f"⚠️ Thumbnail worker missing: {e}\n", AppStyles.WARNING_COLOR, "Warning")
             return
 
-        if not vid and not it.get("thumbnail_url"):
-            # Attempt a best-effort: if URL has a v= param, use that pattern
-            url = it.get("url", "")
-            if "v=" in url:
-                vid = url.split("v=")[-1].split("&")[0]
-                it["video_id"] = vid
-
-        if not vid and not it.get("thumbnail_url"):
+        # Avoid duplicate jobs keyed by the original URL (preferred) or video_id
+        key = it.get("url") or it.get("video_id") or ""
+        if not key:
             return
 
         if not hasattr(self, "_thumb_jobs"):
             self._thumb_jobs = {}
 
-        video_id_key = vid or it.get("video_id", "")
-        if video_id_key in self._thumb_jobs:
+        if key in self._thumb_jobs:
             return
 
-        t = QThread()
-        worker = ThumbFetcher(
-            video_id_key,
-            it.get("thumbnail_url", ""),
-            dest,
-            proxy_url=self.settings.PROXY_URL,
-        )
+        # Create thread + worker
+        t = QThread(self)
+        worker = ThumbFetcher(key, self.thumb_cache_dir, self.settings)
         worker.moveToThread(t)
+
+        # Connect signals
+        def _on_finished(url_fetched: str, path: str):
+            # cleanup job record
+            try:
+                job = self._thumb_jobs.pop(key, None)
+                if job:
+                    # ensure thread stops
+                    try:
+                        job["thread"].quit()
+                        job["thread"].wait(100)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            if not path:
+                return
+
+            # Find the queue item by url or video_id and update
+            target_item = None
+            # Prefer exact URL match
+            for q in self.queue:
+                if q.get("url") == url_fetched:
+                    target_item = q
+                    break
+            # Fallback: match by video_id if present
+            if not target_item and it.get("video_id"):
+                for q in self.queue:
+                    if q.get("video_id") == it.get("video_id"):
+                        target_item = q
+                        break
+            if target_item:
+                target_item["thumb_path"] = path
+                self._save_queue_permanent()
+                self._update_card_thumbnail(target_item)
+
+        def _on_error(url_err: str, msg: str):
+            try:
+                self._thumb_jobs.pop(key, None)
+            except Exception:
+                pass
+            # self.log(f"⚠️ Failed to fetch thumbnail ({url_err}): {msg}\n", AppStyles.WARNING_COLOR, "Warning")
+
+        worker.finished.connect(_on_finished)
+        worker.error.connect(_on_error)
+
+        # Ensure thread lifecycle cleanup
         t.started.connect(worker.run)
-        # Connect without lambdas; match worker signal signature: (video_id: str, path: str) and (video_id: str, msg: str)
-        try:
-            worker.finished.connect(self._on_thumb_saved)  # (video_id, path)
-        except Exception:
-            pass
-        try:
-            worker.error.connect(self._on_thumb_error)  # (video_id, msg)
-        except Exception:
-            pass
-        worker.finished.connect(t.quit)
         t.finished.connect(worker.deleteLater)
         t.finished.connect(t.deleteLater)
 
-        self._thumb_jobs[video_id_key] = t
+        # store references so GC doesn't collect them
+        self._thumb_jobs[key] = {"thread": t, "worker": worker}
         t.start()
 
     def _find_item_by_video_id(self, video_id: str) -> Optional[Dict[str, Any]]:
@@ -1215,21 +1526,51 @@ class MainWindow(QMainWindow):
         return None
 
     @Slot(str, str)
-    def _on_thumb_saved(self, video_id: str, path: str):
+    def _on_thumb_saved(self, url_or_id: str, path: str):
+        """
+        Backwards-compatible slot: accepts (url, path) from ThumbFetcher.
+        Try to find the matching queue item by URL first, then by video_id.
+        """
+        # Remove any job keyed by url_or_id if present
         if hasattr(self, "_thumb_jobs"):
-            self._thumb_jobs.pop(video_id, None)
-        it = self._find_item_by_video_id(video_id)
-        if not it:
+            try:
+                self._thumb_jobs.pop(url_or_id, None)
+            except Exception:
+                pass
+
+        # Find item by URL
+        target = None
+        for it in self.queue:
+            if it.get("url") == url_or_id:
+                target = it
+                break
+        # Fallback: treat url_or_id as video_id
+        if not target:
+            for it in self.queue:
+                if it.get("video_id") == url_or_id:
+                    target = it
+                    break
+        if not target:
+            # final fallback: try to find item whose thumbnail_url matches or whose URL contains the id
+            for it in self.queue:
+                if it.get("thumbnail_url") and url_or_id in it.get("thumbnail_url"):
+                    target = it
+                    break
+        if not target:
             return
-        it["thumb_path"] = path
+
+        target["thumb_path"] = path
         self._save_queue_permanent()
-        self._update_card_thumbnail(it)
+        self._update_card_thumbnail(target)
 
     @Slot(str, str)
-    def _on_thumb_error(self, video_id: str, msg: str):
+    def _on_thumb_error(self, url_or_id: str, msg: str):
         if hasattr(self, "_thumb_jobs"):
-            self._thumb_jobs.pop(video_id, None)
-        self.log(f"⚠️ Failed to fetch thumbnail ({video_id}): {msg}\n", AppStyles.WARNING_COLOR, "Warning")
+            try:
+                self._thumb_jobs.pop(url_or_id, None)
+            except Exception:
+                pass
+        # self.log(f"⚠️ Failed to fetch thumbnail ({url_or_id}): {msg}\n", AppStyles.WARNING_COLOR, "Warning")
 
     def _update_card_thumbnail(self, it: Dict[str, Any]):
         path = it.get("thumb_path")
@@ -1243,6 +1584,7 @@ class MainWindow(QMainWindow):
         for i in range(self.queue_list.count()):
             lw_item = self.queue_list.item(i)
             data = lw_item.data(Qt.UserRole)
+            # Prefer storing the item dict in the QListWidgetItem's UserRole (if your add code does that).
             if data is it:
                 w = self.queue_list.itemWidget(lw_item)
                 if isinstance(w, QueueCard) and hasattr(w, "set_thumbnail_pixmap"):
@@ -1251,6 +1593,19 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
                 break
+            # Fallback: match by URL text shown in the card meta label
+            w = self.queue_list.itemWidget(lw_item)
+            if isinstance(w, QueueCard):
+                try:
+                    meta = getattr(w, "meta_lbl", None)
+                    if meta and it.get("url") and it.get("url") in meta.text():
+                        try:
+                            w.set_thumbnail_pixmap(pix)
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    pass
 
     # ---------- Queue control ----------
 
@@ -1569,15 +1924,45 @@ class MainWindow(QMainWindow):
         self.count_chip.setText(str(count))
         self.queue_empty_state.setVisible(count == 0)
 
-        for item in self.queue:
+        for it in self.queue:
             lw_item = QListWidgetItem()
-            lw_item.setSizeHint(QSize(0, 92))  # height of each queue card
-            lw_item.setData(Qt.UserRole, item)  # store the data for filtering/sorting
+            # create a QueueCard widget from QueueCard class
+            card = self._make_queue_card_widget(it) if hasattr(self, "_make_queue_card_widget") else QueueCard(
+                title=it.get("title", ""),
+                url=it.get("url", ""),
+                status=it.get("status", "Pending"),
+                progress=it.get("progress", 0),
+                show_thumbnail=True,
+            )
 
-            card = self._make_queue_card_widget(item)
+            # store the actual queue dict on the QListWidgetItem for reliable matching later
+            lw_item.setSizeHint(card.sizeHint())
+            lw_item.setData(Qt.UserRole, it)
+
+            # add to list and attach widget
             self.queue_list.addItem(lw_item)
             self.queue_list.setItemWidget(lw_item, card)
-    
+
+            # If a cached thumbnail path already exists, apply it immediately
+            thumb_path = it.get("thumb_path")
+            if thumb_path:
+                try:
+                    if hasattr(card, "set_thumbnail_path"):
+                        card.set_thumbnail_path(thumb_path)
+                    else:
+                        pix = QPixmap(thumb_path)
+                        if not pix.isNull() and hasattr(card, "set_thumbnail_pixmap"):
+                            card.set_thumbnail_pixmap(pix)
+                except Exception:
+                    pass
+
+            # Start thumbnail fetch for this item (ensure worker runs)
+            try:
+                self._start_thumb_job(it.get("url", ""))
+            except Exception:
+                # keep UI resilient if starting a thumb job fails for any item
+                pass
+
         # Apply current filter after rebuilding the list
         self._apply_queue_filter(self.search_box.text())
 
@@ -2016,7 +2401,10 @@ class MainWindow(QMainWindow):
                 # If thumb_path missing or file gone, try again
                 tp = it.get("thumb_path")
                 if not tp or not Path(tp).exists():
-                    self._ensure_thumbnail(it)
+                    try:
+                        self._ensure_thumbnail(it)
+                    except Exception:
+                        pass
 
             self._update_button_states()
             self._update_global_progress_bar()
