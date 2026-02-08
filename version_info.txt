@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 5, 3, 0),
-    prodvers=(2, 5, 3, 0),
+    filevers=(2, 6, 0, 0),
+    prodvers=(2, 6, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,            # Windows NT
@@ -17,11 +17,11 @@ VSVersionInfo(
         [
           StringStruct('CompanyName',        'Namira'),
           StringStruct('FileDescription',    'YTGet — YouTube Downloader'),
-          StringStruct('FileVersion',        '2.5.3'),
+          StringStruct('FileVersion',        '2.6.0'),
           StringStruct('InternalName',       'ytget-gui'),
           StringStruct('OriginalFilename',   'ytget-gui.exe'),
           StringStruct('ProductName',        'YTGet'),
-          StringStruct('ProductVersion',     '2.5.3'),
+          StringStruct('ProductVersion',     '2.6.0'),
           StringStruct('LegalCopyright',     '© 2026 Namira (MIT License)'),
           StringStruct('Comments',           'A GUI-based YouTube downloader powered by yt-dlp'),
           StringStruct('Website',            'https://github.com/ErfanNamira/ytget-gui'),
