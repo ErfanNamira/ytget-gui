@@ -60,7 +60,6 @@ from ytget_gui.workers.thumb_fetcher import ThumbFetcher
 def short(text: str, n: int = 50) -> str:
     return text[:n] + "..." if len(text) > n else text
 
-
 QSS_THEME = """
 /* Window */
 QMainWindow {
@@ -69,8 +68,16 @@ QMainWindow {
   font-size: 14px;
 }
 
-/* Top / Bottom bars */
-#TopBar, #BottomBar {
+/* Header (Top Bar) - High Saturation, Low Luminance Gradient */
+#TopBar {
+  /* Transition from Deep Azure to Deep Royal Purple */
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #131C2E, stop:1 #1C132E);
+  border: 1px solid #263042;
+  border-radius: 12px;
+}
+
+/* Bottom bar remains standard dark [cite: 109] */
+#BottomBar {
   background: #1C2230;
   border: 1px solid #263042;
   border-radius: 12px;
@@ -82,26 +89,30 @@ QMainWindow {
   border-radius: 12px;
 }
 
+/* Header Text - High Contrast White [cite: 110] */
 #Brand {
   font-size: 20px;
   font-weight: 600;
-  color: #E6EAF2;
-}
-#VersionChip {
-  padding: 2px 8px;
-  background: #1D2533;
-  color: #A7B0C0;
-  border-radius: 999px;
-  margin-left: 8px;
+  color: #FFFFFF;
 }
 
-/* URL pill */
+/* Version Chip - No background or shadow box [cite: 111] */
+#VersionChip {
+  background: transparent;
+  border: none;
+  color: #8A95A8; 
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+/* URL pill - Explicitly dark for depth [cite: 112] */
 #UrlPillWrap {
-  background: #121620;
+  background: #0D1117;
   border: 1px solid #263042;
   border-radius: 22px;
 }
-#UrlPillWrap:hover { border-color: #2F3B55; }
+#UrlPillWrap:hover { border-color: #3A77FF; }
+
 #UrlPillWrap QLineEdit {
   background: transparent;
   border: none;
@@ -109,6 +120,8 @@ QMainWindow {
   padding: 10px 12px;
   font-size: 15px;
 }
+
+/* Buttons and Controls [cite: 113, 114, 115] */
 #PillBtn {
   background: #2A3550;
   color: #E6EAF2;
@@ -117,6 +130,7 @@ QMainWindow {
   border-radius: 16px;
 }
 #PillBtn:hover { background: #36436A; }
+
 #PillIconBtn {
   background: transparent;
   border: none;
@@ -125,7 +139,6 @@ QMainWindow {
 }
 #PillIconBtn:hover { color: #E6EAF2; }
 
-/* Chips and ghost buttons */
 #Chip, #ChipCombo {
   background: #1D2533;
   border: 1px solid #263042;
@@ -144,7 +157,7 @@ QMainWindow {
 }
 #Ghost:hover { color: #E6EAF2; border-color: #2F3B55; }
 
-/* Primary/Secondary buttons */
+/* Primary Button [cite: 118] */
 #Primary {
   background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #6EA8FE, stop:1 #5476F0);
   color: #0F1115;
@@ -154,6 +167,7 @@ QMainWindow {
   font-weight: 600;
 }
 #Primary:hover { background: #6A9CF6; }
+
 #Secondary {
   background: #2A3550;
   color: #E6EAF2;
@@ -162,12 +176,13 @@ QMainWindow {
   border-radius: 10px;
 }
 
-/* Pane titles and empty state */
+/* Queue and Console Elements [cite: 120, 121, 122, 123] */
 #PaneTitle {
   font-weight: 600;
   font-size: 16px;
   color: #E6EAF2;
 }
+
 #EmptyState {
   color: #8A95A8;
   background: #10141C;
@@ -176,18 +191,19 @@ QMainWindow {
   padding: 28px;
 }
 
-/* Queue header */
 #QueueHeader {
   background: #161A22;
   border: 1px solid #263042;
   border-radius: 12px;
   padding: 10px 12px;
 }
+
 #QueueTitle {
   font-size: 15px;
   font-weight: 600;
   color: #E6EAF2;
 }
+
 #CountChip {
   background: #1D2533;
   color: #A7B0C0;
@@ -195,6 +211,7 @@ QMainWindow {
   border-radius: 999px;
   padding: 2px 8px;
 }
+
 #Search {
   background: #121620;
   border: 1px solid #263042;
@@ -204,16 +221,15 @@ QMainWindow {
 }
 #Search:focus { border-color: #2F3B55; }
 
-/* Sort combo should be rectangular (no rounded corners) */
 #SortCombo {
   background: #1D2533;
   border: 1px solid #263042;
   color: #E6EAF2;
-  border-radius: 0;  /* square corners */
+  border-radius: 0;
   padding: 6px 10px;
 }
 
-/* Queue list */
+/* Queue List [cite: 127] */
 #QueueList {
   background: transparent;
   border: none;
@@ -221,11 +237,8 @@ QMainWindow {
 QListWidget::item {
   background: transparent;
   border: none;
-  margin: 0;
-  padding: 0;
 }
 
-/* Queue card (external widget) */
 #QueueCard {
   background: #161A22;
   border: 1px solid #263042;
@@ -235,11 +248,13 @@ QListWidget::item {
 
 #CardTitle { font-weight: 600; color: #E6EAF2; }
 #CardMeta { color: #8591A3; font-size: 12px; }
+
 #Thumb {
   background: #0F141C;
   border: 1px solid #263042;
   border-radius: 8px;
 }
+
 #StatusChip {
   background: #1D2533;
   color: #E6EAF2;
@@ -248,8 +263,8 @@ QListWidget::item {
   font-size: 12px;
   border: 1px solid #263042;
 }
+
 #DragHandle { color: #6A7487; }
-#DragHandle:hover { color: #E6EAF2; }
 
 #IconBtn {
   background: transparent;
@@ -258,9 +273,8 @@ QListWidget::item {
   border-radius: 8px;
   padding: 2px 8px;
 }
-#IconBtn:hover { color: #E6EAF2; border-color: #2F3B55; }
 
-/* Progress (global only) */
+/* Global Progress [cite: 133, 134] */
 #Progress {
   background: #202839;
   border: 1px solid #263042;
@@ -271,7 +285,7 @@ QListWidget::item {
   border-radius: 999px;
 }
 
-/* Console */
+/* Console [cite: 135] */
 #Console {
   background: #10141C;
   color: #E6EAF2;
@@ -280,16 +294,7 @@ QListWidget::item {
   padding: 8px;
 }
 
-/* Combo popup */
-QAbstractItemView {
-  background: #161A22;
-  color: #E6EAF2;
-  border: 1px solid #263042;
-  selection-background-color: #2A3550;
-  selection-color: #E6EAF2;
-}
-
-/* Scrollbar */
+/* Scrollbar [cite: 137, 138] */
 QScrollBar:vertical, QScrollBar:horizontal {
   background: transparent; border: none;
 }
@@ -298,12 +303,7 @@ QScrollBar::handle {
 }
 QScrollBar::handle:hover { background: #36436A; }
 
-/* Drag highlight for queue pane */
-#Pane[dropActive="true"] {
-  border-color: #6EA8FE;
-}
-
-/* Bulk bar */
+/* Bulk bar [cite: 139] */
 #BulkBar {
   background: #121620;
   border: 1px solid #263042;
