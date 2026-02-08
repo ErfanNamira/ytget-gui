@@ -1,4 +1,5 @@
 # File: ytget_gui/widgets/queue_card.py
+
 from __future__ import annotations
 
 from typing import Optional, Callable, List, Tuple
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QFrame,
     QMenu,
+    QSizePolicy,
 )
 
 
@@ -33,7 +35,7 @@ STATUS_COLORS = {
 
 class QueueCard(QFrame):
     """
-    Modern queue item card:
+    Queue item card:
     - Drag handle
     - Optional thumbnail
     - Title, URL/meta
@@ -60,6 +62,7 @@ class QueueCard(QFrame):
         show_thumbnail: bool = True,
     ):
         super().__init__()
+        self.url = url
         self.setObjectName("QueueCard")
         self.setFrameShape(QFrame.StyledPanel)
         self.setProperty("elevated", False)
@@ -108,13 +111,23 @@ class QueueCard(QFrame):
 
         center.addLayout(title_row)
 
+        # meta row (elide long URLs to avoid scrollbars)
         meta_row = QHBoxLayout()
         meta_row.setSpacing(8)
-        self.meta_lbl = QLabel(_clamp(url, 64))
+
+        self._full_meta_text = url or ""
+        self.meta_lbl = QLabel()
         self.meta_lbl.setObjectName("CardMeta")
         self.meta_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.meta_lbl.setWordWrap(False)
+        # allow the label to shrink instead of forcing scrollbars
+        self.meta_lbl.setMinimumWidth(0)
+        self.meta_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         meta_row.addWidget(self.meta_lbl, 1)
         center.addLayout(meta_row)
+
+        # set initial elided text and tooltip
+        self._set_elided_meta(self._full_meta_text)
 
         progress_row = QHBoxLayout()
         progress_row.setSpacing(8)
@@ -244,6 +257,22 @@ class QueueCard(QFrame):
     def _repolish(self):
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def _set_elided_meta(self, text: str, max_width: int = 220):
+        """
+        Elide the meta text (URL) to avoid scrollbars.
+        max_width is the pixel width available for the label.
+        """
+        try:
+            self._full_meta_text = text or ""
+            fm = self.meta_lbl.fontMetrics()
+            elided = fm.elidedText(self._full_meta_text, Qt.ElideMiddle, max_width)
+            self.meta_lbl.setText(elided)
+            self.meta_lbl.setToolTip(self._full_meta_text)
+        except Exception:
+            # fallback to raw truncated text
+            self.meta_lbl.setText(_clamp(text or "", 64))
+            self.meta_lbl.setToolTip(text or "")
 
     # ----- Hover/elevation -----
 
