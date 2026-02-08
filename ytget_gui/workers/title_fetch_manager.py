@@ -177,15 +177,15 @@ class TitleFetchQueue(QObject):
             except Exception:
                 pass
 
+        # run subprocess and capture raw bytes
         try:
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
-                text=True,
+                text=False,          # read raw bytes
                 check=False,
                 timeout=120,
                 startupinfo=startupinfo,
-                encoding="utf-8",
                 env=env,
             )
         except subprocess.TimeoutExpired:
@@ -195,12 +195,16 @@ class TitleFetchQueue(QObject):
             self.error.emit(url, f"Unexpected error: {e}")
             return
 
+        # decode safely with replacement for invalid bytes
+        stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+        stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+
         if proc.returncode != 0:
-            msg = (proc.stderr or "yt-dlp returned an error").strip()
+            msg = (stderr or "yt-dlp returned an error").strip()
             self.error.emit(url, msg)
             return
 
-        output = (proc.stdout or "").strip()
+        output = stdout.strip()
         if not output:
             self.error.emit(url, "No metadata received from yt-dlp")
             return
