@@ -1384,7 +1384,7 @@ class MainWindow(QMainWindow):
         self._update_global_progress_bar()
 
     def _on_title_error(self, url: str, msg: str):
-        self.log(f"❌ Error fetching title for {url[:60]}: {msg}\n", AppStyles.ERROR_COLOR, "Error")
+        self.log(f"Error fetching title for {url[:60]}: {msg}\n", AppStyles.ERROR_COLOR, "Error")
         self.btn_add_inline.setEnabled(True)
 
     def _thumb_path_for_item(self, it: Dict[str, Any]) -> Path:
