@@ -76,9 +76,9 @@ QMainWindow {
   border-radius: 12px;
 }
 
-/* Bottom bar remains standard dark [cite: 109] */
+/* Bottom Bar */
 #BottomBar {
-  background: #1C2230;
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #131C2E, stop:1 #1C132E);
   border: 1px solid #263042;
   border-radius: 12px;
 }
