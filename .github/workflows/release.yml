@@ -88,10 +88,10 @@ jobs:
             cp $(which ffmpeg) .
             cp $(which ffprobe) .
           else
-            curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.0.1.zip -o ffmpeg.zip
+            curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.1.1.zip -o ffmpeg.zip
             unzip ffmpeg.zip
             chmod +x ffmpeg
-            curl -L https://evermeet.cx/ffmpeg/ffprobe-8.0.1.zip -o ffprobe.zip
+            curl -L https://evermeet.cx/ffmpeg/ffprobe-8.1.1.zip -o ffprobe.zip
             unzip ffprobe.zip
             chmod +x ffprobe
           fi
