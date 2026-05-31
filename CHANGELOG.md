@@ -1,3 +1,6 @@
+### v 2.6.1 **Dependency Updates**
+- **Updated runtimes**: Deno upgraded to v2.8.1 and yt-dlp upgraded to 2026.03.17.
+
 ### v 2.6.0 **Thumbnail Reliability, UI Polish & Performance**
 - **Fixed thumbnail fetching**
   - Thumbnails are now correctly fetched and displayed for YouTube videos and playlists.
