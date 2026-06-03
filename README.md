@@ -65,7 +65,7 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 ### 🐧 Linux
 1. Install required dependencies:
 ```
-sudo apt-get update && sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libxcb-xinput0 libxcb-xfixes0 libxcb-shape0 libxcb-render-util0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xkb1
+sudo apt-get update && sudo apt-get install -y ffmpeg python3-mutagen libxcb-cursor0 libxcb-xinerama0 libxcb-xinput0 libxcb-xfixes0 libxcb-shape0 libxcb-render-util0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xkb1
 ``` 
 2. [Download the latest `YTGet-Linux.tar.gz` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-linux.tar.gz)  
 3. Extract the contents.
