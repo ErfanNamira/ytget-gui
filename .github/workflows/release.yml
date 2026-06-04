@@ -74,6 +74,12 @@ jobs:
             chmod +x yt-dlp
           fi
 
+      - name: Download spotDL
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -L https://github.com/spotDL/spotify-downloader/releases/download/v4.5.0/spotdl-4.5.0-win32.exe -o spotdl.exe
+
       - name: Download ffmpeg & ffprobe
         shell: bash
         run: |
@@ -169,6 +175,7 @@ jobs:
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.ico:." \
               --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+              --add-data "spotdl${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               --add-data "phantomjs${{ runner.os == 'Windows' && '.exe' || '' }}:." \
