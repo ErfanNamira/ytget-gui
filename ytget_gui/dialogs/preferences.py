@@ -445,6 +445,11 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.cookies_auto_refresh.setToolTip("Attempt to export fresh cookies from the selected browser before each download")
         pf.addWidget(self._form_row("", self.cookies_auto_refresh))
 
+        self.ignore_ssl_errors = QtWidgets.QCheckBox("Ignore SSL certificate errors (unsafe)")
+        self.ignore_ssl_errors.setObjectName("check")
+        self.ignore_ssl_errors.setToolTip("Adds --no-check-certificates to yt-dlp. Use only if you trust your network.")
+        pf.addWidget(self._form_row("", self.ignore_ssl_errors))
+
         self.cookies_last_label = QtWidgets.QLabel("")
         self.cookies_last_label.setObjectName("formDescription")
         pf.addWidget(self.cookies_last_label)
@@ -1383,6 +1388,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.cookies_path_input.setText(str(getattr(self.settings, "COOKIES_PATH", "") or ""))
         self.cookies_browser_combo.setCurrentText(getattr(self.settings, "COOKIES_FROM_BROWSER", "") or "")
         self.cookies_auto_refresh.setChecked(bool(getattr(self.settings, "COOKIES_AUTO_REFRESH", False)))
+        self.ignore_ssl_errors.setChecked(self.settings.IGNORE_SSL_ERRORS)
         last = getattr(self.settings, "COOKIES_LAST_IMPORTED", "")
         self.cookies_last_label.setText(f"Last imported: {last}" if last else "")        
         self.retries_spin.setValue(int(getattr(self.settings, "RETRIES", 3)))
@@ -1508,6 +1514,7 @@ class PreferencesDialog(QtWidgets.QDialog):
 
         return {
             "PROXY_URL": self.proxy_input.text().strip(),
+            "IGNORE_SSL_ERRORS": self.ignore_ssl_errors.isChecked(),
             "COOKIES_PATH": Path(self.cookies_path_input.text().strip()) if self.cookies_path_input.text().strip() else Path(""),
             "COOKIES_FROM_BROWSER": self.cookies_browser_combo.currentText().strip(),
             "COOKIES_AUTO_REFRESH": self.cookies_auto_refresh.isChecked(),
