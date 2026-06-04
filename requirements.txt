@@ -5,3 +5,4 @@ mutagen
 Pillow
 packaging
 browser_cookie3
+spotdl
