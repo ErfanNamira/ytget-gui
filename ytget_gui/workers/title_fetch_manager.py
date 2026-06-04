@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import platform
 import os
@@ -94,6 +95,18 @@ class TitleFetchQueue(QObject):
         Inline version of TitleFetcher.run(), but without extra per-job QThread.
         Runs in this worker thread. Emits the same signals expected by MainWindow.
         """
+        # ── Spotify short-circuit ──────────────────────────────────────────
+        # yt-dlp cannot handle open.spotify.com URLs and will be blocked.
+        # Emit a placeholder title so the item appears in the queue;
+        # SpotDLWorker will handle the actual download.
+        if re.search(r"https?://(open\.)?spotify\.com/", url, re.IGNORECASE):
+            m = re.search(r"spotify\.com/(?:[a-z-]+/)?([a-z]+)/", url, re.IGNORECASE)
+            kind = m.group(1).capitalize() if m else "Link"
+            title = f"Spotify {kind}"
+            self.metadata_fetched.emit(url, title, "", "", False)
+            self.title_fetched.emit(url, title)
+            return
+
         yt_dlp_path: Path = self.settings.YT_DLP_PATH
         ffmpeg_dir: Path = self.settings.FFMPEG_PATH.parent
         cookies_path: Path = self.settings.COOKIES_PATH
