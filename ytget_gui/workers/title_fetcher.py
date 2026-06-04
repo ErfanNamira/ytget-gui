@@ -87,14 +87,19 @@ class TitleFetcher(QObject):
             # Build yt-dlp command.
             cmd: List[str] = [
                 str(self.yt_dlp_path),
-                "--ffmpeg-location",
-                str(self.ffmpeg_dir),
+                "--ffmpeg-location", str(self.ffmpeg_dir),
                 "--skip-download",
                 "--print-json",
                 "--ignore-errors",
                 "--flat-playlist",
-                self.url,
             ]
+
+            # Add SSL bypass if enabled
+            if getattr(self.settings, "IGNORE_SSL_ERRORS", False):
+                cmd.append("--no-check-certificates")
+
+            # Add URL
+            cmd.append(self.url)
 
             # Cookies handling: prefer explicit cookies_from_browser param, else settings, else file cookies
             cookies_from = self.cookies_from_browser or (getattr(self.settings, "COOKIES_FROM_BROWSER", "") if self.settings is not None else "")
