@@ -1,3 +1,18 @@
+### v 2.7.0 **Spotify Support via SpotDL**
+- Added full Spotify track and playlist downloading support using spotDL
+- Seamlessly downloads Spotify content by resolving tracks through YouTube audio sources.
+- **🔒 Optional SSL Certificate Bypass**
+- Added new setting: Preferences → Network → Ignore SSL certificate errors (unsafe)
+- When enabled, YTGet launches yt-dlp with: --no-check-certificates
+- Useful for restrictive networks, broken proxy chains, DPI filtering, or misconfigured TLS environments.
+- Disabled by default for security reasons.
+- **🎨 Completely Redesigned Main UI**
+- Introduced a refreshed and more modern interface across the application.
+- Improved visual hierarchy, spacing, responsiveness, and queue readability.
+- **🚀 New Cross-Platform Update Manager**
+- Rebuilt the update system from scratch with full cross-platform support.
+- The new update manager can independently update: yt-dlp, ffmpeg, deno and SpotDL
+
 ### v 2.6.1 **Dependency Updates**
 - **Updated runtimes**: Deno upgraded to v2.8.1 and yt-dlp upgraded to 2026.03.17.
 
