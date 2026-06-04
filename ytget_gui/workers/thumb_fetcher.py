@@ -296,8 +296,12 @@ class ThumbFetcher(QObject):
                 "--print-json",
                 "--ignore-errors",
                 "--flat-playlist",
-                url_for_metadata,
             ]
+
+            if getattr(self.settings, "IGNORE_SSL_ERRORS", False):
+                cmd.append("--no-check-certificates")
+
+            cmd.append(url_for_metadata)
 
             cookies_from = getattr(self.settings, "COOKIES_FROM_BROWSER", "") or ""
             if cookies_from:
@@ -633,8 +637,12 @@ class ThumbFetcher(QObject):
                 "--write-thumbnail",
                 "-o",
                 out_template,
-                url_for_metadata,
             ]
+
+            if getattr(self.settings, "IGNORE_SSL_ERRORS", False):
+                cmd.append("--no-check-certificates")
+
+            cmd.append(url_for_metadata)
 
             cookies_from = getattr(self.settings, "COOKIES_FROM_BROWSER", "") or ""
             if cookies_from:
