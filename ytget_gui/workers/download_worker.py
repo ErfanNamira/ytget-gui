@@ -566,6 +566,9 @@ class DownloadWorker(QObject):
         except Exception:
             pass
 
+        if getattr(self.settings, "IGNORE_SSL_ERRORS", False):
+            cmd.append("--no-check-certificates")
+
         cmd.append(it.get("url", ""))
 
         return [str(c) for c in cmd]
