@@ -53,7 +53,7 @@ jobs:
         run: |
           echo "Downloading Deno from ${{ matrix.deno_url }}"
           curl -L "${{ matrix.deno_url }}" -o deno.zip
-          
+
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             powershell -Command "Expand-Archive -Path deno.zip -DestinationPath deno_dir"
             cp deno_dir/deno.exe ./deno.exe
@@ -163,6 +163,13 @@ jobs:
 
           else
             ICON="ytget_gui/icon.ico"
+
+            # Only bundle spotdl on Windows
+            SPOTDL_DATA=""
+            if [[ "$RUNNER_OS" == "Windows" ]]; then
+              SPOTDL_DATA="--add-data spotdl.exe:."
+            fi
+
             pyinstaller --noconfirm --onedir --windowed \
               --name "YTGet" \
               --icon "$ICON" \
@@ -179,6 +186,7 @@ jobs:
               --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               --add-data "phantomjs${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               --add-data "deno${{ runner.os == 'Windows' && '.exe' || '' }}:." \
+              $SPOTDL_DATA \
               ytget_gui/main.py
           fi
 
@@ -253,6 +261,6 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: "${{ github.event.inputs.tag || github.ref_name }}"
           body_path: RELEASE_NOTES.md
-          files: artifacts/**/*  
+          files: artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
