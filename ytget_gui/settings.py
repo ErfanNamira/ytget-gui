@@ -16,10 +16,9 @@ from ytget_gui.utils.paths import (
     default_downloads_dir,
 )
 
-
 @dataclass
 class AppSettings:
-    VERSION: str = "2.6.1"
+    VERSION: str = "2.6.2"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
@@ -73,6 +72,7 @@ class AppSettings:
     )
 
     PROXY_URL: str = ""
+    IGNORE_SSL_ERRORS: bool = False
     SPONSORBLOCK_CATEGORIES: List[str] = field(default_factory=list)
     CHAPTERS_MODE: str = "embed"       # none|embed|split
     WRITE_SUBS: bool = False
@@ -211,6 +211,7 @@ class AppSettings:
     def save_config(self):
         config = {
             "PROXY_URL": self.PROXY_URL,
+            "IGNORE_SSL_ERRORS": self.IGNORE_SSL_ERRORS,
             "SPONSORBLOCK_CATEGORIES": self.SPONSORBLOCK_CATEGORIES,
             "CHAPTERS_MODE": self.CHAPTERS_MODE,
             "WRITE_SUBS": self.WRITE_SUBS,
@@ -262,6 +263,7 @@ class AppSettings:
 
             # Basic flags
             self.PROXY_URL = config.get("PROXY_URL", self.PROXY_URL)
+            self.IGNORE_SSL_ERRORS = config.get("IGNORE_SSL_ERRORS", self.IGNORE_SSL_ERRORS)
             self.SPONSORBLOCK_CATEGORIES = config.get("SPONSORBLOCK_CATEGORIES", self.SPONSORBLOCK_CATEGORIES)
             self.CHAPTERS_MODE = config.get("CHAPTERS_MODE", self.CHAPTERS_MODE)
             self.WRITE_SUBS = config.get("WRITE_SUBS", self.WRITE_SUBS)
