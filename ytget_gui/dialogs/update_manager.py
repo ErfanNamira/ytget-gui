@@ -268,7 +268,7 @@ class UpdateChecker(QThread):
         try:
             latest, assets = self._gh_latest("ErfanNamira", "ytget-gui")
             # find the release page URL (no direct binary; user visits GitHub)
-            dl_url = f"https://github.com/ErfanNamira/ytget-gui/releases/tag/v{latest}"
+            dl_url = f"https://github.com/ErfanNamira/ytget-gui/releases/tag/{latest}"
             self.result_ready.emit(key, installed, latest, dl_url)
         except Exception as e:
             self.error.emit(key, str(e))
