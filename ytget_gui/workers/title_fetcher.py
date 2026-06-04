@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import platform
 import os
@@ -52,8 +53,39 @@ class TitleFetcher(QObject):
         self.cookies_from_browser = cookies_from_browser
         self.cookies_profile = cookies_profile
 
+    @staticmethod
+    def _is_spotify_url(url: str) -> bool:
+        return bool(re.search(r"https?://(open\.)?spotify\.com/", url, re.IGNORECASE))
+
+    @staticmethod
+    def _spotify_title_from_url(url: str) -> str:
+        """
+        Derive a human-readable placeholder title from a Spotify URL while
+        spotdl resolves the real metadata later.
+        Examples:
+          .../track/4uLU6hMCjMI75M1A2tKUQC  -> "Spotify Track"
+          .../album/xyz                      -> "Spotify Album"
+          .../playlist/xyz                   -> "Spotify Playlist"
+          .../artist/xyz                     -> "Spotify Artist"
+        """
+        import re as _re
+        m = _re.search(r"spotify\.com/(?:[a-z-]+/)?([a-z]+)/", url, _re.IGNORECASE)
+        kind = m.group(1).capitalize() if m else "Link"
+        return f"Spotify {kind}"
+
     def run(self):
         try:
+            # ── Spotify short-circuit ──────────────────────────────────────
+            # yt-dlp cannot handle open.spotify.com URLs and will be blocked.
+            # Emit a placeholder title so the item appears in the queue;
+            # SpotDLWorker will handle the actual download.
+            if self._is_spotify_url(self.url):
+                title = self._spotify_title_from_url(self.url)
+                self.metadata_fetched.emit(self.url, title, "", "", False)
+                self.title_fetched.emit(self.url, title)
+                self.finished.emit()
+                return
+
             # If settings request auto-refresh from browser, attempt it (best-effort)
             try:
                 if self.settings is not None and getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
