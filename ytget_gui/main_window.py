@@ -1320,13 +1320,13 @@ class MainWindow(QMainWindow):
         self.log(f"📂 Download Folder: {self.settings.DOWNLOADS_DIR}\n", AppStyles.INFO_COLOR, "Info")
         self.log(f"🔧 Using FFMPEG from: {self.settings.FFMPEG_PATH.parent}\n", AppStyles.INFO_COLOR, "Info")
         if not self.settings.YT_DLP_PATH.exists():
-            self.log("⚠️ yt-dlp not found in app folder or PATH. Download it via Menu Bar → Help → Check yt-dlp Update.\n", AppStyles.WARNING_COLOR, "Warning")
+            self.log("yt-dlp not found in app folder or PATH. Download it via Menu Bar → Help → Check yt-dlp Update.\n", AppStyles.WARNING_COLOR, "Warning")
         if not self.settings.FFMPEG_PATH.exists() or not self.settings.FFPROBE_PATH.exists():
-            self.log("⚠️ ffmpeg/ffprobe not found in app folder or PATH.\n", AppStyles.WARNING_COLOR, "Warning")
+            self.log("ffmpeg/ffprobe not found in app folder or PATH.\n", AppStyles.WARNING_COLOR, "Warning")
         if hasattr(self.settings, "PHANTOMJS_PATH") and self.settings.PHANTOMJS_PATH.exists():
             self.log(f"🔧 PhantomJS available: {self.settings.PHANTOMJS_PATH}\n", AppStyles.INFO_COLOR, "Info")
         else:
-            self.log("⚠️ PhantomJS not found in app folder or PATH.\n", AppStyles.WARNING_COLOR, "Warning")
+            self.log("PhantomJS not found in app folder or PATH.\n", AppStyles.WARNING_COLOR, "Warning")
         try:
             deno_attr = getattr(self.settings, "DENO_PATH", None)
             if deno_attr:
@@ -1334,13 +1334,13 @@ class MainWindow(QMainWindow):
                 if deno_path.exists():
                     self.log(f"🔧 Using Deno from: {deno_path}\n", AppStyles.INFO_COLOR, "Info")
                 else:
-                    self.log("⚠️ Deno not found in app folder or PATH.\n", AppStyles.WARNING_COLOR, "Warning")
+                    self.log("Deno not found in app folder or PATH.\n", AppStyles.WARNING_COLOR, "Warning")
             else:
                 bundled = Path(self.settings.BASE_DIR) / ("deno.exe" if os.name == "nt" else "deno")
                 if bundled.exists():
                     self.log(f"🔧 Deno available (bundled): {bundled}\n", AppStyles.INFO_COLOR, "Info")
                 else:
-                    self.log("⚠️ Deno not found in app folder or PATH.\n", AppStyles.WARNING_COLOR, "Warning")
+                    self.log("Deno not found in app folder or PATH.\n", AppStyles.WARNING_COLOR, "Warning")
         except Exception:
             pass
         try:
@@ -1350,7 +1350,7 @@ class MainWindow(QMainWindow):
                 self.log(f"🔧 SpotDL available: {spotdl_bin}\n", AppStyles.INFO_COLOR, "Info")
             else:
                 self.log(
-                    "⚠️ SpotDL not found in app folder or PATH. "
+                    "SpotDL not found in app folder or PATH. "
                     "Spotify downloads will fail. Install with: pip install spotdl\n",
                     AppStyles.WARNING_COLOR, "Warning"
                 )
