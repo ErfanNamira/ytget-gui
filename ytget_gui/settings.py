@@ -16,9 +16,11 @@ from ytget_gui.utils.paths import (
     default_downloads_dir,
 )
 
+from ytget_gui.spotdl_settings import SpotDLSettings
+
 @dataclass
 class AppSettings:
-    VERSION: str = "2.6.2"
+    VERSION: str = "2.7.0"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
@@ -68,6 +70,9 @@ class AppSettings:
             "🎧 Single Audio (FLAC)": "audio_flac",
             "🎶 Audio Playlist (MP3 – YouTube)": "playlist_mp3",
             "🎶 Audio Playlist (MP3 – YouTube Music)": "youtube_music",
+
+            # --- Spotify via SpotDL ---
+            "🎸 Spotify (via SpotDL)": "spotify",
         }
     )
 
@@ -106,6 +111,7 @@ class AppSettings:
     # HLS preference controls
     PREFER_HLS: bool = True
     HLS_PREFERRED_DOMAINS: List[str] = field(default_factory=lambda: ["pornhub.com"])
+    SPOTDL: SpotDLSettings = field(default_factory=SpotDLSettings)    
 
     def __post_init__(self):
         # Prepare paths
@@ -251,6 +257,7 @@ class AppSettings:
             "ARCHIVE_PATH": str(self.ARCHIVE_PATH),
             "PREFER_HLS": self.PREFER_HLS,
             "HLS_PREFERRED_DOMAINS": self.HLS_PREFERRED_DOMAINS,
+            "SPOTDL": self.SPOTDL.to_dict(),
         }
         with open(self.CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
@@ -296,6 +303,10 @@ class AppSettings:
             self.EMBED_THUMBNAIL      = config.get("EMBED_THUMBNAIL", self.EMBED_THUMBNAIL)
             self.PREFER_HLS = config.get("PREFER_HLS", self.PREFER_HLS)
             self.HLS_PREFERRED_DOMAINS = config.get("HLS_PREFERRED_DOMAINS", self.HLS_PREFERRED_DOMAINS)
+
+            spotdl_data = config.get("SPOTDL")
+            if isinstance(spotdl_data, dict):
+                self.SPOTDL = SpotDLSettings.from_dict(spotdl_data)
 
             # Override download dir if set
             dl_dir = config.get("DOWNLOADS_DIR")
