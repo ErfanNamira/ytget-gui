@@ -13,6 +13,7 @@ from ytget_gui.styles import AppStyles
 from ytget_gui.settings import AppSettings
 from ytget_gui.dialogs.advanced import UISwitch
 from ytget_gui.workers import cookies as CookieManager
+from ytget_gui.dialogs.spotdl_preferences_tab import SpotDLPreferencesTab
 
 _SPONSORBLOCK_CATEGORIES = {
     "Sponsor": "sponsor",
@@ -242,6 +243,19 @@ class PreferencesDialog(QtWidgets.QDialog):
         self._add_page("Output", style.standardIcon(QtWidgets.QStyle.SP_DialogOpenButton), self._page_output())
         self._add_page("Experimental", style.standardIcon(QtWidgets.QStyle.SP_MessageBoxInformation), self._page_experimental())
 
+        # SpotDL page
+        spotdl_content = SpotDLPreferencesTab(self.settings.SPOTDL)
+        self.spotdl_tab = spotdl_content
+        item = QtWidgets.QListWidgetItem(
+            self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay), "Spotify"
+        )
+        item.setSizeHint(QtCore.QSize(item.sizeHint().width(), 38))
+        self.sidebar.addItem(item)
+        self.stack.addWidget(spotdl_content)   
+        self.section_combo.addItem(
+            self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay), "Spotify"
+        )
+        
         self.sidebar.setCurrentRow(0)
         self.section_combo.setCurrentIndex(0)
 
@@ -1559,6 +1573,12 @@ class PreferencesDialog(QtWidgets.QDialog):
                 except Exception:
                     # هgnore non-writable attributes
                     pass
+        # Apply SpotDL tab settings
+        try:
+            if hasattr(self, "spotdl_tab"):
+                self.spotdl_tab.apply(self.settings.SPOTDL)
+        except Exception:
+            pass                    
         try:
             # Persist settings so choices like COOKIES_FROM_BROWSER and COOKIES_AUTO_REFRESH
             # are saved immediately to disk (config.json)
