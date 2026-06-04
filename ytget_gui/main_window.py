@@ -59,6 +59,8 @@ from ytget_gui.workers.cover_crop_worker import CoverCropWorker
 from ytget_gui.widgets.queue_card import QueueCard
 from ytget_gui.workers.title_fetch_manager import TitleFetchQueue
 from ytget_gui.workers.thumb_fetcher import ThumbManager
+from ytget_gui.spotdl_settings import SpotDLSettings
+from ytget_gui.workers.spotdl_worker import SpotDLWorker
 
 def short(text: str, n: int = 50) -> str:
     return text[:n] + "..." if len(text) > n else text
@@ -499,9 +501,6 @@ class MainWindow(QMainWindow):
     # ── Signals ──────────────────────────────────────────────────
     enqueue_title = Signal(str)
     enqueue_titles = Signal(list)
-    request_check_ytget_gui = Signal()
-    request_check_ytdlp = Signal()
-    request_download_ytdlp = Signal(str)
     post_queue_action_signal = Signal(str)
 
     # ════════════════════════════════════════════════════════════════════════
@@ -510,26 +509,6 @@ class MainWindow(QMainWindow):
         self.settings = AppSettings()
         self.styles = AppStyles()
 
-        # Update Manager
-        self.updater = UpdateManager(self.settings, log_callback=None, parent=None)
-        self.update_thread = QThread(self)
-        self.updater.moveToThread(self.update_thread)
-
-        self.request_check_ytget_gui.connect(self.updater.check_ytget_gui_update, Qt.QueuedConnection)
-        self.request_check_ytdlp.connect(self.updater.check_ytdlp_update, Qt.QueuedConnection)
-        self.request_download_ytdlp.connect(self.updater.download_ytdlp, Qt.QueuedConnection)
-
-        self.updater.log_signal.connect(self.log)
-        self.updater.ytget_gui_ready.connect(self._on_ytget_gui_ready)
-        self.updater.ytget_gui_uptodate.connect(self._on_ytget_gui_uptodate)
-        self.updater.ytget_gui_error.connect(self._on_ytget_gui_error)
-        self.updater.ytdlp_ready.connect(self._on_ytdlp_ready)
-        self.updater.ytdlp_uptodate.connect(self._on_ytdlp_uptodate)
-        self.updater.ytdlp_error.connect(self._on_ytdlp_error)
-        self.updater.ytdlp_download_success.connect(self._on_ytdlp_download_success)
-        self.updater.ytdlp_download_failed.connect(self._on_ytdlp_download_failed)
-
-        self.update_thread.start()
         self.post_queue_action_signal.connect(self._perform_post_queue_action, Qt.QueuedConnection)
 
         # Thumbnail cache
@@ -552,6 +531,8 @@ class MainWindow(QMainWindow):
 
         self.download_thread: Optional[QThread] = None
         self.download_worker: Optional[DownloadWorker] = None
+        self.spotdl_thread: Optional[QThread] = None
+        self.spotdl_worker: Optional[SpotDLWorker] = None
         self.cover_thread: Optional[QThread] = None
         self.cover_worker: Optional[CoverCropWorker] = None
         self.title_queue_thread: Optional[QThread] = None
@@ -1107,8 +1088,7 @@ class MainWindow(QMainWindow):
             self.post_actions_map[value] = act
 
         m_help = menubar.addMenu("Help")
-        m_help.addAction("Check YTGet Update", lambda: self.request_check_ytget_gui.emit())
-        m_help.addAction("Check yt-dlp Update", lambda: self.request_check_ytdlp.emit())
+        m_help.addAction("Check for Updates", self._show_update_manager)
         m_help.addAction("Open Download Folder", lambda: webbrowser.open(self.settings.DOWNLOADS_DIR.as_uri()))
         m_help.addAction("About", self._show_about)
 
@@ -1363,6 +1343,19 @@ class MainWindow(QMainWindow):
                     self.log("⚠️ Deno not found in app folder or PATH.\n", AppStyles.WARNING_COLOR, "Warning")
         except Exception:
             pass
+        try:
+            from ytget_gui.workers.spotdl_worker import _find_spotdl
+            spotdl_bin = _find_spotdl(self.settings)
+            if spotdl_bin is not None:
+                self.log(f"🔧 SpotDL available: {spotdl_bin}\n", AppStyles.INFO_COLOR, "Info")
+            else:
+                self.log(
+                    "⚠️ SpotDL not found in app folder or PATH. "
+                    "Spotify downloads will fail. Install with: pip install spotdl\n",
+                    AppStyles.WARNING_COLOR, "Warning"
+                )
+        except Exception:
+            pass
         if self.settings.PROXY_URL:
             self.log(f"🌐 Proxy: {self.settings.PROXY_URL}\n", AppStyles.INFO_COLOR, "Info")
         if self.settings.SPONSORBLOCK_CATEGORIES:
@@ -1567,8 +1560,20 @@ class MainWindow(QMainWindow):
                 self.download_thread.wait()
         except RuntimeError:
             pass
+
+        url = self.current_download_item.get("url", "")
+        is_spotify = "open.spotify.com" in url
+
         self.download_thread = QThread()
-        self.download_worker = DownloadWorker(self.current_download_item, self.settings)
+        if is_spotify:
+            self.download_worker = SpotDLWorker(
+                self.current_download_item,
+                self.settings,
+                self.settings.SPOTDL,
+            )
+        else:
+            self.download_worker = DownloadWorker(self.current_download_item, self.settings)
+
         self.download_worker.moveToThread(self.download_thread)
         self.download_thread.started.connect(self.download_worker.run)
         self.download_worker.log.connect(self.log, Qt.QueuedConnection)
@@ -1589,7 +1594,7 @@ class MainWindow(QMainWindow):
             return
         self.current_download_item["status"] = status
         self._save_queue_permanent()
-        # Find the card for the *currently downloading* URL, not blindly index 0
+        # Find the card for the *currently downloading* URL, not index 0
         target_url = self.current_download_item.get("url", "")
         for i in range(self.queue_list.count()):
             lw_item = self.queue_list.item(i)
@@ -1972,43 +1977,9 @@ class MainWindow(QMainWindow):
     #  UPDATER UI HANDLERS
     # ════════════════════════════════════════════════════════════════════════
 
-    def _on_ytget_gui_ready(self, latest: str):
-        reply = QMessageBox.information(
-            self,
-            f"{self.settings.APP_NAME} Update Available",
-            f"A new version ({latest}) is available.\nYou are using {self.settings.VERSION}.\n\nOpen the releases page?",
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply == QMessageBox.Yes:
-            webbrowser.open(f"{self.settings.GITHUB_URL}/releases/latest")
-
-    def _on_ytget_gui_uptodate(self):
-        QMessageBox.information(self, "Up to Date", f"{self.settings.APP_NAME} is up to date.")
-
-    def _on_ytget_gui_error(self, msg: str):
-        QMessageBox.warning(self, "Update Check Failed", f"Could not check {self.settings.APP_NAME} updates:\n{msg}")
-
-    def _on_ytdlp_ready(self, latest: str, current: str, asset_url: str):
-        reply = QMessageBox.question(
-            self,
-            "yt-dlp Update Available",
-            f"A new yt-dlp version ({latest}) is available.\nCurrent version: {current}\n\nDownload and replace it now?",
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if reply == QMessageBox.Yes:
-            self.request_download_ytdlp.emit(asset_url)
-
-    def _on_ytdlp_uptodate(self, current: str):
-        QMessageBox.information(self, "Up to Date", f"yt-dlp is up to date (current: {current}).")
-
-    def _on_ytdlp_error(self, msg: str):
-        QMessageBox.warning(self, "yt-dlp Update Check Failed", f"Could not check yt-dlp updates:\n{msg}")
-
-    def _on_ytdlp_download_success(self):
-        QMessageBox.information(self, "yt-dlp Updated", "yt-dlp has been updated successfully.")
-
-    def _on_ytdlp_download_failed(self, msg: str):
-        QMessageBox.critical(self, "yt-dlp Update Failed", f"Could not update yt-dlp:\n{msg}")
+    def _show_update_manager(self):
+        dlg = UpdateManager(self.settings, self)
+        dlg.exec()
 
     # ════════════════════════════════════════════════════════════════════════
     #  SETTINGS / DIALOGS
@@ -2277,6 +2248,11 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             try:
+                if self.spotdl_worker:
+                    self.spotdl_worker.cancel()
+            except Exception:
+                pass                
+            try:
                 if self.title_queue:
                     self.title_queue.stop()
                 if self.title_queue_thread:
@@ -2288,12 +2264,6 @@ class MainWindow(QMainWindow):
                 if self.cover_thread and self.cover_thread.isRunning():
                     self.cover_thread.quit()
                     self.cover_thread.wait(2000)
-            except Exception:
-                pass
-            try:
-                if hasattr(self, "update_thread") and self.update_thread and self.update_thread.isRunning():
-                    self.update_thread.quit()
-                    self.update_thread.wait(2000)
             except Exception:
                 pass
         except Exception:
