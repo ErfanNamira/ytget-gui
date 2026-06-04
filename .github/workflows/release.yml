@@ -150,6 +150,7 @@ jobs:
               --hidden-import "PySide6.*" \
               --hidden-import "requests" \
               --hidden-import "mutagen.*" \
+              --hidden-import "spotdl" \
               --hidden-import "PIL" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.icns:." \
@@ -171,11 +172,11 @@ jobs:
               --hidden-import "PySide6.*" \
               --hidden-import "requests" \
               --hidden-import "mutagen.*" \
+              --hidden-import "spotdl" \
               --hidden-import "PIL" \
               --add-data "ytget_gui:ytget_gui" \
               --add-data "ytget_gui/icon.ico:." \
               --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-              --add-data "spotdl${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
               --add-data "phantomjs${{ runner.os == 'Windows' && '.exe' || '' }}:." \
