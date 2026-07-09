@@ -72,7 +72,7 @@ def short(text: str, n: int = 50) -> str:
 QSS_THEME = """
 /* ── Root ── */
 QMainWindow {
-    background: #09090B;
+    background: #1B1D24;
     color: #E4E4E7;
     font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
     font-size: 13px;
@@ -80,8 +80,8 @@ QMainWindow {
 
 /* ── Top Bar ── */
 #TopBar {
-    background: #111113;
-    border-bottom: 1px solid #1E1E24;
+    background: #202329;
+    border-bottom: 1px solid #2A2D36;
 }
 
 /* ── Brand ── */
@@ -100,8 +100,8 @@ QMainWindow {
 }
 
 #VersionChip {
-    background: #1A1A20;
-    border: 1px solid #2A2A34;
+    background: #262930;
+    border: 1px solid #363A45;
     color: #52525B;
     font-size: 10px;
     font-family: "JetBrains Mono", monospace;
@@ -111,13 +111,13 @@ QMainWindow {
 
 /* ── URL Input Area ── */
 #UrlWrap {
-    background: #0D0D10;
-    border: 1px solid #27272A;
+    background: #1C1F25;
+    border: 1px solid #33363F;
     border-radius: 6px;
 }
 #UrlWrap:focus-within {
     border-color: #00E5FF;
-    background: #0A0F12;
+    background: #182024;
 }
 #UrlWrap QLineEdit {
     background: transparent;
@@ -127,13 +127,13 @@ QMainWindow {
     font-size: 13px;
     padding: 9px 12px;
     selection-background-color: #00E5FF;
-    selection-color: #09090B;
+    selection-color: #1B1D24;
 }
 
 /* ── Format Combo ── */
 #FormatBox {
-    background: #141418;
-    border: 1px solid #27272A;
+    background: #22252C;
+    border: 1px solid #33363F;
     border-radius: 6px;
     color: #A1A1AA;
     font-family: "JetBrains Mono", monospace;
@@ -143,8 +143,8 @@ QMainWindow {
 }
 #FormatBox:hover { border-color: #3F3F46; }
 #FormatBox QAbstractItemView {
-    background: #141418;
-    border: 1px solid #27272A;
+    background: #22252C;
+    border: 1px solid #33363F;
     color: #E4E4E7;
     selection-background-color: #00E5FF22;
     selection-color: #00E5FF;
@@ -158,7 +158,7 @@ QPushButton {
 
 #BtnAdd {
     background: #00E5FF;
-    color: #09090B;
+    color: #1B1D24;
     border: none;
     border-radius: 6px;
     padding: 8px 18px;
@@ -167,12 +167,12 @@ QPushButton {
     letter-spacing: 0.5px;
 }
 #BtnAdd:hover { background: #33EEFF; }
-#BtnAdd:disabled { background: #1A2E33; color: #3A5560; }
+#BtnAdd:disabled { background: #2A3E43; color: #4A6570; }
 
 #BtnPaste {
-    background: #1A1A20;
+    background: #262930;
     color: #71717A;
-    border: 1px solid #27272A;
+    border: 1px solid #33363F;
     border-radius: 6px;
     padding: 8px 14px;
 }
@@ -189,29 +189,29 @@ QPushButton {
 #BtnClear:hover { color: #71717A; }
 
 #BtnTopbar {
-    background: #141418;
+    background: #22252C;
     color: #71717A;
-    border: 1px solid #27272A;
+    border: 1px solid #33363F;
     border-radius: 6px;
     padding: 7px 13px;
 }
-#BtnTopbar:hover { color: #E4E4E7; border-color: #3F3F46; background: #1C1C22; }
+#BtnTopbar:hover { color: #E4E4E7; border-color: #3F3F46; background: #282B33; }
 
 /* ── Splitter ── */
 QSplitter::handle {
-    background: #1E1E24;
+    background: #2A2D36;
     width: 1px;
 }
 
 /* ── Queue Pane ── */
 #QueuePane {
-    background: #0C0C0F;
-    border-right: 1px solid #1E1E24;
+    background: #1B1E24;
+    border-right: 1px solid #2A2D36;
 }
 
 #QueueHeader {
-    background: #0C0C0F;
-    border-bottom: 1px solid #1A1A20;
+    background: #1B1E24;
+    border-bottom: 1px solid #262930;
 }
 
 #PaneLabel {
@@ -233,19 +233,19 @@ QSplitter::handle {
 }
 
 #SearchBox {
-    background: #111115;
-    border: 1px solid #1E1E24;
+    background: #21242B;
+    border: 1px solid #2A2D36;
     border-radius: 5px;
     color: #A1A1AA;
     font-family: "JetBrains Mono", monospace;
     font-size: 12px;
     padding: 6px 10px;
 }
-#SearchBox:focus { border-color: #2A2A34; color: #E4E4E7; }
+#SearchBox:focus { border-color: #363A45; color: #E4E4E7; }
 
 #SortBox {
-    background: #111115;
-    border: 1px solid #1E1E24;
+    background: #21242B;
+    border: 1px solid #2A2D36;
     border-radius: 5px;
     color: #52525B;
     font-family: "JetBrains Mono", monospace;
@@ -253,8 +253,8 @@ QSplitter::handle {
     padding: 5px 8px;
 }
 #SortBox QAbstractItemView {
-    background: #141418;
-    border: 1px solid #27272A;
+    background: #22252C;
+    border: 1px solid #33363F;
     color: #E4E4E7;
     selection-background-color: #00E5FF22;
 }
@@ -272,7 +272,7 @@ QSplitter::handle {
 
 /* ── Empty State ── */
 #EmptyState {
-    color: #27272A;
+    color: #33363F;
     background: transparent;
     font-family: "JetBrains Mono", monospace;
     font-size: 12px;
@@ -280,8 +280,8 @@ QSplitter::handle {
 
 /* ── Bulk Bar ── */
 #BulkBar {
-    background: #0F1214;
-    border-top: 1px solid #1A2830;
+    background: #1D2226;
+    border-top: 1px solid #253540;
 }
 #BulkLabel {
     color: #00E5FF;
@@ -291,7 +291,7 @@ QSplitter::handle {
 #BulkBtn {
     background: transparent;
     color: #52525B;
-    border: 1px solid #1E1E24;
+    border: 1px solid #2A2D36;
     border-radius: 4px;
     padding: 4px 10px;
     font-size: 11px;
@@ -300,7 +300,7 @@ QSplitter::handle {
 
 /* ── Console Pane ── */
 #ConsolePane {
-    background: #09090B;
+    background: #1B1D24;
 }
 
 #ConsolePaneLabel {
@@ -312,8 +312,8 @@ QSplitter::handle {
 }
 
 #FilterBox {
-    background: #111115;
-    border: 1px solid #1E1E24;
+    background: #21242B;
+    border: 1px solid #2A2D36;
     border-radius: 5px;
     color: #52525B;
     font-family: "JetBrains Mono", monospace;
@@ -322,8 +322,8 @@ QSplitter::handle {
     min-width: 80px;
 }
 #FilterBox QAbstractItemView {
-    background: #141418;
-    border: 1px solid #27272A;
+    background: #22252C;
+    border: 1px solid #33363F;
     color: #E4E4E7;
     selection-background-color: #00E5FF22;
 }
@@ -331,18 +331,18 @@ QSplitter::handle {
 #ConsoleTool {
     background: transparent;
     color: #3F3F46;
-    border: 1px solid #1E1E24;
+    border: 1px solid #2A2D36;
     border-radius: 4px;
     padding: 4px 10px;
     font-size: 11px;
 }
-#ConsoleTool:hover { color: #71717A; border-color: #27272A; }
+#ConsoleTool:hover { color: #71717A; border-color: #33363F; }
 
 #Console {
-    background: #060608;
+    background: #16181E;
     color: #71717A;
     border: none;
-    border-top: 1px solid #111115;
+    border-top: 1px solid #21242B;
     font-family: "JetBrains Mono", "Fira Code", monospace;
     font-size: 12px;
     padding: 12px;
@@ -351,13 +351,13 @@ QSplitter::handle {
 
 /* ── Bottom Bar ── */
 #BottomBar {
-    background: #0C0C0F;
-    border-top: 1px solid #1A1A20;
+    background: #1B1E24;
+    border-top: 1px solid #262930;
 }
 
 #BtnStart {
     background: #00E5FF;
-    color: #09090B;
+    color: #1B1D24;
     border: none;
     border-radius: 6px;
     padding: 9px 22px;
@@ -367,35 +367,35 @@ QSplitter::handle {
     min-width: 90px;
 }
 #BtnStart:hover { background: #33EEFF; }
-#BtnStart:disabled { background: #0D2227; color: #1A4550; }
+#BtnStart:disabled { background: #1C3238; color: #2A5560; }
 
 #BtnPause {
-    background: #1A1A20;
+    background: #262930;
     color: #52525B;
-    border: 1px solid #27272A;
+    border: 1px solid #33363F;
     border-radius: 6px;
     padding: 9px 18px;
     font-size: 12px;
 }
 #BtnPause:enabled { color: #A1A1AA; border-color: #3F3F46; }
-#BtnPause:hover:enabled { color: #E4E4E7; background: #22222A; }
-#BtnPause:disabled { color: #27272A; border-color: #1A1A20; }
+#BtnPause:hover:enabled { color: #E4E4E7; background: #2E3139; }
+#BtnPause:disabled { color: #33363F; border-color: #262930; }
 
 #BtnSkip {
     background: transparent;
     color: #3F3F46;
-    border: 1px solid #1E1E24;
+    border: 1px solid #2A2D36;
     border-radius: 6px;
     padding: 9px 14px;
     font-size: 12px;
 }
-#BtnSkip:enabled { color: #71717A; border-color: #27272A; }
+#BtnSkip:enabled { color: #71717A; border-color: #33363F; }
 #BtnSkip:hover:enabled { color: #E4E4E7; border-color: #3F3F46; }
-#BtnSkip:disabled { color: #1E1E24; }
+#BtnSkip:disabled { color: #2A2D36; }
 
 /* ── Progress Bar ── */
 #GlobalProgress {
-    background: #111115;
+    background: #21242B;
     border: none;
     border-radius: 2px;
     max-height: 3px;
@@ -408,8 +408,8 @@ QSplitter::handle {
 
 /* ── Post Action / Path ── */
 #PostActionBox {
-    background: #111115;
-    border: 1px solid #1E1E24;
+    background: #21242B;
+    border: 1px solid #2A2D36;
     border-radius: 5px;
     color: #52525B;
     font-family: "JetBrains Mono", monospace;
@@ -418,8 +418,8 @@ QSplitter::handle {
     min-width: 95px;
 }
 #PostActionBox QAbstractItemView {
-    background: #141418;
-    border: 1px solid #27272A;
+    background: #22252C;
+    border: 1px solid #33363F;
     color: #E4E4E7;
     selection-background-color: #00E5FF22;
 }
@@ -431,14 +431,14 @@ QSplitter::handle {
 #PathBtn {
     background: transparent;
     color: #3F3F46;
-    border: 1px solid #1E1E24;
+    border: 1px solid #2A2D36;
     border-radius: 5px;
     padding: 5px 10px;
     font-size: 11px;
     font-family: "JetBrains Mono", monospace;
     max-width: 260px;
 }
-#PathBtn:hover { color: #71717A; border-color: #27272A; }
+#PathBtn:hover { color: #71717A; border-color: #33363F; }
 
 /* ── Scrollbars ── */
 QScrollBar:vertical {
@@ -448,11 +448,11 @@ QScrollBar:vertical {
     border: none;
 }
 QScrollBar::handle:vertical {
-    background: #1E1E24;
+    background: #2A2D36;
     border-radius: 3px;
     min-height: 24px;
 }
-QScrollBar::handle:vertical:hover { background: #27272A; }
+QScrollBar::handle:vertical:hover { background: #33363F; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar:horizontal {
     background: transparent;
@@ -461,7 +461,7 @@ QScrollBar:horizontal {
     border: none;
 }
 QScrollBar::handle:horizontal {
-    background: #1E1E24;
+    background: #2A2D36;
     border-radius: 3px;
     min-width: 24px;
 }
@@ -469,29 +469,29 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 
 /* ── Menu Bar ── */
 QMenuBar {
-    background: #09090B;
+    background: #1B1D24;
     color: #52525B;
     font-family: "JetBrains Mono", monospace;
     font-size: 12px;
-    border-bottom: 1px solid #111115;
+    border-bottom: 1px solid #21242B;
     padding: 2px 4px;
 }
 QMenuBar::item:selected {
-    background: #141418;
+    background: #22252C;
     color: #E4E4E7;
     border-radius: 4px;
 }
 QMenu {
-    background: #111115;
-    border: 1px solid #1E1E24;
+    background: #21242B;
+    border: 1px solid #2A2D36;
     color: #A1A1AA;
     font-family: "JetBrains Mono", monospace;
     font-size: 12px;
     padding: 4px;
 }
 QMenu::item { padding: 6px 20px 6px 12px; border-radius: 4px; }
-QMenu::item:selected { background: #1A1A20; color: #E4E4E7; }
-QMenu::separator { height: 1px; background: #1E1E24; margin: 4px 8px; }
+QMenu::item:selected { background: #262930; color: #E4E4E7; }
+QMenu::separator { height: 1px; background: #2A2D36; margin: 4px 8px; }
 """
 
 MAX_LOG_LINES = 200
@@ -749,7 +749,7 @@ class MainWindow(QMainWindow):
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color: #1E1E24;")
+        sep.setStyleSheet("color: #2A2D36;")
         sep.setFixedHeight(24)
         lay.addWidget(sep)
 
@@ -934,7 +934,7 @@ class MainWindow(QMainWindow):
 
         # Console toolbar
         toolbar = QFrame()
-        toolbar.setStyleSheet("background:#0C0C0F; border-bottom:1px solid #111115;")
+        toolbar.setStyleSheet("background:#1B1E24; border-bottom:1px solid #21242B;")
         toolbar.setFixedHeight(42)
         t_lay = QHBoxLayout(toolbar)
         t_lay.setContentsMargins(16, 0, 12, 0)
@@ -967,7 +967,7 @@ class MainWindow(QMainWindow):
         self.log_output = QTextEdit(readOnly=True)
         self.log_output.setObjectName("Console")
         self.log_output.setStyleSheet(
-            "QTextEdit#Console { background:#060608; color:#52525B; "
+            "QTextEdit#Console { background:#16181E; color:#52525B; "
             "border:none; font-family:'JetBrains Mono','Fira Code',monospace; "
             "font-size:12px; padding:16px; }"
         )
