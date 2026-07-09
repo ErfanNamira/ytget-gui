@@ -37,7 +37,7 @@
 
 ## 📥 Downloads
 
-#### 🪟 Windows · x86_64 · 230 MB  
+#### 🪟 Windows · x86_64 · 250 MB  
 [⬇ Download for Windows](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.1/YTGet-windows.zip)
 
 #### 🐧 Linux · x86_64 · 255 MB  
