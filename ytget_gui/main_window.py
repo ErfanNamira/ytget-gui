@@ -535,6 +535,7 @@ class MainWindow(QMainWindow):
         self.spotdl_worker: Optional[SpotDLWorker] = None
         self.cover_thread: Optional[QThread] = None
         self.cover_worker: Optional[CoverCropWorker] = None
+        self._cover_crop_running: bool = False
         self.title_queue_thread: Optional[QThread] = None
         self.title_queue: Optional[TitleFetchQueue] = None
 
@@ -1059,6 +1060,8 @@ class MainWindow(QMainWindow):
         m_file.addAction("Save Queue As...", self._save_queue_to_disk, "Ctrl+S")
         m_file.addAction("Load Queue...", self._load_queue_from_disk, "Ctrl+O")
         m_file.addSeparator()
+        m_file.addAction("Open Download Folder", lambda: webbrowser.open(self.settings.DOWNLOADS_DIR.as_uri()))
+        m_file.addSeparator()
         m_file.addAction("Exit", self.close, "Ctrl+Q")
 
         m_settings = menubar.addMenu("Settings")
@@ -1087,9 +1090,11 @@ class MainWindow(QMainWindow):
             post_menu.addAction(act)
             self.post_actions_map[value] = act
 
+        m_tools = menubar.addMenu("Tools")
+        self.action_crop_covers = m_tools.addAction("Crop Audio Covers Now", self._run_cover_crop_manual)
+
         m_help = menubar.addMenu("Help")
         m_help.addAction("Check for Updates", self._show_update_manager)
-        m_help.addAction("Open Download Folder", lambda: webbrowser.open(self.settings.DOWNLOADS_DIR.as_uri()))
         m_help.addAction("About", self._show_about)
 
     def _setup_title_fetch_queue(self):
@@ -1638,28 +1643,59 @@ class MainWindow(QMainWindow):
         self._initial_queue_len = 0
         self._update_global_progress_bar()
         if getattr(self.settings, "CROP_AUDIO_COVERS", False):
-            self.log("🖼️ Cropping audio covers to 1:1. This may take a moment...\n", AppStyles.INFO_COLOR, "Info")
-            try:
-                if self.cover_thread and self.cover_thread.isRunning():
-                    self.cover_thread.quit()
-                    self.cover_thread.wait()
-            except RuntimeError:
-                pass
-            self.cover_thread = QThread()
-            self.cover_worker = CoverCropWorker(self.settings.DOWNLOADS_DIR)
-            self.cover_worker.moveToThread(self.cover_thread)
-            self.cover_thread.started.connect(self.cover_worker.run)
-            self.cover_worker.log.connect(self.log, Qt.QueuedConnection)
-            self.cover_worker.finished.connect(self.cover_thread.quit)
-            self.cover_worker.finished.connect(
-                lambda action=self.post_queue_action: self.post_queue_action_signal.emit(action),
-                Qt.QueuedConnection,
+            started = self._start_cover_crop_worker(
+                on_finished=lambda action=self.post_queue_action: self.post_queue_action_signal.emit(action)
             )
-            self.cover_thread.finished.connect(self.cover_worker.deleteLater)
-            self.cover_thread.finished.connect(self.cover_thread.deleteLater)
-            self.cover_thread.start()
+            if not started:
+                # Cover cropping already running (unlikely here); still perform the post-queue action.
+                self.post_queue_action_signal.emit(self.post_queue_action)
         else:
             self.post_queue_action_signal.emit(self.post_queue_action)
+
+    def _run_cover_crop_manual(self):
+        """Manually trigger the cover-crop worker from the Tools menu, e.g. to
+        clean up covers after a queue that finished with errors or was never
+        completed."""
+        self._start_cover_crop_worker()
+
+    def _start_cover_crop_worker(self, on_finished=None) -> bool:
+        """Starts the CoverCropWorker on a background thread against the
+        current downloads directory. Returns False (without starting a new
+        run) if a cover-crop pass is already in progress, otherwise True."""
+        if self._cover_crop_running:
+            self.log("ℹ️ Cover cropping is already running.\n", AppStyles.INFO_COLOR, "Info")
+            return False
+
+        self._cover_crop_running = True
+        if hasattr(self, "action_crop_covers"):
+            self.action_crop_covers.setEnabled(False)
+
+        self.log("🖼️ Cropping audio covers to 1:1. This may take a moment...\n", AppStyles.INFO_COLOR, "Info")
+        self.cover_thread = QThread()
+        self.cover_worker = CoverCropWorker(self.settings.DOWNLOADS_DIR)
+        self.cover_worker.moveToThread(self.cover_thread)
+        self.cover_thread.started.connect(self.cover_worker.run)
+        self.cover_worker.log.connect(self.log, Qt.QueuedConnection)
+        self.cover_worker.finished.connect(self.cover_thread.quit)
+        if on_finished is not None:
+            self.cover_worker.finished.connect(on_finished, Qt.QueuedConnection)
+        self.cover_thread.finished.connect(self.cover_worker.deleteLater)
+        self.cover_thread.finished.connect(self.cover_thread.deleteLater)
+        self.cover_thread.finished.connect(self._on_cover_crop_thread_finished, Qt.QueuedConnection)
+        self.cover_thread.start()
+        return True
+
+    def _on_cover_crop_thread_finished(self):
+        """Clears our Python-side references once the cover-crop thread has
+        finished, so a stale (or about-to-be C++-deleted) QThread/worker
+        can't be touched by a later run. Runs after the deleteLater calls
+        above have been scheduled, since Qt invokes queued/direct slots
+        connected to the same signal in connection order."""
+        self.cover_thread = None
+        self.cover_worker = None
+        self._cover_crop_running = False
+        if hasattr(self, "action_crop_covers"):
+            self.action_crop_covers.setEnabled(True)
 
     def _perform_post_queue_action(self, action: str):
         if action == "Keep":
