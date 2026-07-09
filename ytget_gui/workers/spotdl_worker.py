@@ -98,6 +98,15 @@ class SpotDLWorker(QObject):
         self._percent_re = re.compile(r"(\d{1,3})%")
         self._eta_re = re.compile(r"(\d+:\d+)\s*(?:remaining|left|eta)", re.IGNORECASE)
 
+        # spotdl exits 0 even when individual tracks in a batch fail (e.g. an
+        # AudioProviderError from yt-dlp on one provider). Track these so the
+        # final status message isn't misleadingly "successful".
+        self._track_error_re = re.compile(
+            r"(AudioProviderError|LookupError:.*not found|Skipping .* \(as it is Explicit\))",
+            re.IGNORECASE,
+        )
+        self._track_errors: List[str] = []
+
     # ------------------------------------------------------------------
     def run(self):
         try:
@@ -187,8 +196,10 @@ class SpotDLWorker(QObject):
         if s.SPOTDL_GENERATE_LRC:
             cmd.append("--generate-lrc")
 
-        # Audio providers
-        if s.SPOTDL_AUDIO_PROVIDERS:
+        # Audio providers — only pass --audio when it differs from the
+        # default fallback chain (youtube-music -> youtube). Adding more
+        # providers beyond that increases per-track latency further.
+        if s.SPOTDL_AUDIO_PROVIDERS and list(s.SPOTDL_AUDIO_PROVIDERS) != ["youtube-music", "youtube"]:
             cmd += ["--audio"] + list(s.SPOTDL_AUDIO_PROVIDERS)
 
         # Bitrate
@@ -217,7 +228,6 @@ class SpotDLWorker(QObject):
 
         # ffmpeg location
         try:
-            ffmpeg_dir = str(a.FFMPEG_PATH.parent)
             cmd.extend(["--ffmpeg", str(a.FFMPEG_PATH)])
         except Exception:
             pass
@@ -302,6 +312,11 @@ class SpotDLWorker(QObject):
             color = AppStyles.ERROR_COLOR if is_error else AppStyles.TEXT_COLOR
             self._add_log(text, color)
 
+            for m_err in self._track_error_re.finditer(text):
+                snippet = m_err.group(0).strip()
+                if snippet not in self._track_errors:
+                    self._track_errors.append(snippet)
+
             # Extract progress: spotdl uses tqdm bars like "42%|████..."
             m = self._percent_re.search(text[-300:])
             if m:
@@ -341,7 +356,16 @@ class SpotDLWorker(QObject):
             return
 
         if exit_code == 0:
-            self._add_log("✅ SpotDL download finished successfully.\n", AppStyles.SUCCESS_COLOR)
+            if self._track_errors:
+                self._add_log(
+                    "⚠️ SpotDL finished, but "
+                    f"{len(self._track_errors)} track(s) had errors:\n"
+                    + "\n".join(f"   • {e}" for e in self._track_errors)
+                    + "\n",
+                    AppStyles.WARNING_COLOR,
+                )
+            else:
+                self._add_log("✅ SpotDL download finished successfully.\n", AppStyles.SUCCESS_COLOR)
         else:
             self._add_log(f"❌ spotdl exited with code {exit_code}.\n", AppStyles.ERROR_COLOR)
         self._flush_logs_now()
