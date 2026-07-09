@@ -331,7 +331,7 @@ class DownloadWorker(QObject):
         """
         try:
             code = code if code is not None else self.item.get("format_code", "")
-            return str(code) in ("bestaudio", "playlist_mp3", "youtube_music", "audio_flac")
+            return str(code) in ("bestaudio", "playlist_mp3", "audio_flac", "audio_opus", "playlist_opus")
         except Exception:
             return False
 
@@ -364,6 +364,7 @@ class DownloadWorker(QObject):
         cmd: List[str] = [
             str(s.YT_DLP_PATH),
             "--no-warnings",
+            "--no-overwrites",
             "--progress",
             "--newline",
             "--output-na-placeholder", "Unknown",
@@ -395,10 +396,11 @@ class DownloadWorker(QObject):
             pass        
 
         # Determine playlist/audio flags from the normalized format_code and URL
-        is_playlist = "list=" in (it.get("url", "") or "") or format_code in ("playlist_mp3", "youtube_music")
+        is_playlist = "list=" in (it.get("url", "") or "") or format_code in ("playlist_mp3", "playlist_opus")
         # Use the normalized format_code when deciding audio vs video
         is_audio = self._is_audio_download(format_code)
         is_flac = (isinstance(format_code, str) and format_code == "audio_flac")
+        is_opus = (isinstance(format_code, str) and format_code in ("audio_opus", "playlist_opus"))
 
         if s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0:
             cmd.extend(["--cookies", str(s.COOKIES_PATH)])
@@ -417,6 +419,24 @@ class DownloadWorker(QObject):
         if is_playlist:
             cmd.append("--ignore-errors")
         if getattr(s, "ENABLE_ARCHIVE", False):
+            cmd.extend(["--download-archive", str(s.ARCHIVE_PATH)])
+        elif is_playlist:
+            # Even if the user hasn't opted into the archive feature, always
+            # use it for playlists. Without it, yt-dlp only knows a file
+            # "already downloaded" by checking if the destination path
+            # exists on disk -- it still runs the Metadata/EmbedThumbnail
+            # postprocessors against that pre-existing file every re-run,
+            # and that repeat postprocessing pass is what throws
+            # "ERROR: Conversion failed!" on items that were already fully
+            # completed in a previous run (or session). Recording finished
+            # video IDs in the archive lets yt-dlp skip those items
+            # entirely -- no re-download, no re-tagging, no error.
+            try:
+                s.ARCHIVE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                if not s.ARCHIVE_PATH.exists():
+                    s.ARCHIVE_PATH.touch()
+            except Exception:
+                pass
             cmd.extend(["--download-archive", str(s.ARCHIVE_PATH)])
         if getattr(s, "PLAYLIST_REVERSE", False):
             cmd.append("--playlist-reverse")
@@ -452,10 +472,17 @@ class DownloadWorker(QObject):
             cmd.extend(["-o", out_tmpl])
 
         if is_audio:
+            if is_flac:
+                audio_format = "flac"
+            elif is_opus:
+                audio_format = "opus"
+            else:
+                audio_format = "mp3"
+
             cmd.extend([
                 "-f", "bestaudio",
                 "--extract-audio",
-                "--audio-format", "flac" if is_flac else "mp3",
+                "--audio-format", audio_format,
                 "--embed-thumbnail",
             ])
             if getattr(s, "ADD_METADATA", False):
@@ -464,7 +491,7 @@ class DownloadWorker(QObject):
                 cmd.extend(["--audio-quality", "0"])
             if is_flac:
                 cmd.extend(["--postprocessor-args", "ffmpeg:-compression_level 12 -sample_fmt s16"])
-            if format_code == "youtube_music" and getattr(s, "YT_MUSIC_METADATA", False):
+            if is_playlist and getattr(s, "YT_MUSIC_METADATA", False):
                 cmd.extend([
                     "--parse-metadata", "description:(?s)(?P<meta_comment>.+)",
                     "--parse-metadata", "%(meta_comment)s:(?P<artist>[^\n]+)",
@@ -578,7 +605,7 @@ class DownloadWorker(QObject):
         downloads_root: Path = Path(self.settings.DOWNLOADS_DIR)
         if not downloads_root.exists():
             return 0
-        audio_exts = {".mp3", ".flac"}
+        audio_exts = {".mp3", ".flac", ".opus"}
         tag_texts = [
             "(music video)", "(official video)", "(official visualizer)", "(video oficial)",
             "[official video]", "(drone)", "(video)", "(visualiser)", "(lyric video)", "(lyrics)",
