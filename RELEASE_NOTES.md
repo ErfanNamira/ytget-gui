@@ -38,16 +38,16 @@
 ## 📥 Downloads
 
 #### 🪟 Windows · x86_64 · 250 MB  
-[⬇ Download for Windows](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.1/YTGet-windows.zip)
+[⬇ Download for Windows](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-windows.zip)
 
 #### 🐧 Linux · x86_64 · 255 MB  
-[⬇ Download for Linux](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.1/YTGet-linux.tar.gz)
+[⬇ Download for Linux](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-linux.tar.gz)
 
 #### 🍎 macOS (ARM) · arm64 · 155 MB  
-[⬇ Download for macOS ARM](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.1/YTGet-macOS-arm64.tar.gz)
+[⬇ Download for macOS ARM](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-macOS-arm64.tar.gz)
 
 #### 🍎 macOS (Intel) · x86_64 · 158 MB  
-[⬇ Download for macOS Intel](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.1/YTGet-macOS-x86_64.tar.gz)
+[⬇ Download for macOS Intel](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-macOS-x86_64.tar.gz)
 
 ---
 
