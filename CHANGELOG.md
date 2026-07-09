@@ -1,3 +1,28 @@
+### v 2.7.1 **Opus Audio, SpotDL Reliability & UI Refinements**
+- **🎧 Opus audio support**
+  - Added `audio_opus` format code for single-track Opus downloads (`--audio-format opus`).
+  - Added `playlist_opus` format code for downloading playlists as Opus.
+  - New settings presets: 🎧 Single Audio (Opus) and 🎶 Audio Playlist (Opus – YouTube/Music).
+  - `.opus` added to the recognized audio file extensions used during post-processing.
+- **Playlist/format code cleanup**
+  - Merged the `youtube_music` format code into `playlist_mp3`; the optional artist/title metadata-parsing step (`YT_MUSIC_METADATA`) now applies to any playlist audio download (MP3 or Opus) instead of being tied to a specific format code.
+  - Consolidated the 🎶 Audio Playlist (MP3 – YouTube) and 🎶 Audio Playlist (MP3 – YouTube Music) presets into a single 🎶 Audio Playlist (MP3 – YouTube/Music) preset.
+  - `_is_audio_download()` now recognizes `audio_opus` and `playlist_opus`; playlist detection now checks for `playlist_mp3`/`playlist_opus` instead of `playlist_mp3`/`youtube_music`.
+- **SpotDL reliability improvements**
+  - `SPOTDL_THREADS` default raised from 6 to 12 to match known-good throughput.
+  - `SPOTDL_AUDIO_PROVIDERS` default changed to `["youtube-music", "youtube"]`, adding an automatic fallback so a single provider hiccup doesn't cause a track to silently fail with no audio source.
+  - Fixed false "success" reporting: spotdl exits 0 even when individual tracks fail. SpotDL runs now scan output for per-track failure markers and report "⚠️ finished, but N track(s) had errors" when applicable.
+  - Removed a dead, unused `ffmpeg_dir` variable from the SpotDL command builder.
+- **🎨 Dark theme lightened**
+  - Surfaces across the app now read as rich dark grey/blue rather than near-black, updated consistently across `main_window.py`, `styles.py`, and `main.py`.
+  - Accent colors and text greys were left unchanged.
+- **Update Manager & About dialog cleanup**
+  - Removed FFmpeg/FFprobe from the Update Manager; it's no longer checked, downloaded, or auto-installed.
+  - Fixed a console window briefly flashing open when checking for updates on Windows.
+  - Removed the "System" and "Dependencies" tabs and the "Check for Updates" button from the About dialog, which is now streamlined to just "About" and "License".
+- **Fixed YouTube Music track numbering**
+  - Track numbers were incorrectly tagged with a fixed/bogus value instead of actual playlist position. Now explicitly mapped from yt-dlp's `playlist_index` via `--parse-metadata`.
+
 ### v 2.7.0 **Spotify Support via SpotDL**
 - Added full Spotify track and playlist downloading support using spotDL
 - Seamlessly downloads Spotify content by resolving tracks through YouTube audio sources.
