@@ -4,11 +4,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
-from PySide6.QtCore import QObject, Signal, QProcess, QTimer, QProcessEnvironment
+from PySide6.QtCore import QObject, Signal, QTimer
 import os
 import re
 import sys
 import time
+import subprocess
+import threading
 
 from ytget_gui.styles import AppStyles
 from ytget_gui.settings import AppSettings
@@ -27,6 +29,13 @@ class DownloadWorker(QObject):
     error = Signal(str)
     status = Signal(str)
 
+    # Internal signals: used to safely hand data from the background reader
+    # thread back to this object's own thread (Qt auto-queues signal
+    # emissions across threads, so slots here always run on the worker
+    # thread where the QTimer etc. live).
+    _rawOutput = Signal(bytes)
+    _procFinished = Signal(int)
+
     def __init__(
         self,
         item: Dict[str, Any],
@@ -37,7 +46,8 @@ class DownloadWorker(QObject):
         super().__init__()
         self.item = item
         self.settings = settings
-        self.process: Optional[QProcess] = None
+        self.process: Optional[subprocess.Popen] = None
+        self._reader_thread: Optional[threading.Thread] = None
         self._cancel_requested = False
         self._flat_playlist_dir: Optional[Path] = None
 
@@ -69,6 +79,11 @@ class DownloadWorker(QObject):
                 self._log_timer.setInterval(self._log_flush_ms)
                 self._log_timer.timeout.connect(self._flush_logs)
                 self._log_timer.start()
+
+            # Connect once: these route data from the background reader
+            # thread back onto this worker's own thread safely.
+            self._rawOutput.connect(self._on_read_bytes)
+            self._procFinished.connect(self._on_finished_signal)
 
             # Try to refresh cookies if user enabled auto-refresh
             try:                       
@@ -110,52 +125,86 @@ class DownloadWorker(QObject):
             self.log.emit(f"\nStarting Download for: {(self.item.get('title', 'Unknown'))}", AppStyles.SUCCESS_COLOR)
             self._flush_logs_now()
 
-            # Setup QProcess
-            self.process = QProcess(self)
-            self.process.setProcessChannelMode(QProcess.MergedChannels)
-            if env is not None:
-                self.process.setProcessEnvironment(env)
-
-            # Prevent a console window from flashing on Windows when the
-            # child process (yt-dlp / ffmpeg) starts.
-            if sys.platform == "win32":
-                def _no_window(args):
-                    args.flags |= 0x08000000  # CREATE_NO_WINDOW
-                self.process.setCreateProcessArgumentsModifier(_no_window)
-
-            # connect readyRead to our handler
-            self.process.readyReadStandardOutput.connect(self._on_read)
-            self.process.errorOccurred.connect(self._on_qprocess_error)
-            self.process.finished.connect(self._on_finished)
-
             program = cmd[0]
             args = cmd[1:]
-            self.process.start(program, args)
 
-            # short wait to detect immediate failures
-            if not self.process.waitForStarted(4000):
-                self.error.emit("Failed to start yt-dlp process.")
+            # On Windows, prevent a console window from flashing when the
+            # child process (yt-dlp / ffmpeg) starts. QProcess's
+            # setCreateProcessArgumentsModifier isn't wrapped by PySide6, so
+            # we use subprocess.Popen directly, which does support this.
+            creationflags = 0
+            startupinfo = None
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            try:
+                self.process = subprocess.Popen(
+                    [program, *args],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    env=env,
+                    creationflags=creationflags,
+                    startupinfo=startupinfo,
+                    bufsize=1,
+                )
+            except Exception as e:
+                self.error.emit(f"Failed to start yt-dlp process: {e}")
                 self._flush_logs_now()
-                try:
-                    if self.process.state() == QProcess.Running:
-                        self.process.kill()
-                except Exception:
-                    pass
                 self.finished.emit(-1)
                 return
+
+            # Read process output on a background thread and forward it into
+            # the existing buffered-logging pipeline.
+            self._reader_thread = threading.Thread(
+                target=self._read_process_output, daemon=True
+            )
+            self._reader_thread.start()
         except Exception as e:
             self.error.emit(f"Error preparing download: {e}")
             self._flush_logs_now()
             self.finished.emit(-1)
 
+    # Runs on a background thread: reads the child process's merged
+    # stdout/stderr stream and hands chunks off to the existing handlers.
+    def _read_process_output(self):
+        p = self.process
+        if p is None or p.stdout is None:
+            self._procFinished.emit(-1)
+            return
+        try:
+            while True:
+                chunk = p.stdout.read(4096)
+                if not chunk:
+                    break
+                self._rawOutput.emit(chunk)
+        except Exception:
+            pass
+        finally:
+            try:
+                exit_code = p.wait()
+            except Exception:
+                exit_code = -1
+            self._procFinished.emit(exit_code)
+
+    def _on_finished_signal(self, exit_code: int):
+        # Thin wrapper so the two-arg _on_finished (kept for readability/
+        # symmetry with the old QProcess.finished signature) can be
+        # connected to the single-arg _procFinished signal.
+        self._on_finished(exit_code, None)
+
     def cancel(self):
         self._cancel_requested = True
-        if self.process and self.process.state() == QProcess.Running:
+        if self.process and self.process.poll() is None:
             self._add_log("⏹️ Cancelling Download...\n", AppStyles.WARNING_COLOR)
             self._flush_logs_now()
             try:
                 self.process.terminate()
-                if not self.process.waitForFinished(2000):
+                try:
+                    self.process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
                     self.process.kill()
             except Exception:
                 try:
@@ -164,9 +213,9 @@ class DownloadWorker(QObject):
                     pass
 
     # Build a minimal environment for child process, adding PhantomJS only when explicitly requested
-    def _build_process_env(self, cmd: List[str]) -> Optional[QProcessEnvironment]:
+    def _build_process_env(self, cmd: List[str]) -> Optional[Dict[str, str]]:
         try:
-            env = QProcessEnvironment.systemEnvironment()
+            env = os.environ.copy()
             extras: List[str] = []
             if getattr(self.settings, "INTERNAL_DIR", None):
                 extras.append(str(self.settings.INTERNAL_DIR))
@@ -193,27 +242,23 @@ class DownloadWorker(QObject):
                     pass
 
             if extras:
-                cur = env.value("PATH", os.environ.get("PATH", ""))
+                cur = env.get("PATH", "")
                 parts = cur.split(os.pathsep) if cur else []
                 # insert extras at front in stable order
                 for p in reversed(extras):
                     if p and p not in parts:
                         parts.insert(0, p)
-                env.insert("PATH", os.pathsep.join(parts))
+                env["PATH"] = os.pathsep.join(parts)
             return env
         except Exception:
             return None
 
     # lightweight read handler that extracts and throttles progress info
-    def _on_read(self):
-        p = self.process
-        if not p:
+    # (called from the background reader thread with a raw bytes chunk)
+    def _on_read_bytes(self, data: bytes):
+        if not data:
             return
         try:
-            # read available bytes once; decoding once minimizes CPU cost
-            data = p.readAllStandardOutput().data()
-            if not data:
-                return
             text = data.decode(errors="ignore")
 
             # quick error detection
@@ -261,10 +306,6 @@ class DownloadWorker(QObject):
         except Exception:
             # swallow exceptions to keep worker alive
             pass
-
-    def _on_qprocess_error(self, _code):
-        self._add_log("❌ yt-dlp encountered a process error.\n", AppStyles.ERROR_COLOR)
-        self._flush_logs_now()
 
     def _on_finished(self, exit_code: int, _status):
         try:
