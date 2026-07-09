@@ -68,8 +68,9 @@ class AppSettings:
             # --- Audio / playlist presets (unchanged) ---
             "🎵 Single Audio (MP3)": "bestaudio",
             "🎧 Single Audio (FLAC)": "audio_flac",
-            "🎶 Audio Playlist (MP3 – YouTube)": "playlist_mp3",
-            "🎶 Audio Playlist (MP3 – YouTube Music)": "youtube_music",
+            "🎧 Single Audio (Opus)": "audio_opus",
+            "🎶 Audio Playlist (MP3 – YouTube/Music)": "playlist_mp3",
+            "🎶 Audio Playlist (Opus – YouTube/Music)": "playlist_opus",
 
             # --- Spotify via SpotDL ---
             "🎸 Spotify (via SpotDL)": "spotify",
