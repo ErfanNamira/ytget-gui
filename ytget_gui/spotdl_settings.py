@@ -54,7 +54,7 @@ DEFAULT_OUTPUT_TEMPLATE = "{artists} - {title} - {year}.{output-ext}"
 class SpotDLSettings:
     # ── Core ────────────────────────────────────────────────────────────────
     SPOTDL_FORMAT: str = "opus"
-    SPOTDL_THREADS: int = 6
+    SPOTDL_THREADS: int = 12
     SPOTDL_OUTPUT: str = DEFAULT_OUTPUT_TEMPLATE
 
     # ── Lyrics ──────────────────────────────────────────────────────────────
@@ -62,8 +62,12 @@ class SpotDLSettings:
     SPOTDL_GENERATE_LRC: bool = True
 
     # ── Audio source ────────────────────────────────────────────────────────
+    # youtube-music first (fastest, best metadata match), youtube as a
+    # fallback so a single provider hiccup (bot-check, region lock, missing
+    # format) doesn't silently drop a track. A single-provider default is
+    # slightly faster but has no safety net — this is the better trade-off.
     SPOTDL_AUDIO_PROVIDERS: List[str] = field(
-        default_factory=lambda: ["youtube", "youtube-music"]
+        default_factory=lambda: ["youtube-music", "youtube"]
     )
 
     # ── Quality ─────────────────────────────────────────────────────────────
