@@ -131,7 +131,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          curl -L https://github.com/upx/upx/releases/latest/download/upx-5.0.1-win64.zip -o upx.zip
+          UPX_URL=$(curl -sL https://api.github.com/repos/upx/upx/releases/latest \
+            | grep "browser_download_url.*win64.zip" \
+            | cut -d '"' -f 4)
+          echo "Resolved UPX URL: $UPX_URL"
+          curl -L "$UPX_URL" -o upx.zip
           powershell -Command "Expand-Archive -Path upx.zip -DestinationPath upx_dir"
           UPX_BIN=$(powershell -Command "(Get-ChildItem -Recurse -Filter upx.exe | Select-Object -First 1).FullName")
           mkdir -p upx_bin
