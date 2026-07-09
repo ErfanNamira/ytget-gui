@@ -420,24 +420,6 @@ class DownloadWorker(QObject):
             cmd.append("--ignore-errors")
         if getattr(s, "ENABLE_ARCHIVE", False):
             cmd.extend(["--download-archive", str(s.ARCHIVE_PATH)])
-        elif is_playlist:
-            # Even if the user hasn't opted into the archive feature, always
-            # use it for playlists. Without it, yt-dlp only knows a file
-            # "already downloaded" by checking if the destination path
-            # exists on disk -- it still runs the Metadata/EmbedThumbnail
-            # postprocessors against that pre-existing file every re-run,
-            # and that repeat postprocessing pass is what throws
-            # "ERROR: Conversion failed!" on items that were already fully
-            # completed in a previous run (or session). Recording finished
-            # video IDs in the archive lets yt-dlp skip those items
-            # entirely -- no re-download, no re-tagging, no error.
-            try:
-                s.ARCHIVE_PATH.parent.mkdir(parents=True, exist_ok=True)
-                if not s.ARCHIVE_PATH.exists():
-                    s.ARCHIVE_PATH.touch()
-            except Exception:
-                pass
-            cmd.extend(["--download-archive", str(s.ARCHIVE_PATH)])
         if getattr(s, "PLAYLIST_REVERSE", False):
             cmd.append("--playlist-reverse")
         if getattr(s, "PLAYLIST_ITEMS", ""):
@@ -496,7 +478,7 @@ class DownloadWorker(QObject):
                     "--parse-metadata", "description:(?s)(?P<meta_comment>.+)",
                     "--parse-metadata", "%(meta_comment)s:(?P<artist>[^\n]+)",
                     "--parse-metadata", "%(meta_comment)s:.+ - (?P<title>[^\n]+)",
-                    "--parse-metadata", "%(playlist_index)s:%(meta_track)s",
+                    "--parse-metadata", "%(playlist_index)s:%(track_number)s",
                 ])
         else:
             preferred = (getattr(s, "VIDEO_FORMAT", "").lstrip(".")) or "mkv"
