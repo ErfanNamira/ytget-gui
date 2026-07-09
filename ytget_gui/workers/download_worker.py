@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, QProcess, QTimer, QProcessEnvironment
 import os
 import re
+import sys
 import time
 
 from ytget_gui.styles import AppStyles
@@ -114,6 +115,14 @@ class DownloadWorker(QObject):
             self.process.setProcessChannelMode(QProcess.MergedChannels)
             if env is not None:
                 self.process.setProcessEnvironment(env)
+
+            # Prevent a console window from flashing on Windows when the
+            # child process (yt-dlp / ffmpeg) starts.
+            if sys.platform == "win32":
+                def _no_window(args):
+                    args.flags |= 0x08000000  # CREATE_NO_WINDOW
+                self.process.setCreateProcessArgumentsModifier(_no_window)
+
             # connect readyRead to our handler
             self.process.readyReadStandardOutput.connect(self._on_read)
             self.process.errorOccurred.connect(self._on_qprocess_error)
