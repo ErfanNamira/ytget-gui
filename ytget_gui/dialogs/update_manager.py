@@ -4,11 +4,8 @@
 Cross-platform Update Manager for YTGet.
 
 Handles checking and updating:
-  • YTGet itself          — GitHub Releases (ErfanNamira/ytget-gui)
+  • YTGet                — GitHub Releases (ErfanNamira/ytget-gui)
   • yt-dlp               — GitHub Releases (yt-dlp/yt-dlp)
-  • FFmpeg + FFprobe      — GitHub Releases (BtbN/FFmpeg-Builds) on Win/Linux,
-                           stable builds only (nightly/autobuild skipped);
-                           warns to use Homebrew on macOS
   • SpotDL               — pip install --upgrade spotdl  (all platforms)
   • Deno                 — GitHub Releases (denoland/deno)
 
@@ -31,7 +28,6 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-import tarfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -73,13 +69,6 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "kind":    "github_binary",
         "icon":    "📥",
     },
-    "ffmpeg": {
-        "label":   "FFmpeg / FFprobe",
-        "owner":   "BtbN",
-        "repo":    "FFmpeg-Builds",
-        "kind":    "ffmpeg",
-        "icon":    "🎞️",
-    },
     "spotdl": {
         "label":   "SpotDL",
         "package": "spotdl",
@@ -96,6 +85,16 @@ TOOLS: Dict[str, Dict[str, Any]] = {
 }
 
 REQUEST_TIMEOUT = 15   # seconds
+
+# Prevent a console/terminal window from flashing up when we spawn helper
+# processes (yt-dlp --version, deno --version, pip, etc.) on Windows.
+_POPEN_KWARGS: Dict[str, Any] = {}
+if sys.platform == "win32":
+    _POPEN_KWARGS["creationflags"] = subprocess.CREATE_NO_WINDOW
+    _startupinfo = subprocess.STARTUPINFO()
+    _startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    _startupinfo.wShowWindow = subprocess.SW_HIDE
+    _POPEN_KWARGS["startupinfo"] = _startupinfo
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  PLATFORM HELPERS
@@ -122,22 +121,15 @@ def _current_version(tool_key: str, settings: AppSettings) -> str:
             result = subprocess.run(
                 [str(settings.YT_DLP_PATH), "--version"],
                 capture_output=True, text=True, timeout=8,
+                **_POPEN_KWARGS,
             )
             return result.stdout.strip()
-
-        if tool_key == "ffmpeg":
-            result = subprocess.run(
-                [str(settings.FFMPEG_PATH), "-version"],
-                capture_output=True, text=True, timeout=8,
-            )
-            # "ffmpeg version N-XXXXX-..." (nightly)  or  "ffmpeg version 8.1" (stable)
-            m = re.search(r"ffmpeg version\s+(\S+)", result.stdout)
-            return m.group(1) if m else "unknown"
 
         if tool_key == "spotdl":
             result = subprocess.run(
                 [sys.executable, "-m", "spotdl", "--version"],
                 capture_output=True, text=True, timeout=10,
+                **_POPEN_KWARGS,
             )
             return result.stdout.strip() or result.stderr.strip()
 
@@ -145,6 +137,7 @@ def _current_version(tool_key: str, settings: AppSettings) -> str:
             result = subprocess.run(
                 [str(settings.DENO_PATH), "--version"],
                 capture_output=True, text=True, timeout=8,
+                **_POPEN_KWARGS,
             )
             # "deno 2.x.y\n..."
             m = re.search(r"deno\s+([\d.]+)", result.stdout)
@@ -182,27 +175,6 @@ def _asset_name_for_deno(tag: str) -> str:
     return f"deno-{arch}-unknown-linux-gnu.zip"
 
 
-def _asset_name_for_ffmpeg_stable(tag: str) -> Optional[str]:
-    """
-    Build the asset filename for a stable BtbN/FFmpeg-Builds release.
-
-    Stable release tags look like 'n7.1'; the corresponding asset names follow
-    the pattern:  ffmpeg-{tag}-latest-{platform}-gpl.{ext}
-
-    Returns None on macOS (users are directed to Homebrew) and on unsupported
-    architectures.
-    """
-    sys_ = _system()
-    if sys_ == "darwin":
-        return None   # macOS users are directed to Homebrew
-    if is_windows():
-        return f"ffmpeg-{tag}-latest-win64-gpl.zip"
-    # Linux x86_64 only; arm64 builds are not published by BtbN
-    if _machine() == "x86_64":
-        return f"ffmpeg-{tag}-latest-linux64-gpl.tar.xz"
-    return None
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 #  UPDATE CHECKER
 # ═══════════════════════════════════════════════════════════════════════════
@@ -233,27 +205,6 @@ class UpdateChecker(QThread):
         tag  = data.get("tag_name", "").lstrip("v")
         return tag, data.get("assets", [])
 
-    def _gh_latest_stable_ffmpeg(self) -> Tuple[str, List[dict]]:
-        """
-        Fetch the most recent STABLE release from BtbN/FFmpeg-Builds.
-
-        BtbN publishes two kinds of releases:
-          • Nightly/autobuild — tag contains 'autobuild', e.g. 'autobuild-2024-12-16-12-48'
-          • Stable            — tag is a version number, e.g. 'n7.1'
-
-        We iterate the releases list (newest first) and return the first one
-        whose tag does NOT contain 'autobuild'.
-        """
-        url  = GITHUB_RELEASES_API.format(owner="BtbN", repo="FFmpeg-Builds")
-        resp = self._session.get(url, params={"per_page": 20}, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        for release in resp.json():
-            tag = release.get("tag_name", "")
-            if "autobuild" in tag.lower():
-                continue  # skip nightly builds
-            return tag.lstrip("v"), release.get("assets", [])
-        raise RuntimeError("No stable FFmpeg release found in the last 20 releases.")
-
     def _pip_latest(self, package: str) -> str:
         url  = PYPI_API.format(package=package)
         resp = self._session.get(url, timeout=REQUEST_TIMEOUT)
@@ -279,34 +230,6 @@ class UpdateChecker(QThread):
         try:
             latest, assets = self._gh_latest("yt-dlp", "yt-dlp")
             asset_name = _asset_name_for_ytdlp()
-            dl_url = next(
-                (a["browser_download_url"] for a in assets if a["name"] == asset_name),
-                "",
-            )
-            self.result_ready.emit(key, installed, latest, dl_url)
-        except Exception as e:
-            self.error.emit(key, str(e))
-
-    def _check_ffmpeg(self):
-        """
-        Check for the latest STABLE FFmpeg release from BtbN/FFmpeg-Builds.
-        Nightly/autobuild releases are intentionally skipped.
-        """
-        key = "ffmpeg"
-        installed = _current_version(key, self._settings)
-        try:
-            if _system() == "darwin":
-                # No automatic install on macOS — provide Homebrew hint.
-                # Still fetch the stable tag so the UI shows a meaningful version.
-                latest, _ = self._gh_latest_stable_ffmpeg()
-                self.result_ready.emit(key, installed, latest, "homebrew")
-                return
-
-            latest, assets = self._gh_latest_stable_ffmpeg()
-            asset_name = _asset_name_for_ffmpeg_stable(latest)
-            if not asset_name:
-                self.result_ready.emit(key, installed, latest, "unsupported")
-                return
             dl_url = next(
                 (a["browser_download_url"] for a in assets if a["name"] == asset_name),
                 "",
@@ -342,7 +265,6 @@ class UpdateChecker(QThread):
         for fn in (
             self._check_ytget,
             self._check_ytdlp,
-            self._check_ffmpeg,
             self._check_spotdl,
             self._check_deno,
         ):
@@ -427,7 +349,6 @@ class UpdateInstaller(QThread):
             return base / executable_name("yt-dlp")
         if tool_key == "deno":
             return base / executable_name("deno")
-        # ffmpeg / ffprobe handled separately
         return base
 
     # ── install strategies ─────────────────────────────────────────────────
@@ -484,58 +405,6 @@ class UpdateInstaller(QThread):
         finally:
             tmp_zip.unlink(missing_ok=True)
 
-    def _install_ffmpeg(self):
-        """
-        Download the FFmpeg archive and extract ffmpeg + ffprobe into BASE_DIR.
-        Handles both .zip (Windows) and .tar.xz (Linux).
-        """
-        dest_dir = self._settings.BASE_DIR
-        suffix   = ".zip" if is_windows() else ".tar.xz"
-        self._log("Downloading FFmpeg …")
-        tmp_arch = Path(tempfile.mktemp(suffix=suffix))
-        if not self._download(self._url, tmp_arch):
-            self.finished_err.emit("ffmpeg", "Download cancelled or failed.")
-            return
-        self._log("Extracting …")
-        try:
-            found = {"ffmpeg": False, "ffprobe": False}
-            if is_windows():
-                with zipfile.ZipFile(tmp_arch) as zf:
-                    for member in zf.namelist():
-                        for tool in ("ffmpeg", "ffprobe"):
-                            pat = rf"bin[\\/]{tool}\.exe$"
-                            if re.search(pat, member, re.IGNORECASE):
-                                data = zf.read(member)
-                                out  = dest_dir / f"{tool}.exe"
-                                out.write_bytes(data)
-                                found[tool] = True
-            else:
-                with tarfile.open(tmp_arch, "r:xz") as tf:
-                    for member in tf.getmembers():
-                        for tool in ("ffmpeg", "ffprobe"):
-                            if re.search(rf"/bin/{tool}$", member.name):
-                                src = tf.extractfile(member)
-                                if src:
-                                    out = dest_dir / tool
-                                    out.write_bytes(src.read())
-                                    self._make_executable(out)
-                                    found[tool] = True
-
-            if found["ffmpeg"]:
-                self._settings.FFMPEG_PATH  = dest_dir / executable_name("ffmpeg")
-            if found["ffprobe"]:
-                self._settings.FFPROBE_PATH = dest_dir / executable_name("ffprobe")
-
-            if found["ffmpeg"] or found["ffprobe"]:
-                self._log("✅ Done.")
-                self.finished_ok.emit("ffmpeg")
-            else:
-                self.finished_err.emit("ffmpeg", "ffmpeg/ffprobe not found in archive.")
-        except Exception as exc:
-            self.finished_err.emit("ffmpeg", str(exc))
-        finally:
-            tmp_arch.unlink(missing_ok=True)
-
     def _install_spotdl(self):
         self._log("Running: pip install --upgrade spotdl …")
         try:
@@ -544,6 +413,7 @@ class UpdateInstaller(QThread):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                **_POPEN_KWARGS,
             )
             for line in proc.stdout:
                 if self._cancelled:
@@ -563,7 +433,6 @@ class UpdateInstaller(QThread):
     def run(self):
         dispatch = {
             "yt-dlp":  self._install_ytdlp,
-            "ffmpeg":  self._install_ffmpeg,
             "spotdl":  self._install_spotdl,
             "deno":    self._install_deno,
         }
@@ -901,17 +770,6 @@ class UpdateManager(QDialog):
         row["ver_installed"].setText(f"installed: {installed}")
         row["ver_latest"].setText(f"latest: {latest}")
 
-        if url in ("homebrew", "unsupported"):
-            self._set_badge(row["badge"], "warning")
-            row["btn"].setEnabled(False)
-            hint = (
-                "Install via Homebrew: brew install ffmpeg"
-                if url == "homebrew"
-                else "Automatic update not supported on this platform."
-            )
-            self._log_line(key, hint, "#FB923C")
-            return
-
         if key == "ytget":
             # No in-app binary update for YTGet itself
             up_to_date = _versions_equal(installed, latest)
@@ -1030,20 +888,8 @@ def _versions_equal(a: str, b: str) -> bool:
     """
     Loose version comparison: strip leading 'v'/'n', compare normalised segments.
     Returns True when the installed version is considered equal or newer.
-
-    Special cases:
-      • FFmpeg nightly builds report versions like "N-118467-g9dc4f21".
-        These cannot be meaningfully compared to a stable tag, so they are
-        always treated as out-of-date (triggering a one-time upgrade to stable).
-      • BtbN stable tags are prefixed with 'n' (e.g. "n7.1"). Both the tag
-        and the version string reported by the installed binary have their
-        leading 'n' stripped before comparison so they match correctly.
     """
     if not a or not b or a in ("unknown", "not found"):
-        return False
-
-    # FFmpeg nightly version strings start with "N-<build_number>".
-    if re.match(r"^N-\d+", a):
         return False
 
     def _norm(v: str) -> tuple:
