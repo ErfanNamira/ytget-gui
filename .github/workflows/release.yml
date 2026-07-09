@@ -127,20 +127,6 @@ jobs:
             chmod +x phantomjs
           fi
 
-      - name: Download UPX
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          UPX_URL=$(curl -sL https://api.github.com/repos/upx/upx/releases/latest \
-            | grep "browser_download_url.*win64.zip" \
-            | cut -d '"' -f 4)
-          echo "Resolved UPX URL: $UPX_URL"
-          curl -L "$UPX_URL" -o upx.zip
-          powershell -Command "Expand-Archive -Path upx.zip -DestinationPath upx_dir"
-          UPX_BIN=$(powershell -Command "(Get-ChildItem -Recurse -Filter upx.exe | Select-Object -First 1).FullName")
-          mkdir -p upx_bin
-          cp "$UPX_BIN" upx_bin/
-
       - name: Update Info.plist version (macOS only)
         if: startsWith(matrix.os, 'macos')
         shell: bash
@@ -204,34 +190,6 @@ jobs:
               ytget_gui/main.py
           fi
 
-      - name: Build application (UPX)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          ICON="ytget_gui/icon.ico"
-          SPOTDL_DATA="--add-data spotdl.exe:."
-
-          pyinstaller --noconfirm --onedir --windowed \
-            --name "YTGet" \
-            --icon "$ICON" \
-            --clean \
-            --upx-dir "upx_bin" \
-            --distpath "dist-upx" \
-            --version-file "version_info.txt" \
-            --hidden-import "PySide6.*" \
-            --hidden-import "requests" \
-            --hidden-import "mutagen.*" \
-            --hidden-import "PIL" \
-            --add-data "ytget_gui:ytget_gui" \
-            --add-data "ytget_gui/icon.ico:." \
-            --add-data "yt-dlp${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-            --add-data "ffmpeg${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-            --add-data "ffprobe${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-            --add-data "phantomjs${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-            --add-data "deno${{ runner.os == 'Windows' && '.exe' || '' }}:." \
-            $SPOTDL_DATA \
-            ytget_gui/main.py
-
       - name: Smoke test (macOS only)
         if: startsWith(matrix.os, 'macos')
         shell: bash
@@ -247,7 +205,6 @@ jobs:
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
-            powershell Compress-Archive -Path dist-upx/YTGet -DestinationPath YTGet-windows-upx.zip -CompressionLevel Optimal
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             tar czf YTGet-linux.tar.gz -C dist YTGet
           else
@@ -265,7 +222,6 @@ jobs:
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
-            certutil -hashfile YTGet-windows-upx.zip SHA256 > YTGet-windows-upx.sha256
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
           else
