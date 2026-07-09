@@ -369,6 +369,15 @@ class DownloadWorker(QObject):
     def is_short_video(url: str) -> bool:
         return "youtube.com/shorts/" in (url or "")
 
+    @staticmethod
+    def is_youtube_music_url(url: str) -> bool:
+        """
+        Return True only for actual YouTube Music URLs (music.youtube.com),
+        not regular youtube.com/youtu.be URLs.
+        """
+        u = (url or "").lower()
+        return "music.youtube.com" in u
+
     def _is_hls_preferred_site(self, url: str) -> bool:
         """
         Return True when HLS should be preferred for this URL.
@@ -534,7 +543,12 @@ class DownloadWorker(QObject):
         # ytgetmusic.sh script does (peek at the playlist title) and handle it specially
         # below instead of guessing at metadata via regex.
         is_flat_playlist = False
-        if is_audio and is_playlist and getattr(s, "YT_MUSIC_METADATA", False):
+        if (
+            is_audio
+            and is_playlist
+            and getattr(s, "YT_MUSIC_METADATA", False)
+            and self.is_youtube_music_url(it.get("url", "") or "")
+        ):
             is_flat_playlist = self._detect_flat_playlist(it.get("url", "") or "")
 
         if s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0:
@@ -582,7 +596,8 @@ class DownloadWorker(QObject):
                 if getattr(s, "ORGANIZE_BY_UPLOADER", False):
                     base /= "%(uploader)s"
 
-            if getattr(s, "YT_MUSIC_METADATA", False) and (is_audio or is_playlist):
+            is_yt_music = self.is_youtube_music_url(it.get("url", "") or "")
+            if getattr(s, "YT_MUSIC_METADATA", False) and is_yt_music and (is_audio or is_playlist):
                 fallback = "%(artist)s - %(title)s.%(ext)s"
             else:
                 fallback = "%(title)s.%(ext)s"
@@ -625,7 +640,7 @@ class DownloadWorker(QObject):
             ffmpeg_pp_args: List[str] = []
             if is_flac:
                 ffmpeg_pp_args.extend(["-compression_level", "12", "-sample_fmt", "s16"])
-            if is_playlist and getattr(s, "YT_MUSIC_METADATA", False) and is_flat_playlist:
+            if is_playlist and getattr(s, "YT_MUSIC_METADATA", False) and is_yt_music and is_flat_playlist:
                 # No real per-track album exists for these playlists, so set one
                 # explicitly (like SAFE_NAME in ytgetmusic.sh) instead of letting
                 # yt-dlp guess. Artist/title are left untouched -- yt-dlp's own
@@ -635,7 +650,7 @@ class DownloadWorker(QObject):
             if ffmpeg_pp_args:
                 cmd.extend(["--postprocessor-args", "ffmpeg:" + " ".join(ffmpeg_pp_args)])
 
-            if is_playlist and getattr(s, "YT_MUSIC_METADATA", False) and not is_flat_playlist:
+            if is_playlist and getattr(s, "YT_MUSIC_METADATA", False) and is_yt_music and not is_flat_playlist:
                 # Track numbers only -- do NOT touch artist/title via regex.
                 cmd.extend(["--parse-metadata", "playlist_index:%(track_number)s"])
         else:
