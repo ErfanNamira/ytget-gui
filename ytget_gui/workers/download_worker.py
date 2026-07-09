@@ -469,6 +469,7 @@ class DownloadWorker(QObject):
                     "--parse-metadata", "description:(?s)(?P<meta_comment>.+)",
                     "--parse-metadata", "%(meta_comment)s:(?P<artist>[^\n]+)",
                     "--parse-metadata", "%(meta_comment)s:.+ - (?P<title>[^\n]+)",
+                    "--parse-metadata", "%(playlist_index)s:%(meta_track)s",
                 ])
         else:
             preferred = (getattr(s, "VIDEO_FORMAT", "").lstrip(".")) or "mkv"
