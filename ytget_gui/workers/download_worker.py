@@ -148,7 +148,6 @@ class DownloadWorker(QObject):
                     env=env,
                     creationflags=creationflags,
                     startupinfo=startupinfo,
-                    bufsize=1,
                 )
             except Exception as e:
                 self.error.emit(f"Failed to start yt-dlp process: {e}")
