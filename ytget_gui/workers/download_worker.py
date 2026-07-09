@@ -38,6 +38,7 @@ class DownloadWorker(QObject):
         self.settings = settings
         self.process: Optional[QProcess] = None
         self._cancel_requested = False
+        self._flat_playlist_dir: Optional[Path] = None
 
         # Log buffer and timer (timer created in run so it lives in worker thread)
         self._log_buffer: List[Tuple[str, str]] = []
@@ -279,6 +280,14 @@ class DownloadWorker(QObject):
             self._add_log("✅ Download Finished Successfully.\n", AppStyles.SUCCESS_COLOR)
             self._flush_logs_now()
             try:
+                if getattr(self, "_flat_playlist_dir", None):
+                    tagged = self._tag_flat_playlist_tracks()
+                    if tagged > 0:
+                        self._add_log(f"🔢 Tagged track numbers for {tagged} file(s).\n", AppStyles.SUCCESS_COLOR)
+                        self._flush_logs_now()
+            except Exception:
+                pass
+            try:
                 if self._is_audio_download():
                     cleaned = self._clean_music_video_tags()
                     if cleaned > 0:
@@ -323,6 +332,70 @@ class DownloadWorker(QObject):
             return any(d in u for d in domains)
         except Exception:
             return False
+
+    def _detect_flat_playlist(self, url: str) -> bool:
+        """
+        Peek at the playlist title the same way ytgetmusic.sh does, to detect
+        YouTube Music's auto-generated "Top songs" / "Mix" / "Radio" playlists,
+        which have no real per-track album and need special handling.
+        """
+        if not url:
+            return False
+        try:
+            import subprocess
+            result = subprocess.run(
+                [
+                    str(self.settings.YT_DLP_PATH),
+                    "--flat-playlist",
+                    "--playlist-items", "1",
+                    "--print", "%(playlist_title)s",
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                return False
+            title = (result.stdout or "").strip()
+            return title in ("Top songs", "Mix", "Radio")
+        except Exception:
+            return False
+
+    def _tag_flat_playlist_tracks(self) -> int:
+        """
+        eyeD3-based track-number fix for flat playlists, matching ytgetmusic.sh.
+        yt-dlp's --parse-metadata can't reliably derive %(track_number)s from
+        %(autonumber)s at postprocessing time in this mode, so we tag the files
+        directly from their "NNN - ..." filenames after the download finishes.
+        """
+        import shutil
+        import subprocess
+
+        d = getattr(self, "_flat_playlist_dir", None)
+        if not d or not Path(d).exists():
+            return 0
+        if not shutil.which("eyeD3"):
+            self._add_log("⚠️ eyeD3 not found; skipping track-number tagging.\n", AppStyles.WARNING_COLOR)
+            return 0
+
+        tagged = 0
+        for f in sorted(Path(d).glob("*.mp3")):
+            base = f.name
+            track_token = base.split(" ", 1)[0]
+            if not track_token.isdigit():
+                continue
+            try:
+                track = int(track_token)
+                subprocess.run(
+                    ["eyeD3", "--track", str(track), str(f)],
+                    capture_output=True,
+                    timeout=30,
+                )
+                tagged += 1
+            except Exception:
+                pass
+        return tagged
 
     def _is_audio_download(self, code: Optional[str] = None) -> bool:
         """
@@ -402,6 +475,18 @@ class DownloadWorker(QObject):
         is_flac = (isinstance(format_code, str) and format_code == "audio_flac")
         is_opus = (isinstance(format_code, str) and format_code in ("audio_opus", "playlist_opus"))
 
+        # Reset any state left over from a previous run of this worker
+        self._flat_playlist_dir: Optional[Path] = None
+
+        # YouTube Music's auto-generated "Top songs" / "Mix" / "Radio" playlists have no
+        # real album for each track, so yt-dlp can't recover per-track artist/album via
+        # its normal metadata extraction. We detect this case the same way the working
+        # ytgetmusic.sh script does (peek at the playlist title) and handle it specially
+        # below instead of guessing at metadata via regex.
+        is_flat_playlist = False
+        if is_audio and is_playlist and getattr(s, "YT_MUSIC_METADATA", False):
+            is_flat_playlist = self._detect_flat_playlist(it.get("url", "") or "")
+
         if s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0:
             cmd.extend(["--cookies", str(s.COOKIES_PATH)])
         if getattr(s, "COOKIES_FROM_BROWSER", None):
@@ -427,25 +512,36 @@ class DownloadWorker(QObject):
         if getattr(s, "CLIP_START", None) and getattr(s, "CLIP_END", None):
             cmd.extend(["--download-sections", f"*{s.CLIP_START}-{s.CLIP_END}"])
 
-        if is_playlist:
-            base = Path(s.DOWNLOADS_DIR) / "%(playlist_title)s"
-            if getattr(s, "ORGANIZE_BY_UPLOADER", False):
-                base /= "%(uploader)s"
-        else:
-            base = Path(s.DOWNLOADS_DIR)
-            if getattr(s, "ORGANIZE_BY_UPLOADER", False):
-                base /= "%(uploader)s"
+        flat_album_name: Optional[str] = None
 
-        if getattr(s, "YT_MUSIC_METADATA", False) and (is_audio or is_playlist):
-            fallback = "%(artist)s - %(title)s.%(ext)s"
+        if is_flat_playlist:
+            # Mirrors ytgetmusic.sh's SAFE_NAME/-o template for "Top songs"/Mix/Radio:
+            # everything goes in one folder, numbered by download order, with an
+            # explicit album tag (set below) instead of a guessed one.
+            flat_album_name = self._safe_filename(it.get("title") or "Playlist") + " Playlist"
+            base = Path(s.DOWNLOADS_DIR) / flat_album_name
+            filename = "%(autonumber)03d - %(album)s - %(title)s.%(ext)s"
+            self._flat_playlist_dir = base
         else:
-            fallback = "%(title)s.%(ext)s"
+            if is_playlist:
+                base = Path(s.DOWNLOADS_DIR) / "%(playlist_title)s"
+                if getattr(s, "ORGANIZE_BY_UPLOADER", False):
+                    base /= "%(uploader)s"
+            else:
+                base = Path(s.DOWNLOADS_DIR)
+                if getattr(s, "ORGANIZE_BY_UPLOADER", False):
+                    base /= "%(uploader)s"
 
-        if self._should_force_title(is_playlist):
-            safe = self._safe_filename(it.get("title") or "Unknown")
-            filename = f"{safe}.%(ext)s"
-        else:
-            filename = fallback
+            if getattr(s, "YT_MUSIC_METADATA", False) and (is_audio or is_playlist):
+                fallback = "%(artist)s - %(title)s.%(ext)s"
+            else:
+                fallback = "%(title)s.%(ext)s"
+
+            if self._should_force_title(is_playlist):
+                safe = self._safe_filename(it.get("title") or "Unknown")
+                filename = f"{safe}.%(ext)s"
+            else:
+                filename = fallback
 
         out_tmpl = str(Path(base) / filename)
         if is_playlist:
@@ -471,15 +567,27 @@ class DownloadWorker(QObject):
                 cmd.append("--add-metadata")
             if not is_flac:
                 cmd.extend(["--audio-quality", "0"])
+
+            # NOTE: yt-dlp does not merge multiple `--postprocessor-args ffmpeg:...`
+            # flags -- a later one can overwrite an earlier one for the same
+            # postprocessor. So any ffmpeg: args below must be combined into a
+            # single call rather than issued separately.
+            ffmpeg_pp_args: List[str] = []
             if is_flac:
-                cmd.extend(["--postprocessor-args", "ffmpeg:-compression_level 12 -sample_fmt s16"])
-            if is_playlist and getattr(s, "YT_MUSIC_METADATA", False):
-                cmd.extend([
-                    "--parse-metadata", "description:(?s)(?P<meta_comment>.+)",
-                    "--parse-metadata", "%(meta_comment)s:(?P<artist>[^\n]+)",
-                    "--parse-metadata", "%(meta_comment)s:.+ - (?P<title>[^\n]+)",
-                    "--parse-metadata", "%(playlist_index)s:%(track_number)s",
-                ])
+                ffmpeg_pp_args.extend(["-compression_level", "12", "-sample_fmt", "s16"])
+            if is_playlist and getattr(s, "YT_MUSIC_METADATA", False) and is_flat_playlist:
+                # No real per-track album exists for these playlists, so set one
+                # explicitly (like SAFE_NAME in ytgetmusic.sh) instead of letting
+                # yt-dlp guess. Artist/title are left untouched -- yt-dlp's own
+                # metadata extraction from YouTube Music is accurate; the old
+                # description-regex hack here is what was blanking/corrupting them.
+                ffmpeg_pp_args.extend(["-metadata", f'album="{flat_album_name}"'])
+            if ffmpeg_pp_args:
+                cmd.extend(["--postprocessor-args", "ffmpeg:" + " ".join(ffmpeg_pp_args)])
+
+            if is_playlist and getattr(s, "YT_MUSIC_METADATA", False) and not is_flat_playlist:
+                # Track numbers only -- do NOT touch artist/title via regex.
+                cmd.extend(["--parse-metadata", "playlist_index:%(track_number)s"])
         else:
             preferred = (getattr(s, "VIDEO_FORMAT", "").lstrip(".")) or "mkv"
             if preferred not in {"mkv", "mp4", "webm"}:
