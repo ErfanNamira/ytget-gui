@@ -10,7 +10,7 @@ from PySide6.QtGui import QIcon, QPalette, QColor
 
 from ytget_gui.main_window import MainWindow
 
-__version__ = "2.6.0"
+__version__ = "2.7.1"
 
 
 def make_dark_palette() -> QPalette:
@@ -20,10 +20,10 @@ def make_dark_palette() -> QPalette:
     pal = QPalette()
 
     # Core colors
-    dark_bg    = QColor("#161A22")
-    dark_alt   = QColor("#1E242E")
-    light_txt  = QColor("#EAEAF2")
-    highlight  = QColor("#3A77FF")
+    dark_bg    = QColor("#242731")   # was #161A22
+    dark_alt   = QColor("#2c303a")   # was #1E242E
+    light_txt  = QColor("#EAEAF2")   
+    highlight  = QColor("#3A77FF")   
 
     # Window / widget backgrounds
     pal.setColor(QPalette.Window,         dark_bg)
