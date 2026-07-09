@@ -228,9 +228,13 @@ jobs:
           fi
 
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            7z a -t7z -mx=9 YTGet-windows.7z dist/YTGet
+            cd dist
+            7z a -t7z -mx=9 ../YTGet-windows.7z YTGet
+            cd ..
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            7z a -t7z -mx=9 YTGet-linux.7z dist/YTGet
+            cd dist
+            7z a -t7z -mx=9 ../YTGet-linux.7z YTGet
+            cd ..
           else
             cd dist
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
