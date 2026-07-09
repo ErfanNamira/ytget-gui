@@ -128,22 +128,14 @@ jobs:
           fi
 
       - name: Download UPX
-        if: runner.os != 'macOS'
+        if: runner.os == 'Windows'
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            curl -L https://github.com/upx/upx/releases/latest/download/upx-5.0.1-win64.zip -o upx.zip
-            powershell -Command "Expand-Archive -Path upx.zip -DestinationPath upx_dir"
-            UPX_BIN=$(powershell -Command "(Get-ChildItem -Recurse -Filter upx.exe | Select-Object -First 1).FullName")
-            mkdir -p upx_bin
-            cp "$UPX_BIN" upx_bin/
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            curl -L https://github.com/upx/upx/releases/latest/download/upx-5.0.1-amd64_linux.tar.xz -o upx.tar.xz
-            tar xJf upx.tar.xz
-            mkdir -p upx_bin
-            cp upx-5.0.1-amd64_linux/upx upx_bin/
-            chmod +x upx_bin/upx
-          fi
+          curl -L https://github.com/upx/upx/releases/latest/download/upx-5.0.1-win64.zip -o upx.zip
+          powershell -Command "Expand-Archive -Path upx.zip -DestinationPath upx_dir"
+          UPX_BIN=$(powershell -Command "(Get-ChildItem -Recurse -Filter upx.exe | Select-Object -First 1).FullName")
+          mkdir -p upx_bin
+          cp "$UPX_BIN" upx_bin/
 
       - name: Update Info.plist version (macOS only)
         if: startsWith(matrix.os, 'macos')
@@ -209,15 +201,11 @@ jobs:
           fi
 
       - name: Build application (UPX)
-        if: runner.os != 'macOS'
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           ICON="ytget_gui/icon.ico"
-
-          SPOTDL_DATA=""
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            SPOTDL_DATA="--add-data spotdl.exe:."
-          fi
+          SPOTDL_DATA="--add-data spotdl.exe:."
 
           pyinstaller --noconfirm --onedir --windowed \
             --name "YTGet" \
@@ -258,7 +246,6 @@ jobs:
             powershell Compress-Archive -Path dist-upx/YTGet -DestinationPath YTGet-windows-upx.zip -CompressionLevel Optimal
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             tar czf YTGet-linux.tar.gz -C dist YTGet
-            tar czf YTGet-linux-upx.tar.gz -C dist-upx YTGet
           else
             cd dist
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
@@ -277,7 +264,6 @@ jobs:
             certutil -hashfile YTGet-windows-upx.zip SHA256 > YTGet-windows-upx.sha256
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
-            shasum -a 256 YTGet-linux-upx.tar.gz > YTGet-linux-upx.sha256
           else
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
               shasum -a 256 dist/YTGet-macOS-arm64.tar.gz > dist/YTGet-macOS-arm64.sha256
