@@ -35,19 +35,60 @@
 
 ---
 
-## 📥 Downloads
+### 📥 Official Downloads
 
-#### 🪟 Windows · x86_64 · 250 MB  
-[⬇ Download for Windows](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-windows.zip)
-
-#### 🐧 Linux · x86_64 · 255 MB  
-[⬇ Download for Linux](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-linux.tar.gz)
-
-#### 🍎 macOS (ARM) · arm64 · 155 MB  
-[⬇ Download for macOS ARM](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-macOS-arm64.tar.gz)
-
-#### 🍎 macOS (Intel) · x86_64 · 158 MB  
-[⬇ Download for macOS Intel](https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-macOS-x86_64.tar.gz)
+<table align="center">
+  <thead>
+    <tr>
+      <th>Operating System</th>
+      <th>Architecture</th>
+      <th>File Size</th>
+      <th>Download</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🪟 <strong>Windows</strong></td>
+      <td><code>x86_64</code></td>
+      <td><strong>255 MB</strong></td>
+      <td>
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-windows.zip">
+          <img src="https://img.shields.io/badge/Download-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows Download">
+        </a>
+      </td>
+    </tr>
+    <tr>
+      <td>🐧 <strong>Linux</strong></td>
+      <td><code>x86_64</code></td>
+      <td><strong>255 MB</strong></td>
+      <td>
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-linux.tar.gz">
+          <img src="https://img.shields.io/badge/Download-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux Download">
+        </a>
+      </td>
+    </tr>
+    <tr>
+      <td>🍎 <strong>macOS</strong> (Apple Silicon)</td>
+      <td><code>arm64</code></td>
+      <td><strong>155 MB</strong></td>
+      <td>
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-macOS-arm64.tar.gz">
+          <img src="https://img.shields.io/badge/Download-macOS_ARM-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS ARM Download">
+        </a>
+      </td>
+    </tr>
+    <tr>
+      <td>🍎 <strong>macOS</strong> (Intel)</td>
+      <td><code>x86_64</code></td>
+      <td><strong>155 MB</strong></td>
+      <td>
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.2/YTGet-macOS-x86_64.tar.gz">
+          <img src="https://img.shields.io/badge/Download-macOS_Intel-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS Intel Download">
+        </a>
+      </td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 
