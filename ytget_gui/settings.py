@@ -20,7 +20,7 @@ from ytget_gui.spotdl_settings import SpotDLSettings
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.7.0"
+    VERSION: str = "2.7.1"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
