@@ -217,18 +217,46 @@ jobs:
             cd ..
           fi
 
+      - name: Package build (7z, max compression)
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y p7zip-full
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install p7zip
+          fi
+
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            7z a -t7z -mx=9 YTGet-windows.7z dist/YTGet
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            7z a -t7z -mx=9 YTGet-linux.7z dist/YTGet
+          else
+            cd dist
+            if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+              7z a -t7z -mx=9 YTGet-macOS-arm64.7z YTGet.app
+            else
+              7z a -t7z -mx=9 YTGet-macOS-x86_64.7z YTGet.app
+            fi
+            cd ..
+          fi
+
       - name: Generate SHA-256 checksum
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
+            certutil -hashfile YTGet-windows.7z SHA256 > YTGet-windows-7z.sha256
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
+            shasum -a 256 YTGet-linux.7z > YTGet-linux-7z.sha256
           else
             if [[ "${{ matrix.arch }}" == "arm64" ]]; then
               shasum -a 256 dist/YTGet-macOS-arm64.tar.gz > dist/YTGet-macOS-arm64.sha256
+              shasum -a 256 dist/YTGet-macOS-arm64.7z > dist/YTGet-macOS-arm64-7z.sha256
             else
               shasum -a 256 dist/YTGet-macOS-x86_64.tar.gz > dist/YTGet-macOS-x86_64.sha256
+              shasum -a 256 dist/YTGet-macOS-x86_64.7z > dist/YTGet-macOS-x86_64-7z.sha256
             fi
           fi
 
@@ -239,6 +267,7 @@ jobs:
           path: |
             YTGet-*.*
             dist/YTGet-*.tar.gz
+            dist/YTGet-*.7z
             dist/YTGet-*.sha256
 
   release:
