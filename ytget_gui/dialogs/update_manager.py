@@ -6,7 +6,10 @@ Cross-platform Update Manager for YTGet.
 Handles checking and updating:
   • YTGet                — GitHub Releases (ErfanNamira/ytget-gui)
   • yt-dlp               — GitHub Releases (yt-dlp/yt-dlp)
-  • SpotDL               — pip install --upgrade spotdl  (all platforms)
+  • SpotDL               — GitHub Releases (spotDL/spotify-downloader) on Windows,
+                            matching the standalone spotdl.exe the app actually
+                            uses (see workers/spotdl_worker.py); falls back to
+                            `pip install --upgrade spotdl` elsewhere
   • Deno                 — GitHub Releases (denoland/deno)
 
 Architecture
@@ -71,8 +74,10 @@ TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "spotdl": {
         "label":   "SpotDL",
+        "owner":   "spotDL",
+        "repo":    "spotify-downloader",
         "package": "spotdl",
-        "kind":    "pip",
+        "kind":    "github_binary_or_pip",
         "icon":    "🎵",
     },
     "deno": {
@@ -126,12 +131,23 @@ def _current_version(tool_key: str, settings: AppSettings) -> str:
             return result.stdout.strip()
 
         if tool_key == "spotdl":
+            # Resolve the same way workers/spotdl_worker.py does: a bundled
+            # spotdl(.exe) next to the app, or one on PATH. `sys.executable`
+            # is the frozen YTGet.exe itself in a packaged build, not a
+            # Python interpreter, so `-m spotdl` only works when running
+            # from source with spotdl installed as a pip package.
+            from ytget_gui.workers.spotdl_worker import _find_spotdl
+            spotdl_path = _find_spotdl(settings)
+            if spotdl_path is None:
+                return "not found"
             result = subprocess.run(
-                [sys.executable, "-m", "spotdl", "--version"],
+                [str(spotdl_path), "--version"],
                 capture_output=True, text=True, timeout=10,
                 **_POPEN_KWARGS,
             )
-            return result.stdout.strip() or result.stderr.strip()
+            out = (result.stdout.strip() or result.stderr.strip())
+            m = re.search(r"(\d+\.\d+\.\d+)", out)
+            return m.group(1) if m else (out or "unknown")
 
         if tool_key == "deno":
             result = subprocess.run(
@@ -242,8 +258,25 @@ class UpdateChecker(QThread):
         key = "spotdl"
         installed = _current_version(key, self._settings)
         try:
-            latest = self._pip_latest("spotdl")
-            self.result_ready.emit(key, installed, latest, "pip")
+            if is_windows():
+                # Match the standalone binary the app actually runs
+                # (see release.yml / workers/spotdl_worker.py), not the
+                # pip package. Asset name is version-stamped, e.g.
+                # "spotdl-4.5.0-win32.exe", so match by prefix/suffix.
+                latest, assets = self._gh_latest("spotDL", "spotify-downloader")
+                dl_url = next(
+                    (
+                        a["browser_download_url"] for a in assets
+                        if a["name"].startswith("spotdl-") and a["name"].endswith("win32.exe")
+                    ),
+                    "",
+                )
+                self.result_ready.emit(key, installed, latest, dl_url)
+            else:
+                # No standalone binary is published for macOS/Linux; spotdl
+                # is expected to be installed via pip there.
+                latest = self._pip_latest("spotdl")
+                self.result_ready.emit(key, installed, latest, "pip")
         except Exception as e:
             self.error.emit(key, str(e))
 
@@ -349,6 +382,8 @@ class UpdateInstaller(QThread):
             return base / executable_name("yt-dlp")
         if tool_key == "deno":
             return base / executable_name("deno")
+        if tool_key == "spotdl":
+            return base / executable_name("spotdl")
         return base
 
     # ── install strategies ─────────────────────────────────────────────────
@@ -406,6 +441,28 @@ class UpdateInstaller(QThread):
             tmp_zip.unlink(missing_ok=True)
 
     def _install_spotdl(self):
+        # Windows: a real download URL means the checker found a matching
+        # spotdl-*.exe GitHub release asset — install it as a plain binary,
+        # exactly like yt-dlp, so it lands next to the running app and is
+        # picked up by workers/spotdl_worker.py's _find_spotdl().
+        if self._url and self._url != "pip":
+            self._install_single_binary("spotdl", self._url)
+            return
+
+        # Fallback: pip install (source runs, or platforms with no published
+        # standalone binary). This won't work inside a frozen PyInstaller
+        # build since sys.executable is YTGet.exe, not a Python interpreter —
+        # surface a clear error instead of silently failing.
+        if getattr(sys, "frozen", False):
+            self.finished_err.emit(
+                "spotdl",
+                "No spotdl binary release found for this platform, and pip "
+                "install isn't available inside the packaged app. Install "
+                "spotdl manually and place it next to YTGet, or run "
+                "'pip install spotdl' in a Python environment.",
+            )
+            return
+
         self._log("Running: pip install --upgrade spotdl …")
         try:
             proc = subprocess.Popen(
