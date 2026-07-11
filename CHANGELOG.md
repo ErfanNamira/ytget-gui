@@ -1,4 +1,4 @@
-### v 2.7.2 **Opus Audio, SpotDL Reliability & UI Refinements**
+### v 2.7.3 **Opus Audio, SpotDL Reliability & UI Refinements**
 - **🎧 Opus audio support**
   - Added `audio_opus` format code for single-track Opus downloads (`--audio-format opus`).
   - Added `playlist_opus` format code for downloading playlists as Opus.
