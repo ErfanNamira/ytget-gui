@@ -1,6 +1,4 @@
 ## ✨ What's New
-### 🪟 Windows Installer
-- Added a lightweight Windows installer (`YTGet-Setup.exe`) built with Inno Setup. It fetches yt-dlp, ffmpeg/ffprobe, deno, and SpotDL during setup, keeping the installer download small and installation streamlined.
 ### 🎧 Opus Audio Support
 - Added Opus format codes for both single tracks and playlists (`audio_opus`, `playlist_opus`), with matching one-click presets.
 - `.opus` files are now recognized during post-processing.
@@ -39,8 +37,8 @@
   </thead>
   <tbody>
     <tr>
-      <td rowspan="3">🪟 <strong>Windows</strong></td>
-      <td rowspan="3"><code>x86_64</code></td>
+      <td rowspan="2">🪟 <strong>Windows</strong></td>
+      <td rowspan="2"><code>x86_64</code></td>
       <td>ZIP</td>
       <td><strong>255 MB</strong></td>
       <td>
@@ -55,15 +53,6 @@
       <td>
         <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-windows.7z">
           <img src="https://img.shields.io/badge/Download-7z-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows 7z Download">
-        </a>
-      </td>
-    </tr>
-    <tr>
-      <td>Installer (.exe)</td>
-      <td><strong>45 MB</strong></td>
-      <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-2.7.3-Setup.exe">
-          <img src="https://img.shields.io/badge/Download-Installer-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows Installer Download">
         </a>
       </td>
     </tr>
