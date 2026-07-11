@@ -320,12 +320,14 @@ jobs:
 
       - name: Compile installer
         shell: bash
+        env:
+          MSYS_NO_PATHCONV: 1
         run: |
           TAG="${{ github.event.inputs.tag }}"
           VERSION="${TAG#v}"
           "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" installer/setup.iss \
             "/DMyAppVersion=${VERSION}" \
-            "/DSourceDir=$(pwd)/dist/YTGet"
+            "/DSourceDir=$(pwd -W)/dist/YTGet"
 
       - name: Generate SHA-256 checksum
         shell: bash
