@@ -60,7 +60,7 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 ### 🪟 Windows
 
 **Option A — Installer (Recommended)**
-1. [Download the latest `YTGet-Setup.exe` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-Setup.exe)
+1. [Download the latest `YTGet-Setup.exe` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-2.7.3-Setup.exe)
 2. Run the installer and follow the setup wizard.
 3. On first run, the installer downloads required dependencies (yt-dlp, ffmpeg/ffprobe, deno, SpotDL) automatically, keeping the initial download small.
 4. Launch **YTGet** from the Start Menu or Desktop shortcut.
