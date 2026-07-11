@@ -10,7 +10,7 @@ from PySide6.QtGui import QIcon, QPalette, QColor
 
 from ytget_gui.main_window import MainWindow
 
-__version__ = "2.7.2"
+__version__ = "2.7.3"
 
 
 def make_dark_palette() -> QPalette:
