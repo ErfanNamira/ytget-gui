@@ -60,9 +60,9 @@
     </tr>
     <tr>
       <td>Installer (.exe)</td>
-      <td><strong>Small</strong></td>
+      <td><strong>45 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-Setup.exe">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-2.7.3-Setup.exe">
           <img src="https://img.shields.io/badge/Download-Installer-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows Installer Download">
         </a>
       </td>
