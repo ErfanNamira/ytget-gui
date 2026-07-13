@@ -18,9 +18,23 @@ from ytget_gui.utils.paths import (
 
 from ytget_gui.spotdl_settings import SpotDLSettings
 
+FILENAME_FORMAT_PRESETS: Dict[str, str] = {
+    "title_only": "%(title)s",
+    "artist_title": "%(artist)s - %(title)s",
+    "title_artist": "%(title)s - %(artist)s",
+    "artist_album_title": "%(artist)s - %(album)s - %(title)s",
+    "track_title": "%(track_number)s - %(title)s",
+    "album_track_title": "%(album)s - %(track_number)s - %(title)s",
+    "playlist_index_title": "%(playlist_index)s - %(title)s",
+    "uploader_title": "%(uploader)s - %(title)s",
+    "channel_title": "%(channel)s - %(title)s",
+    "date_title": "%(upload_date)s - %(title)s",
+    "id_title": "%(id)s - %(title)s",
+}
+
 @dataclass
 class AppSettings:
-    VERSION: str = "2.7.3"
+    VERSION: str = "2.7.4"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
@@ -92,6 +106,8 @@ class AppSettings:
     LIMIT_RATE: str = ""
     RETRIES: int = 10
     ORGANIZE_BY_UPLOADER: bool = False
+    FILENAME_FORMAT: str = "default"
+    CUSTOM_FILENAME_TEMPLATE: str = ""
     DATEAFTER: str = ""
     COOKIES_FROM_BROWSER: str = ""
     COOKIES_AUTO_REFRESH: bool = False
@@ -232,6 +248,8 @@ class AppSettings:
             "LIMIT_RATE": self.LIMIT_RATE,
             "RETRIES": self.RETRIES,
             "ORGANIZE_BY_UPLOADER": self.ORGANIZE_BY_UPLOADER,
+            "FILENAME_FORMAT": self.FILENAME_FORMAT,
+            "CUSTOM_FILENAME_TEMPLATE": self.CUSTOM_FILENAME_TEMPLATE,
             "DATEAFTER": self.DATEAFTER,
             "COOKIES_FROM_BROWSER": self.COOKIES_FROM_BROWSER,
             "COOKIES_AUTO_REFRESH": self.COOKIES_AUTO_REFRESH,
@@ -285,6 +303,10 @@ class AppSettings:
             self.LIMIT_RATE = config.get("LIMIT_RATE", self.LIMIT_RATE)
             self.RETRIES = config.get("RETRIES", self.RETRIES)
             self.ORGANIZE_BY_UPLOADER = config.get("ORGANIZE_BY_UPLOADER", self.ORGANIZE_BY_UPLOADER)
+            self.FILENAME_FORMAT = config.get("FILENAME_FORMAT", self.FILENAME_FORMAT)
+            if self.FILENAME_FORMAT not in ("default", "custom", *FILENAME_FORMAT_PRESETS.keys()):
+                self.FILENAME_FORMAT = "default"
+            self.CUSTOM_FILENAME_TEMPLATE = config.get("CUSTOM_FILENAME_TEMPLATE", self.CUSTOM_FILENAME_TEMPLATE)
             self.DATEAFTER = config.get("DATEAFTER", self.DATEAFTER)
             self.COOKIES_FROM_BROWSER = config.get("COOKIES_FROM_BROWSER", self.COOKIES_FROM_BROWSER)
             self.COOKIES_AUTO_REFRESH = config.get("COOKIES_AUTO_REFRESH", self.COOKIES_AUTO_REFRESH)
