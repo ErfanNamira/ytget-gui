@@ -1,0 +1,101 @@
+name: Build YTGet (Windows Test)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (windows-latest - x86_64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Download Deno
+        shell: bash
+        run: |
+          curl -L "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip" -o deno.zip
+          powershell -Command "Expand-Archive -Path deno.zip -DestinationPath deno_dir"
+          cp deno_dir/deno.exe ./deno.exe
+
+      - name: Download yt-dlp
+        shell: bash
+        run: |
+          curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+
+      - name: Download spotDL
+        shell: bash
+        run: |
+          curl -L https://github.com/spotDL/spotify-downloader/releases/download/v4.5.0/spotdl-4.5.0-win32.exe -o spotdl.exe
+
+      - name: Download ffmpeg & ffprobe
+        shell: bash
+        run: |
+          curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+          powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ."
+          cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName")" .
+          cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName")" .
+
+      - name: Download PhantomJS
+        shell: bash
+        run: |
+          curl -L "https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-windows.zip" -o phantomjs.zip
+          powershell -Command "Expand-Archive -Path phantomjs.zip -DestinationPath phantomjs_dir"
+          cp phantomjs_dir/phantomjs-2.1.1-windows/bin/phantomjs.exe ./phantomjs.exe
+
+      - name: Build application
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --onedir --windowed \
+            --name "YTGet" \
+            --icon "ytget_gui/icon.ico" \
+            --clean --noupx \
+            --version-file "version_info.txt" \
+            --hidden-import "PySide6.*" \
+            --hidden-import "requests" \
+            --hidden-import "mutagen.*" \
+            --hidden-import "PIL" \
+            --add-data "ytget_gui:ytget_gui" \
+            --add-data "ytget_gui/icon.ico:." \
+            --add-data "yt-dlp.exe:." \
+            --add-data "ffmpeg.exe:." \
+            --add-data "ffprobe.exe:." \
+            --add-data "phantomjs.exe:." \
+            --add-data "deno.exe:." \
+            --add-data "spotdl.exe:." \
+            ytget_gui/main.py
+
+      - name: Package build (7z, max compression)
+        shell: bash
+        run: |
+          cd dist
+          7z a -t7z -mx=9 ../YTGet-windows.7z YTGet
+          cd ..
+
+      - name: Generate SHA-256 checksum
+        shell: bash
+        run: |
+          certutil -hashfile YTGet-windows.7z SHA256 > YTGet-windows-7z.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: YTGet-windows-test
+          path: |
+            YTGet-windows.7z
+            YTGet-windows-7z.sha256
