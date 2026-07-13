@@ -857,7 +857,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         v.addWidget(self._divider())
 
         example = QtWidgets.QLabel(
-            "Example: <code>%(artist)s - %(title)s</code> → <i>Daft Punk - One More Time.mp3</i>"
+            "Example: <code>%(artist)s - %(title)s</code> → <i>Tony Ann - Icarus.mp3</i>"
         )
         example.setObjectName("helpBoxExample")
         example.setTextFormat(QtCore.Qt.RichText)
@@ -952,7 +952,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         if hasattr(self, "filename_preview_label"):
             if value == "default":
                 self.filename_preview_label.setText(
-                    "<i>Uses each download's existing smart default naming (unchanged).</i>"
+                    "<i>Uses each download's existing smart default naming.</i>"
                 )
                 self.filename_preview_label.setVisible(True)
             elif value == "custom":
