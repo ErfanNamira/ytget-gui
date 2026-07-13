@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -10,7 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import QDate
 
 from ytget_gui.styles import AppStyles
-from ytget_gui.settings import AppSettings
+from ytget_gui.settings import AppSettings, FILENAME_FORMAT_PRESETS
 from ytget_gui.dialogs.advanced import UISwitch
 from ytget_gui.workers import cookies as CookieManager
 from ytget_gui.dialogs.spotdl_preferences_tab import SpotDLPreferencesTab
@@ -26,10 +27,54 @@ _SPONSORBLOCK_CATEGORIES = {
     "Filler": "filler",
 }
 
+_FILENAME_FORMAT_ITEMS: List[Tuple[str, str]] = [
+    ("Default", "default"),
+    ("Title only", "title_only"),
+    ("Artist - Title", "artist_title"),
+    ("Title - Artist", "title_artist"),
+    ("Artist - Album - Title", "artist_album_title"),
+    ("Track # - Title", "track_title"),
+    ("Album - Track # - Title", "album_track_title"),
+    ("Playlist # - Title", "playlist_index_title"),
+    ("Uploader - Title", "uploader_title"),
+    ("Channel - Title", "channel_title"),
+    ("Upload Date - Title", "date_title"),
+    ("Video/Track ID - Title", "id_title"),
+    ("Custom Template", "custom"),
+]
+
+assert all(
+    v in ("default", "custom") or v in FILENAME_FORMAT_PRESETS
+    for _lbl, v in _FILENAME_FORMAT_ITEMS
+)
+
+_ALLOWED_TEMPLATE_FIELDS = {
+    "title", "artist", "creator", "uploader", "uploader_id", "channel", "channel_id",
+    "album", "album_artist", "track", "track_number", "track_id", "disc_number",
+    "genre", "release_year", "release_date", "upload_date", "playlist_title",
+    "playlist_index", "playlist_id", "id", "ext", "duration", "duration_string",
+    "view_count", "like_count", "repost_count", "comment_count", "resolution",
+    "height", "width", "fps", "vcodec", "acodec", "format_id", "extractor",
+    "extractor_key", "language", "season_number", "episode_number", "autonumber",
+    "abr", "vbr", "tbr", "epoch",
+}
+
+# One %(field[,field2,...][|default])s / d / f placeholder, e.g.:
+#   %(title)s   %(autonumber)03d   %(artist,uploader)s   %(album|Unknown)s
+_TEMPLATE_PLACEHOLDER_RE = re.compile(
+    r"%\((?P<fields>[a-zA-Z_][a-zA-Z0-9_]*(?:,[a-zA-Z_][a-zA-Z0-9_]*)*)"
+    r"(?:\|[^)%]*)?\)(?P<conv>[-+ #0]*\d*(?:\.\d+)?[sdf])"
+)
+
+# Characters that can never appear outside a placeholder: filesystem-illegal
+# characters plus path separators (this is a filename stub, not a full path).
+_TEMPLATE_ILLEGAL_LITERAL_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
 
 class PreferencesDialog(QtWidgets.QDialog):
 
     MIN_WIDE_LAYOUT = 900
+    _FILENAME_FORMAT_ITEMS = _FILENAME_FORMAT_ITEMS
 
     def __init__(self, parent: Optional[QtWidgets.QWidget], settings: AppSettings):
         super().__init__(parent)
@@ -746,6 +791,81 @@ class PreferencesDialog(QtWidgets.QDialog):
         pv.addWidget(card)
         return page
 
+    def _build_filename_help(self) -> QtWidgets.QFrame:
+        """
+        Compact, categorized reference for the custom filename template fields.
+        Shown only while 'Custom template…' is selected in the Filename combo.
+        """
+        box = QtWidgets.QFrame()
+        box.setObjectName("helpBox")
+        v = QtWidgets.QVBoxLayout(box)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(8)
+
+        title = QtWidgets.QLabel("Available fields")
+        title.setObjectName("helpBoxTitle")
+        v.addWidget(title)
+
+        categories: List[Tuple[str, List[Tuple[str, str]]]] = [
+            ("Title & media", [
+                ("title", "song/video title"),
+                ("ext", "file extension"),
+                ("duration_string", "length"),
+                ("resolution", "e.g. 1920x1080"),
+            ]),
+            ("People", [
+                ("artist", "track artist"),
+                ("uploader", "channel/uploader name"),
+                ("channel", "channel name"),
+            ]),
+            ("Album & playlist", [
+                ("album", "album name"),
+                ("track_number", "track # in album"),
+                ("playlist_title", "playlist name"),
+                ("playlist_index", "position in playlist"),
+            ]),
+            ("Other", [
+                ("id", "unique video/track ID"),
+                ("upload_date", "YYYYMMDD"),
+                ("release_year", "release year"),
+                ("autonumber", "download sequence #"),
+            ]),
+        ]
+
+        grid = QtWidgets.QGridLayout()
+        grid.setHorizontalSpacing(20)
+        grid.setVerticalSpacing(6)
+        for col, (cat_name, fields) in enumerate(categories):
+            cat_lbl = QtWidgets.QLabel(cat_name.upper())
+            cat_lbl.setObjectName("helpBoxCategory")
+            grid.addWidget(cat_lbl, 0, col)
+
+            rows_html = "<br>".join(
+                f"<code>%({name})s</code> &nbsp;<span style='opacity:0.8;'>{desc}</span>"
+                for name, desc in fields
+            )
+            tokens_lbl = QtWidgets.QLabel(rows_html)
+            tokens_lbl.setObjectName("helpBoxTokens")
+            tokens_lbl.setTextFormat(QtCore.Qt.RichText)
+            tokens_lbl.setWordWrap(True)
+            tokens_lbl.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            grid.addWidget(tokens_lbl, 1, col, QtCore.Qt.AlignTop)
+
+            grid.setColumnStretch(col, 1)
+        v.addLayout(grid)
+
+        v.addWidget(self._divider())
+
+        example = QtWidgets.QLabel(
+            "Example: <code>%(artist)s - %(title)s</code> → <i>Daft Punk - One More Time.mp3</i>"
+        )
+        example.setObjectName("helpBoxExample")
+        example.setTextFormat(QtCore.Qt.RichText)
+        example.setWordWrap(True)
+        v.addWidget(example)
+
+        return box
+
     def _page_output(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
         pv = QtWidgets.QVBoxLayout(page)
@@ -756,6 +876,44 @@ class PreferencesDialog(QtWidgets.QDialog):
         fl = QtWidgets.QVBoxLayout(form)
         fl.setContentsMargins(0, 0, 0, 0)
         fl.setSpacing(10)
+
+        self.filename_format_combo = QtWidgets.QComboBox()
+        self.filename_format_combo.setObjectName("combo")
+        self.filename_format_combo.setAccessibleName("Filename naming format")
+        for label, _value in self._FILENAME_FORMAT_ITEMS:
+            self.filename_format_combo.addItem(label)
+        fl.addWidget(
+            self._form_row(
+                "Filename",
+                self.filename_format_combo,
+                "Choose how downloaded files are named on disk",
+            )
+        )
+
+        self.filename_preview_label = QtWidgets.QLabel("")
+        self.filename_preview_label.setObjectName("helpBoxExample")
+        self.filename_preview_label.setTextFormat(QtCore.Qt.RichText)
+        self.filename_preview_label.setWordWrap(True)
+        self.filename_preview_label.setContentsMargins(0, 0, 0, 4)
+        fl.addWidget(self.filename_preview_label)
+
+        self.custom_filename_input = self._line_edit(
+            placeholder="%(title)s",
+            tip="yt-dlp field template, no extension or path. e.g. %(artist)s - %(title)s. "
+                "Allowed fields include title, artist, album, uploader, playlist_index, track_number, id.",
+        )
+        self.custom_filename_input.setAccessibleName("Custom filename template")
+        self.custom_filename_row = self._form_row(
+            "Custom template",
+            self.custom_filename_input,
+            "Advanced: raw yt-dlp filename template, no extension",
+        )
+        fl.addWidget(self.custom_filename_row)
+
+        self.filename_help_box = self._build_filename_help()
+        fl.addWidget(self.filename_help_box)
+
+        self.filename_format_combo.currentIndexChanged.connect(self._on_filename_format_changed)
 
         self.organize_uploader = UISwitch("")
         self._tweak_toggle(self.organize_uploader)
@@ -775,9 +933,46 @@ class PreferencesDialog(QtWidgets.QDialog):
         dh.addWidget(self.btn_date_picker, 0)
         fl.addWidget(self._form_row("Only download after", dr))
 
-        card = self._card(form, title="Output", subtitle="Organize your library and restrict by upload date.")
+        card = self._card(form, title="Output", subtitle="Name your files, organize your library, and restrict by upload date.")
         pv.addWidget(card)
+        self._on_filename_format_changed(self.filename_format_combo.currentIndex())
         return page
+
+    def _on_filename_format_changed(self, index: int) -> None:
+        try:
+            _, value = self._FILENAME_FORMAT_ITEMS[index]
+        except (IndexError, TypeError):
+            value = "default"
+        is_custom = value == "custom"
+        self.custom_filename_input.setEnabled(is_custom)
+        self.custom_filename_row.setVisible(is_custom)
+        if hasattr(self, "filename_help_box"):
+            self.filename_help_box.setVisible(is_custom)
+
+        if hasattr(self, "filename_preview_label"):
+            if value == "default":
+                self.filename_preview_label.setText(
+                    "<i>Uses each download's existing smart default naming (unchanged).</i>"
+                )
+                self.filename_preview_label.setVisible(True)
+            elif value == "custom":
+                self.filename_preview_label.setVisible(False)
+            else:
+                tmpl = FILENAME_FORMAT_PRESETS.get(value, "")
+                self.filename_preview_label.setText(f"Template: <code>{tmpl}.%(ext)s</code>")
+                self.filename_preview_label.setVisible(True)
+
+    def _filename_format_value_to_index(self, value: str) -> int:
+        for i, (_label, v) in enumerate(self._FILENAME_FORMAT_ITEMS):
+            if v == value:
+                return i
+        return 0
+
+    def _filename_format_index_to_value(self, index: int) -> str:
+        try:
+            return self._FILENAME_FORMAT_ITEMS[index][1]
+        except IndexError:
+            return "default"
 
     def _page_experimental(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
@@ -942,6 +1137,33 @@ class PreferencesDialog(QtWidgets.QDialog):
         }}
         #formDescription {{
             font-size: 12px;
+            color: {_hex(muted_text)};
+        }}
+
+        /* Filename template help box */
+        QFrame#helpBox {{
+            background: {_hex(_mix(card_bg, base_bg, 0.4))};
+            border: 1px solid {_hex(border_c)};
+            border-radius: 10px;
+        }}
+        QLabel#helpBoxTitle {{
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: {_hex(section_text)};
+        }}
+        QLabel#helpBoxCategory {{
+            font-size: 11px;
+            font-weight: 600;
+            color: {_hex(muted_text)};
+        }}
+        QLabel#helpBoxTokens {{
+            font-size: 12px;
+            color: {_hex(strong_text)};
+        }}
+        QLabel#helpBoxExample {{
+            font-size: 11px;
             color: {_hex(muted_text)};
         }}
 
@@ -1125,9 +1347,11 @@ class PreferencesDialog(QtWidgets.QDialog):
             self.languages_input,
             self.playlist_items,
             self.date_after,
+            self.custom_filename_input,
         ):
             w.textChanged.connect(self._validate_all)
 
+        self.filename_format_combo.currentIndexChanged.connect(self._validate_all)
         self.retries_spin.valueChanged.connect(self._validate_all)
         self.cookies_browser_combo.currentTextChanged.connect(self._validate_all)
         self.subtitles_enabled.toggled.connect(self._validate_all)
@@ -1162,6 +1386,51 @@ class PreferencesDialog(QtWidgets.QDialog):
         act = le.addAction(icon, QtWidgets.QLineEdit.TrailingPosition)
         self._validation_actions[le] = act
 
+    def _validate_filename_template(self, text: str) -> Tuple[bool, str]:
+        """
+        Validate a custom yt-dlp filename template (no extension, no path).
+        Returns (is_ok, error_message).
+        """
+        raw = text.strip()
+        if not raw:
+            return False, "Enter a template, e.g. %(title)s"
+
+        # Strip escaped percent signs first so they don't confuse placeholder scanning
+        working = raw.replace("%%", "\u0000")
+
+        # Remove every valid placeholder, checking its field name(s) against the whitelist
+        pos = 0
+        literal_chunks: List[str] = []
+        for m in _TEMPLATE_PLACEHOLDER_RE.finditer(working):
+            literal_chunks.append(working[pos:m.start()])
+            fields = m.group("fields").split(",")
+            for f in fields:
+                if f not in _ALLOWED_TEMPLATE_FIELDS:
+                    return False, f"Unknown field: %({f})s"
+            pos = m.end()
+        literal_chunks.append(working[pos:])
+        remainder = "".join(literal_chunks)
+
+        # Any leftover "%" means a malformed/unsupported placeholder
+        if "%" in remainder:
+            return False, "Invalid placeholder syntax, use %(field)s"
+
+        # Restore escaped percents for the illegal-character check
+        remainder = remainder.replace("\u0000", "%")
+        if _TEMPLATE_ILLEGAL_LITERAL_RE.search(remainder):
+            return False, 'Cannot contain \\ / : * ? " < > | or control characters'
+
+        if raw != raw.strip(" .") :
+            return False, "Cannot start or end with a space or a period"
+
+        if not _TEMPLATE_PLACEHOLDER_RE.search(working):
+            return False, "Include at least one field, e.g. %(title)s"
+
+        if len(raw) > 180:
+            return False, "Template is too long (max 180 characters)"
+
+        return True, ""
+
     def _validate_all(self) -> None:
         proxy = self.proxy_input.text().strip()
         proxy_ok = (proxy == "") or proxy.startswith(("http://", "https://", "socks5://"))
@@ -1187,6 +1456,13 @@ class PreferencesDialog(QtWidgets.QDialog):
         # Archive path optional even if enabled
         archive_ok = True
 
+        # Custom filename template only needs to be valid when actually selected
+        is_custom_filename = self._filename_format_index_to_value(self.filename_format_combo.currentIndex()) == "custom"
+        if is_custom_filename:
+            filename_ok, filename_err = self._validate_filename_template(self.custom_filename_input.text())
+        else:
+            filename_ok, filename_err = True, ""
+
         self._mark_error(self.proxy_input, not proxy_ok, "Must start with http://, https://, or socks5://")
         self._mark_error(self.limit_rate_input, not rate_ok, "Use a number with K, M, or G (e.g., 500K, 5M, 1G)")
         self._mark_error(
@@ -1196,8 +1472,9 @@ class PreferencesDialog(QtWidgets.QDialog):
         )
         self._mark_error(self.playlist_items, not items_ok, "Use indices or ranges: 1,5-10,15")
         self._mark_error(self.date_after, not date_ok, "Must be YYYYMMDD (e.g., 20240101)")
+        self._mark_error(self.custom_filename_input, is_custom_filename and not filename_ok, filename_err or None)
 
-        all_ok = proxy_ok and cookies_ok and rate_ok and langs_ok and items_ok and date_ok and archive_ok
+        all_ok = proxy_ok and cookies_ok and rate_ok and langs_ok and items_ok and date_ok and archive_ok and filename_ok
         self._set_save_enabled(all_ok)
 
     def _set_save_enabled(self, enabled: bool) -> None:
@@ -1258,6 +1535,8 @@ class PreferencesDialog(QtWidgets.QDialog):
             # Output
             self.organize_uploader,
             self.date_after,
+            self.filename_format_combo,
+            self.custom_filename_input,
             # Experimental
             self.live_stream,
             self.yt_music,
@@ -1456,6 +1735,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         # Output
         self.organize_uploader.setChecked(bool(getattr(self.settings, "ORGANIZE_BY_UPLOADER", False)))
         self.date_after.setText(getattr(self.settings, "DATEAFTER", "") or "")
+        fmt = getattr(self.settings, "FILENAME_FORMAT", "default") or "default"
+        block = QtCore.QSignalBlocker(self.filename_format_combo)
+        self.filename_format_combo.setCurrentIndex(self._filename_format_value_to_index(fmt))
+        del block
+        self.custom_filename_input.setText(getattr(self.settings, "CUSTOM_FILENAME_TEMPLATE", "") or "")
+        self._on_filename_format_changed(self.filename_format_combo.currentIndex())
 
         # Experimental
         self.live_stream.setChecked(bool(getattr(self.settings, "LIVE_FROM_START", False)))
@@ -1510,6 +1795,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         # Output
         self.organize_uploader.setChecked(bool(data.get("ORGANIZE_BY_UPLOADER", False)))
         self.date_after.setText(data.get("DATEAFTER", ""))
+        fmt = data.get("FILENAME_FORMAT", "default") or "default"
+        block = QtCore.QSignalBlocker(self.filename_format_combo)
+        self.filename_format_combo.setCurrentIndex(self._filename_format_value_to_index(fmt))
+        del block
+        self.custom_filename_input.setText(data.get("CUSTOM_FILENAME_TEMPLATE", ""))
+        self._on_filename_format_changed(self.filename_format_combo.currentIndex())
 
         # Experimental
         self.live_stream.setChecked(bool(data.get("LIVE_FROM_START", False)))
@@ -1554,6 +1845,8 @@ class PreferencesDialog(QtWidgets.QDialog):
             # ─────────────────────────────────────────
             "VIDEO_FORMAT": self.video_format_combo.currentText(),
             "ORGANIZE_BY_UPLOADER": self.organize_uploader.isChecked(),
+            "FILENAME_FORMAT": self._filename_format_index_to_value(self.filename_format_combo.currentIndex()),
+            "CUSTOM_FILENAME_TEMPLATE": self.custom_filename_input.text().strip(),
             "DATEAFTER": self.date_after.text().strip(),
             "LIVE_FROM_START": self.live_stream.isChecked(),
             "YT_MUSIC_METADATA": self.yt_music.isChecked(),
@@ -1648,13 +1941,14 @@ class PreferencesDialog(QtWidgets.QDialog):
             getattr(self, "date_after", None),
             getattr(self, "custom_ffmpeg", None),
             getattr(self, "archive_path_input", None),
+            getattr(self, "custom_filename_input", None),
         ):
             if isinstance(w, QtWidgets.QLineEdit):
                 fields.append(w)
         return fields
 
     def _first_error_widget(self) -> Optional[QtWidgets.QWidget]:
-        for w in (self.proxy_input, self.limit_rate_input, self.languages_input, self.playlist_items, self.date_after):
+        for w in (self.proxy_input, self.limit_rate_input, self.languages_input, self.playlist_items, self.date_after, self.custom_filename_input):
             if (w.property("state") or "") == "error":
                 return w
         return None
