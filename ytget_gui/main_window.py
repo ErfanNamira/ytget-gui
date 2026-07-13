@@ -1537,9 +1537,14 @@ class MainWindow(QMainWindow):
         if not self.is_downloading:
             self.log("ℹ️ Queue is not running.\n", AppStyles.INFO_COLOR, "Info")
             return
+        # Only stop the queue from advancing to the next item. Do NOT cancel
+        # the worker here — that kills the in-progress yt-dlp/ffmpeg process
+        # and throws away the current item's progress. The active download
+        # is left running; _on_download_finished() already checks
+        # `queue_paused` and will refrain from starting the next item once
+        # this one completes.
         self.queue_paused = True
-        if self.download_worker:
-            self.download_worker.cancel()
+        self.log("⏸️ Queue paused. Current download will keep running and the next item will wait.\n", AppStyles.INFO_COLOR, "Info")
         self._update_button_states()
 
     def _skip_current(self):
