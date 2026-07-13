@@ -13,7 +13,7 @@ import subprocess
 import threading
 
 from ytget_gui.styles import AppStyles
-from ytget_gui.settings import AppSettings
+from ytget_gui.settings import AppSettings, FILENAME_FORMAT_PRESETS
 from ytget_gui.workers import cookies as CookieManager
 
 @dataclass
@@ -29,10 +29,6 @@ class DownloadWorker(QObject):
     error = Signal(str)
     status = Signal(str)
 
-    # Internal signals: used to safely hand data from the background reader
-    # thread back to this object's own thread (Qt auto-queues signal
-    # emissions across threads, so slots here always run on the worker
-    # thread where the QTimer etc. live).
     _rawOutput = Signal(bytes)
     _procFinished = Signal(int)
 
@@ -476,6 +472,22 @@ class DownloadWorker(QObject):
         except Exception:
             return (not is_playlist)
 
+    def _resolve_name_template(self, default_template: str) -> str:
+        """
+        Returns the yt-dlp filename template "stub" (title portion, no extension)
+        according to the user's FILENAME_FORMAT preference. Falls back to
+        default_template (legacy behavior) when the preference is "default",
+        an unrecognized value, or "custom" without a template provided.
+        """
+        s = self.settings
+        fmt = getattr(s, "FILENAME_FORMAT", "default") or "default"
+        if fmt == "default":
+            return default_template
+        if fmt == "custom":
+            custom = (getattr(s, "CUSTOM_FILENAME_TEMPLATE", "") or "").strip()
+            return custom if custom else default_template
+        return FILENAME_FORMAT_PRESETS.get(fmt, default_template)
+
     def _safe_filename(self, name: str) -> str:
         if not name:
             return "Unknown"
@@ -584,7 +596,8 @@ class DownloadWorker(QObject):
             # explicit album tag (set below) instead of a guessed one.
             flat_album_name = self._safe_filename(it.get("title") or "Playlist") + " Playlist"
             base = Path(s.DOWNLOADS_DIR) / flat_album_name
-            filename = "%(autonumber)03d - %(album)s - %(title)s.%(ext)s"
+            name_tmpl = self._resolve_name_template("%(album)s - %(title)s")
+            filename = f"%(autonumber)03d - {name_tmpl}.%(ext)s"
             self._flat_playlist_dir = base
         else:
             if is_playlist:
@@ -598,11 +611,13 @@ class DownloadWorker(QObject):
 
             is_yt_music = self.is_youtube_music_url(it.get("url", "") or "")
             if getattr(s, "YT_MUSIC_METADATA", False) and is_yt_music and (is_audio or is_playlist):
-                fallback = "%(artist)s - %(title)s.%(ext)s"
+                default_stub = "%(artist)s - %(title)s"
             else:
-                fallback = "%(title)s.%(ext)s"
+                default_stub = "%(title)s"
+            name_tmpl = self._resolve_name_template(default_stub)
+            fallback = f"{name_tmpl}.%(ext)s"
 
-            if self._should_force_title(is_playlist):
+            if self._should_force_title(is_playlist) and getattr(s, "FILENAME_FORMAT", "default") == "default":
                 safe = self._safe_filename(it.get("title") or "Unknown")
                 filename = f"{safe}.%(ext)s"
             else:
