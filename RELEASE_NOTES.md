@@ -1,22 +1,15 @@
 ## ✨ What's New
-### 🎧 Opus Audio Support
-- Added Opus format codes for both single tracks and playlists (`audio_opus`, `playlist_opus`), with matching one-click presets.
-- `.opus` files are now recognized during post-processing.
-### 🎶 Playlist & Format Cleanup
-- Merged the old `youtube_music` format into `playlist_mp3` — YouTube Music metadata parsing now applies to any playlist audio download (MP3 or Opus) when enabled in settings.
-- Consolidated duplicate MP3 playlist presets into a single 🎶 Audio Playlist (MP3 – YouTube/Music) preset.
-### 🔧 More Reliable Spotify Downloads
-- Increased default SpotDL parallelism (6 → 12 threads).
-- Added an automatic YouTube fallback provider so a single provider hiccup no longer causes a track to silently fail.
-- Fixed misleading "success" messages — SpotDL runs now flag any tracks that actually failed, even when the underlying process exits with code 0.
-### 🎨 Lighter Dark Theme
-- Rebalanced near-black surfaces to a richer dark grey/blue across the app for better readability. Accent colors are unchanged.
-### 🧹 Simplified About Dialog & Update Manager
-- Removed FFmpeg/FFprobe checks from the Update Manager.
-- Streamlined the About dialog down to "About" and "License" tabs.
-- Fixed a brief console window flash during update checks on Windows.
-### 🐛 Fixed YouTube Music Track Numbers
-- Track numbers now correctly reflect each track's actual playlist position instead of a bogus fixed value.
+### 🔧 Custom Filename Formatting
+- Added a Filename option under Preferences → Output with 12 naming presets, plus a fully custom mode.
+- Track # - Title produces zero-padded, iTunes-friendly names like 001 - Song Name.mp3 with no artist name in the filename.
+- Custom templates are validated against a whitelist of safe fields (title, artist, album, uploader, track_number, playlist_index, id, etc.) — invalid or unsafe templates (path separators, illegal characters, unknown fields) are rejected before you can save.
+- Selecting a non-default naming option now overrides filename behavior in all download modes, including single downloads, playlists, and YouTube Music "Top songs / Mix / Radio" flat playlists.
+- If "Fetch richer metadata from YouTube Music" is enabled, ytget defaults to Artist - Title filenames for audio downloads (since that setting fetches per-track artist tags). Any Filename preset you choose now overrides this default regardless of that setting.
+
+### 🐛 Fixed Pause Button
+- Pause button no longer kills the active download. Previously, clicking "Pause" called download_worker.cancel(), which sent terminate()/kill() to the running yt-dlp/ffmpeg process — silently aborting the current item's download instead of pausing the queue. Pause now only stops the queue from advancing to the next item; the in-progress download is left running and completes normally. Resuming afterward continues the queue as expected.
+
+
 ---
 ## 🆚 Updated Dependencies
 - **yt-dlp:** `2026.07.04`
@@ -118,7 +111,6 @@
     </tr>
   </tbody>
 </table>
-
 ---
 
 ### 📊 VirusTotal Scan
