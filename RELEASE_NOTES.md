@@ -43,7 +43,7 @@
       <td>ZIP</td>
       <td><strong>255 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-windows.zip">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.4/YTGet-windows.zip">
           <img src="https://img.shields.io/badge/Download-ZIP-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows ZIP Download">
         </a>
       </td>
@@ -52,7 +52,7 @@
       <td>7z</td>
       <td><strong>165</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-windows.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.4/YTGet-windows.7z">
           <img src="https://img.shields.io/badge/Download-7z-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows 7z Download">
         </a>
       </td>
@@ -63,7 +63,7 @@
       <td>tar.gz</td>
       <td><strong>255 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-linux.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.4/YTGet-linux.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux tar.gz Download">
         </a>
       </td>
@@ -72,7 +72,7 @@
       <td>7z</td>
       <td><strong>190</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-linux.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.4/YTGet-linux.7z">
           <img src="https://img.shields.io/badge/Download-7z-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux 7z Download">
         </a>
       </td>
@@ -83,7 +83,7 @@
       <td>tar.gz</td>
       <td><strong>155 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-macOS-arm64.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.4/YTGet-macOS-arm64.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS ARM tar.gz Download">
         </a>
       </td>
@@ -92,7 +92,7 @@
       <td>7z</td>
       <td><strong>105</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-macOS-arm64.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.4/YTGet-macOS-arm64.7z">
           <img src="https://img.shields.io/badge/Download-7z-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS ARM 7z Download">
         </a>
       </td>
@@ -103,7 +103,7 @@
       <td>tar.gz</td>
       <td><strong>155 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-macOS-x86_64.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.4/YTGet-macOS-x86_64.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS Intel tar.gz Download">
         </a>
       </td>
@@ -112,7 +112,7 @@
       <td>7z</td>
       <td><strong>110</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.3/YTGet-macOS-x86_64.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.4/YTGet-macOS-x86_64.7z">
           <img src="https://img.shields.io/badge/Download-7z-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS Intel 7z Download">
         </a>
       </td>
