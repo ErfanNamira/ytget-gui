@@ -125,8 +125,8 @@ class PreferencesDialog(QtWidgets.QDialog):
     # ---------- UI scaffold ----------
     def _build_ui(self) -> None:
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(18, 18, 18, 18)
-        root.setSpacing(14)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         # Header (brand + subtitle)
         header = QtWidgets.QWidget(self)
@@ -135,11 +135,11 @@ class PreferencesDialog(QtWidgets.QDialog):
         hb.setContentsMargins(0, 0, 0, 0)
         hb.setSpacing(12)
 
-        # Brand icon
-        brand_ic = QtWidgets.QLabel()
+        # Brand icon (gradient badge)
+        brand_ic = QtWidgets.QLabel("⚙")
         brand_ic.setObjectName("brandIcon")
-        brand_ic.setFixedSize(28, 28)
-        brand_ic.setPixmap(self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon).pixmap(28, 28))
+        brand_ic.setFixedSize(40, 40)
+        brand_ic.setAlignment(QtCore.Qt.AlignCenter)
 
         title_box = QtWidgets.QVBoxLayout()
         title_box.setContentsMargins(0, 0, 0, 0)
@@ -185,7 +185,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.sidebar.setUniformItemSizes(True)
         self.sidebar.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.sidebar.setSpacing(2)
-        self.sidebar.setFixedWidth(244)
+        self.sidebar.setFixedWidth(252)
         self.sidebar.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.sidebar.setAccessibleName("Preferences sections")
         self.sidebar.setAccessibleDescription("Select a section to adjust preferences")
@@ -204,7 +204,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         footer.setObjectName("footer")
         fl = QtWidgets.QHBoxLayout(footer)
         fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(10)
+        fl.setSpacing(6)
 
         self.status_lbl = QtWidgets.QLabel("All changes saved")
         self.status_lbl.setObjectName("status")
@@ -247,7 +247,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         vp = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(vp)
         v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(12)
+        v.setSpacing(8)
         v.addWidget(content)
         v.addStretch(1)
         sa.setWidget(vp)
@@ -262,7 +262,7 @@ class PreferencesDialog(QtWidgets.QDialog):
 
     def _add_page(self, name: str, icon: QtGui.QIcon, content: QtWidgets.QWidget):
         item = QtWidgets.QListWidgetItem(icon, name)
-        item.setSizeHint(QtCore.QSize(item.sizeHint().width(), 38))
+        item.setSizeHint(QtCore.QSize(item.sizeHint().width(), 34))
         self.sidebar.addItem(item)
 
         # Wrap content in a scroll area
@@ -294,7 +294,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         item = QtWidgets.QListWidgetItem(
             self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay), "Spotify"
         )
-        item.setSizeHint(QtCore.QSize(item.sizeHint().width(), 38))
+        item.setSizeHint(QtCore.QSize(item.sizeHint().width(), 34))
         self.sidebar.addItem(item)
         self.stack.addWidget(spotdl_content)   
         self.section_combo.addItem(
@@ -321,8 +321,8 @@ class PreferencesDialog(QtWidgets.QDialog):
         card = QtWidgets.QFrame()
         card.setObjectName("card")
         v = QtWidgets.QVBoxLayout(card)
-        v.setContentsMargins(14, 12, 14, 14)
-        v.setSpacing(10)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(7)
 
         if title:
             head = QtWidgets.QWidget()
@@ -370,7 +370,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         grid = QtWidgets.QGridLayout(row)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(8)
+        grid.setVerticalSpacing(5)
 
         # Label column
         l = QtWidgets.QLabel(label)
@@ -438,7 +438,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         w = QtWidgets.QWidget()
         h = QtWidgets.QHBoxLayout(w)
         h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(8)
+        h.setSpacing(6)
         btn = QtWidgets.QPushButton(button_text)
         btn.setMinimumHeight(36)
         btn.clicked.connect(cb)
@@ -451,13 +451,13 @@ class PreferencesDialog(QtWidgets.QDialog):
         page = QtWidgets.QWidget()
         pv = QtWidgets.QVBoxLayout(page)
         pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(12)
+        pv.setSpacing(8)
 
         # Proxy + cookies card
         proxy_form = QtWidgets.QWidget()
         pf = QtWidgets.QVBoxLayout(proxy_form)
         pf.setContentsMargins(0, 0, 0, 0)
-        pf.setSpacing(10)
+        pf.setSpacing(6)
 
         self.proxy_input = self._line_edit(
             placeholder="http://proxy:port, https://proxy:port, or socks5://proxy:port",
@@ -493,7 +493,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         imp_row = QtWidgets.QWidget()
         imp_h = QtWidgets.QHBoxLayout(imp_row)
         imp_h.setContentsMargins(0, 0, 0, 0)
-        imp_h.setSpacing(8)
+        imp_h.setSpacing(6)
         imp_h.addWidget(self.import_cookies_combo, 1)
         imp_h.addWidget(self.import_cookies_btn, 0)
 
@@ -524,7 +524,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         perf_form = QtWidgets.QWidget()
         prf = QtWidgets.QVBoxLayout(perf_form)
         prf.setContentsMargins(0, 0, 0, 0)
-        prf.setSpacing(10)
+        prf.setSpacing(6)
 
         self.limit_rate_input = self._line_edit(
             placeholder="e.g., 5M, 500K, 1G",
@@ -554,14 +554,14 @@ class PreferencesDialog(QtWidgets.QDialog):
         page = QtWidgets.QWidget()
         pv = QtWidgets.QVBoxLayout(page)
         pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(12)
+        pv.setSpacing(8)
 
         self._sb_gridw = QtWidgets.QWidget()
         self._sb_gridw.setObjectName("sbGridw")
         self._sb_grid = QtWidgets.QGridLayout(self._sb_gridw)
         self._sb_grid.setContentsMargins(0, 0, 0, 0)
         self._sb_grid.setHorizontalSpacing(16)
-        self._sb_grid.setVerticalSpacing(8)
+        self._sb_grid.setVerticalSpacing(5)
 
         self.category_cb: Dict[str, QtWidgets.QCheckBox] = {}
         items = list(_SPONSORBLOCK_CATEGORIES.items())
@@ -606,12 +606,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         page = QtWidgets.QWidget()
         pv = QtWidgets.QVBoxLayout(page)
         pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(12)
+        pv.setSpacing(8)
 
         group = QtWidgets.QWidget()
         gl = QtWidgets.QVBoxLayout(group)
         gl.setContentsMargins(0, 0, 0, 0)
-        gl.setSpacing(8)
+        gl.setSpacing(6)
 
         self.chapters_none = QtWidgets.QRadioButton("Don't use chapters")
         self.chapters_embed = QtWidgets.QRadioButton("Embed chapters in file")
@@ -633,12 +633,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         page = QtWidgets.QWidget()
         pv = QtWidgets.QVBoxLayout(page)
         pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(12)
+        pv.setSpacing(8)
 
         form = QtWidgets.QWidget()
         fl = QtWidgets.QVBoxLayout(form)
         fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(10)
+        fl.setSpacing(6)
 
         # UISwitch in right column, label+desc managed by form row
         self.subtitles_enabled = UISwitch("")
@@ -673,12 +673,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         page = QtWidgets.QWidget()
         pv = QtWidgets.QVBoxLayout(page)
         pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(12)
+        pv.setSpacing(8)
 
         form = QtWidgets.QWidget()
         fl = QtWidgets.QVBoxLayout(form)
         fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(10)
+        fl.setSpacing(6)
 
         self.enable_archive = UISwitch("")
         self._tweak_toggle(self.enable_archive)
@@ -714,12 +714,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         page = QtWidgets.QWidget()
         pv = QtWidgets.QVBoxLayout(page)
         pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(12)
+        pv.setSpacing(8)
 
         form = QtWidgets.QWidget()
         fl = QtWidgets.QVBoxLayout(form)
         fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(10)
+        fl.setSpacing(6)
 
         self.audio_normalize = UISwitch("")
         self._tweak_toggle(self.audio_normalize)
@@ -834,7 +834,7 @@ class PreferencesDialog(QtWidgets.QDialog):
 
         grid = QtWidgets.QGridLayout()
         grid.setHorizontalSpacing(20)
-        grid.setVerticalSpacing(6)
+        grid.setVerticalSpacing(4)
         for col, (cat_name, fields) in enumerate(categories):
             cat_lbl = QtWidgets.QLabel(cat_name.upper())
             cat_lbl.setObjectName("helpBoxCategory")
@@ -870,12 +870,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         page = QtWidgets.QWidget()
         pv = QtWidgets.QVBoxLayout(page)
         pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(12)
+        pv.setSpacing(8)
 
         form = QtWidgets.QWidget()
         fl = QtWidgets.QVBoxLayout(form)
         fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(10)
+        fl.setSpacing(6)
 
         self.filename_format_combo = QtWidgets.QComboBox()
         self.filename_format_combo.setObjectName("combo")
@@ -928,7 +928,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         dr = QtWidgets.QWidget()
         dh = QtWidgets.QHBoxLayout(dr)
         dh.setContentsMargins(0, 0, 0, 0)
-        dh.setSpacing(8)
+        dh.setSpacing(6)
         dh.addWidget(self.date_after, 1)
         dh.addWidget(self.btn_date_picker, 0)
         fl.addWidget(self._form_row("Only download after", dr))
@@ -984,12 +984,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         page = QtWidgets.QWidget()
         pv = QtWidgets.QVBoxLayout(page)
         pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(12)
+        pv.setSpacing(8)
 
         form = QtWidgets.QWidget()
         fl = QtWidgets.QVBoxLayout(form)
         fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(10)
+        fl.setSpacing(6)
 
         self.live_stream = UISwitch("")
         self._tweak_toggle(self.live_stream)
@@ -1053,54 +1053,80 @@ class PreferencesDialog(QtWidgets.QDialog):
         error_bg = QtGui.QColor(255, 92, 92, 28 if is_dark else 18)
         brand_accent = _mix(highlight, strong_text, 0.8)
 
+        accent2 = _mix(highlight, QtGui.QColor("#7C4DFF") if is_dark else QtGui.QColor("#5B8CFF"), 0.5)
+        page_bg = _mix(win, QtGui.QColor("#05070C") if is_dark else QtGui.QColor("#F4F6FA"), 0.35)
+        rail_bg = _mix(win, QtGui.QColor("#0B0E14") if is_dark else QtGui.QColor("#FFFFFF"), 0.55 if is_dark else 0.6)
+        good = QtGui.QColor("#3DD68C") if is_dark else QtGui.QColor("#1F9D5A")
+        warn = QtGui.QColor("#F5A623")
+
         css = f"""
         QDialog {{
-            background: {_hex(win)};
+            background: {_hex(page_bg)};
         }}
 
-        /* Header */
+        /* ---------- Header ---------- */
+        #header {{
+            background: transparent;
+        }}
         #brandIcon {{
-            border-radius: 6px;
-            background: {_hex(_mix(highlight, win, 0.85))};
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 700;
+            color: {_hex(focus_text_on_highlight)};
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                stop:0 {_hex(highlight)}, stop:1 {_hex(accent2)});
         }}
         #dlgTitle {{
-            font-size: 20px;
-            font-weight: 700;
-            letter-spacing: 0.2px;
+            font-size: 21px;
+            font-weight: 800;
+            letter-spacing: 0.1px;
             color: {_hex(strong_text)};
         }}
         #dlgSubtitle {{
-            font-size: 12px;
+            font-size: 12.5px;
             color: {_hex(muted_text)};
         }}
 
-        /* Sidebar and nav */
+        /* ---------- Sidebar / nav rail ---------- */
         QListWidget#sidebar {{
-            background: transparent;
+            background: {_hex(rail_bg)};
             border: 1px solid {_hex(border_c)};
-            border-radius: 12px;
-            padding: 6px 0;
+            border-radius: 16px;
+            padding: 6px 6px;
+            outline: 0;
         }}
         QListWidget#sidebar::item {{
-            padding: 10px 12px;
-            margin: 2px 6px;
-            border-radius: 10px;
+            padding: 7px 10px 7px 12px;
+            margin: 1px 2px;
+            border-radius: 11px;
+            color: {_hex(muted_text)};
+            font-size: 13px;
+            font-weight: 500;
+            border: 1px solid transparent;
+        }}
+        QListWidget#sidebar::item:hover {{
+            background: {_hex(_mix(rail_bg, highlight, 0.10))};
             color: {_hex(strong_text)};
         }}
         QListWidget#sidebar::item:selected {{
-            background: {_hex(_mix(border_c, highlight, 0.8))}33;
-            border: 1px solid {_hex(_mix(border_c, highlight, 0.35))};
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 {_hex(_mix(rail_bg, highlight, 0.32))},
+                stop:1 {_hex(_mix(rail_bg, accent2, 0.20))});
+            border: 1px solid {_hex(_mix(border_c, highlight, 0.55))};
+            color: {_hex(strong_text)};
+            font-weight: 700;
         }}
         QComboBox#sectionCombo {{
-            min-height: 36px;
+            min-height: 30px;
             border: 1px solid {_hex(border_c)};
-            border-radius: 10px;
-            padding: 6px 10px;
+            border-radius: 11px;
+            padding: 4px 10px;
             background: {_hex(card_bg)};
             color: {_hex(strong_text)};
+            font-weight: 600;
         }}
 
-        /* Scroll area */
+        /* ---------- Scroll area ---------- */
         QScrollArea#scrollArea {{
             background: transparent;
             border: none;
@@ -1108,20 +1134,36 @@ class PreferencesDialog(QtWidgets.QDialog):
         QScrollArea#scrollArea > QWidget#qt_scrollarea_viewport {{
             background: transparent;
         }}
+        QScrollBar:vertical {{
+            background: transparent;
+            width: 10px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {_hex(_mix(border_c, muted_text, 0.3))};
+            border-radius: 5px;
+            min-height: 30px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: {_hex(_mix(border_c, highlight, 0.4))};
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            height: 0px;
+        }}
 
-        /* Cards */
+        /* ---------- Cards ---------- */
         QFrame#card {{
             background: {_hex(card_bg)};
             border: 1px solid {_hex(border_c)};
-            border-radius: 14px;
+            border-radius: 16px;
         }}
         QFrame#card:hover {{
-            border-color: {_hex(_mix(border_c, highlight, 0.35))};
+            border-color: {_hex(_mix(border_c, highlight, 0.4))};
             background: {_hex(field_hover)};
         }}
         QLabel#cardTitle {{
-            font-size: 14px;
-            font-weight: 600;
+            font-size: 14.5px;
+            font-weight: 700;
             color: {_hex(strong_text)};
         }}
         QLabel#cardSubtitle {{
@@ -1129,16 +1171,16 @@ class PreferencesDialog(QtWidgets.QDialog):
             color: {_hex(muted_text)};
         }}
 
-        /* Section and form labels */
+        /* ---------- Section and form labels ---------- */
         #sectionLabel {{
             font-size: 11px;
-            font-weight: 600;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.4px;
-            color: {_hex(section_text)};
+            letter-spacing: 0.6px;
+            color: {_hex(_mix(section_text, highlight, 0.25))};
         }}
         #formLabel {{
-            font-size: 12px;
+            font-size: 12.5px;
             color: {_hex(muted_text)};
         }}
         #formDescription {{
@@ -1146,22 +1188,22 @@ class PreferencesDialog(QtWidgets.QDialog):
             color: {_hex(muted_text)};
         }}
 
-        /* Filename template help box */
+        /* ---------- Filename template help box ---------- */
         QFrame#helpBox {{
-            background: {_hex(_mix(card_bg, base_bg, 0.4))};
-            border: 1px solid {_hex(border_c)};
-            border-radius: 10px;
+            background: {_hex(_mix(card_bg, highlight, 0.05))};
+            border: 1px dashed {_hex(_mix(border_c, highlight, 0.3))};
+            border-radius: 12px;
         }}
         QLabel#helpBoxTitle {{
             font-size: 11px;
-            font-weight: 600;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.4px;
-            color: {_hex(section_text)};
+            letter-spacing: 0.5px;
+            color: {_hex(_mix(section_text, highlight, 0.25))};
         }}
         QLabel#helpBoxCategory {{
             font-size: 11px;
-            font-weight: 600;
+            font-weight: 700;
             color: {_hex(muted_text)};
         }}
         QLabel#helpBoxTokens {{
@@ -1173,60 +1215,107 @@ class PreferencesDialog(QtWidgets.QDialog):
             color: {_hex(muted_text)};
         }}
 
-        /* Inputs */
+        /* ---------- Inputs ---------- */
         QLineEdit#input, QComboBox#combo, QSpinBox#spin {{
             background: {_hex(field_bg)};
             color: {_hex(strong_text)};
-            border: 1px solid {_hex(border_c)};
-            border-radius: 10px;
-            padding: 8px 12px;
+            border: 1.5px solid {_hex(border_c)};
+            border-radius: 11px;
+            padding: 6px 10px;
             selection-background-color: {_hex(highlight)};
             selection-color: {_hex(focus_text_on_highlight)};
             font-size: 13px;
         }}
         QLineEdit#input:hover, QComboBox#combo:hover, QSpinBox#spin:hover {{
             background: {_hex(field_hover)};
-            border-color: {_hex(_mix(border_c, highlight, 0.25))};
+            border-color: {_hex(_mix(border_c, highlight, 0.35))};
         }}
         QLineEdit#input:focus, QComboBox#combo:focus, QSpinBox#spin:focus {{
-            border-color: {_hex(highlight)};
+            border: 1.5px solid {_hex(highlight)};
             background: {_hex(field_hover)};
         }}
         QLineEdit#input[state="error"] {{
             border-color: {_hex(error_border)};
             background: {_hex(error_bg)};
         }}
+        QComboBox#combo::drop-down, QComboBox#sectionCombo::drop-down {{
+            border: none;
+            width: 26px;
+        }}
 
         QCheckBox#check, QRadioButton#radio {{
             color: {_hex(strong_text)};
+            font-size: 13px;
+            spacing: 8px;
+        }}
+        QCheckBox#check::indicator, QRadioButton#radio::indicator {{
+            width: 17px;
+            height: 17px;
+            border-radius: 5px;
+            border: 1.5px solid {_hex(border_c)};
+            background: {_hex(field_bg)};
+        }}
+        QRadioButton#radio::indicator {{
+            border-radius: 9px;
+        }}
+        QCheckBox#check::indicator:hover, QRadioButton#radio::indicator:hover {{
+            border-color: {_hex(_mix(border_c, highlight, 0.5))};
+        }}
+        QCheckBox#check::indicator:checked, QRadioButton#radio::indicator:checked {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                stop:0 {_hex(highlight)}, stop:1 {_hex(accent2)});
+            border-color: {_hex(highlight)};
         }}
 
-        /* Divider */
+        /* ---------- Divider ---------- */
         #divider {{
             background: {_hex(divider_c)};
             min-height: 1px;
+            max-height: 1px;
+            border: none;
         }}
 
-        /* Footer */
+        /* ---------- Footer ---------- */
+        #footer {{
+            background: transparent;
+        }}
         #status {{
             color: {_hex(muted_text)};
-        }}
-        QDialogButtonBox QPushButton {{
-            border-radius: 10px;
-            padding: 8px 14px;
+            font-size: 12.5px;
             font-weight: 600;
         }}
+        #status[state="dirty"] {{
+            color: {_hex(warn)};
+        }}
+        #status[state="clean"] {{
+            color: {_hex(good)};
+        }}
+        QDialogButtonBox QPushButton {{
+            border-radius: 11px;
+            padding: 7px 16px;
+            font-weight: 700;
+            font-size: 13px;
+            min-width: 84px;
+        }}
         QDialogButtonBox QPushButton:default {{
-            background: {_hex(highlight)};
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 {_hex(highlight)}, stop:1 {_hex(accent2)});
             color: {_hex(focus_text_on_highlight)};
+            border: none;
+        }}
+        QDialogButtonBox QPushButton:default:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 {_hex(_mix(highlight, QtGui.QColor('#ffffff'), 0.12))},
+                stop:1 {_hex(_mix(accent2, QtGui.QColor('#ffffff'), 0.12))});
         }}
         QDialogButtonBox QPushButton:!default {{
             background: transparent;
             color: {_hex(strong_text)};
-            border: 1px solid {_hex(border_c)};
+            border: 1.5px solid {_hex(border_c)};
         }}
-        QDialogButtonBox QPushButton:hover {{
-            border-color: {_hex(_mix(border_c, highlight, 0.35))};
+        QDialogButtonBox QPushButton:!default:hover {{
+            border-color: {_hex(_mix(border_c, highlight, 0.4))};
+            background: {_hex(_mix(card_bg, highlight, 0.06))};
         }}
         QDialogButtonBox QPushButton:disabled {{
             color: {_hex(_mix(muted_text, strong_text, 0.25))};
@@ -1560,7 +1649,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         self._update_status()
 
     def _update_status(self) -> None:
-        self.status_lbl.setText("Unsaved changes — press Ctrl+S to save" if self._dirty else "All changes saved")
+        self.status_lbl.setText(
+            "●  Unsaved changes — press Ctrl+S to save" if self._dirty else "●  All changes saved"
+        )
+        self.status_lbl.setProperty("state", "dirty" if self._dirty else "clean")
+        self.status_lbl.style().unpolish(self.status_lbl)
+        self.status_lbl.style().polish(self.status_lbl)
         self.reset_btn.setEnabled(self._dirty)
 
     def _on_reset(self) -> None:
