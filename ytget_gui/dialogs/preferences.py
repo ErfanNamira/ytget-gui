@@ -961,6 +961,12 @@ class PreferencesDialog(QtWidgets.QDialog):
                 tmpl = FILENAME_FORMAT_PRESETS.get(value, "")
                 self.filename_preview_label.setText(f"Template: <code>{tmpl}.%(ext)s</code>")
                 self.filename_preview_label.setVisible(True)
+                if value in ("track_title", "album_track_title"):
+                    self.filename_preview_label.setText(
+                        self.filename_preview_label.text()
+                        + " <i>Track # comes from position in a playlist "
+                          "(single-video downloads will show \"Unknown\").</i>"
+                    )
 
     def _filename_format_value_to_index(self, value: str) -> int:
         for i, (_label, v) in enumerate(self._FILENAME_FORMAT_ITEMS):
