@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, QTimer
 import os
 import re
+import signal
 import sys
 import time
 import subprocess
@@ -137,6 +138,17 @@ class DownloadWorker(QObject):
                 startupinfo.wShowWindow = subprocess.SW_HIDE
 
             try:
+                popen_kwargs: Dict[str, Any] = {}
+                if sys.platform != "win32":
+                    # yt-dlp spawns ffmpeg/aria2c as *its own* child processes.
+                    # Without this, terminate()/kill() below only signals the
+                    # yt-dlp process itself and leaves those children running
+                    # as orphans -- which is why cancelling a download (e.g.
+                    # via "Remove" on the active item) didn't actually stop
+                    # disk/network activity. start_new_session puts yt-dlp
+                    # (and everything it spawns) in its own process group so
+                    # the whole tree can be killed together in cancel().
+                    popen_kwargs["start_new_session"] = True
                 self.process = subprocess.Popen(
                     [program, *args],
                     stdout=subprocess.PIPE,
@@ -145,6 +157,7 @@ class DownloadWorker(QObject):
                     creationflags=creationflags,
                     startupinfo=startupinfo,
                     bufsize=0,  # unbuffered: deliver bytes as soon as they arrive
+                    **popen_kwargs,
                 )
             except Exception as e:
                 self.error.emit(f"Failed to start yt-dlp process: {e}")
@@ -193,20 +206,43 @@ class DownloadWorker(QObject):
 
     def cancel(self):
         self._cancel_requested = True
-        if self.process and self.process.poll() is None:
+        p = self.process
+        if p and p.poll() is None:
             self._add_log("⏹️ Cancelling Download...\n", AppStyles.WARNING_COLOR)
             self._flush_logs_now()
             try:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
+                if sys.platform == "win32":
+                    # p.terminate() (== TerminateProcess) only kills yt-dlp
+                    # itself, not the ffmpeg/aria2c children it launched --
+                    # those kept running in the background, which is why
+                    # "removing" an in-progress item didn't actually stop
+                    # the download. taskkill /T kills the whole process tree.
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                        capture_output=True,
+                    )
+                else:
+                    # start_new_session=True at launch put yt-dlp in its own
+                    # process group, so signalling the group (not just the
+                    # single pid) takes its ffmpeg/aria2c children down too.
+                    pgid = os.getpgid(p.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    try:
+                        p.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(pgid, signal.SIGKILL)
             except Exception:
                 try:
-                    self.process.kill()
+                    p.terminate()
+                    try:
+                        p.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        p.kill()
                 except Exception:
-                    pass
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
 
     # Build a minimal environment for child process, adding PhantomJS only when explicitly requested
     def _build_process_env(self, cmd: List[str]) -> Optional[Dict[str, str]]:
