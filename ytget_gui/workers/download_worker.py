@@ -665,7 +665,21 @@ class DownloadWorker(QObject):
             if ffmpeg_pp_args:
                 cmd.extend(["--postprocessor-args", "ffmpeg:" + " ".join(ffmpeg_pp_args)])
 
-            if is_playlist and getattr(s, "YT_MUSIC_METADATA", False) and is_yt_music and not is_flat_playlist:
+            # %(track_number)s is not populated by yt-dlp on its own for regular
+            # playlists -- previously it only got filled in via the YT Music
+            # metadata path below. But the user's chosen filename format (e.g.
+            # the "Track # - Title" / "Album - Track # - Title" presets, or a
+            # custom template) may reference %(track_number)s independently of
+            # that experimental toggle. If we don't derive it here too, those
+            # filenames silently fall back to "Unknown" for the track number
+            # (see GH issue: track numbers only worked when "Fetch richer
+            # metadata from YouTube Music" was also enabled). So: derive
+            # track_number from playlist_index whenever the resolved filename
+            # template needs it, regardless of YT_MUSIC_METADATA/is_yt_music.
+            needs_track_number = "%(track_number)" in name_tmpl
+            if is_playlist and not is_flat_playlist and (
+                needs_track_number or (getattr(s, "YT_MUSIC_METADATA", False) and is_yt_music)
+            ):
                 # Track numbers only -- do NOT touch artist/title via regex.
                 cmd.extend(["--parse-metadata", "playlist_index:%(track_number)s"])
         else:
