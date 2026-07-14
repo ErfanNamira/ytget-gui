@@ -11,6 +11,8 @@
   from the playlist position on their own for any playlist. Previously this only worked if the
   experimental "Fetch richer metadata from YouTube Music" setting was also enabled, causing track
   numbers to silently show as "Unknown" otherwise.
+### 🎨 Redesigned Preferences Window
+- Preferences got a full visual refresh — new gradient accents, softer rounded cards, a cleaner sidebar, and a glowing focus style on inputs.
 
 ### 🐛 Fixed Pause Button
 - Pause button no longer kills the active download. Previously, clicking "Pause" called download_worker.cancel(), which sent terminate()/kill() to the running yt-dlp/ffmpeg process — silently aborting the current item's download instead of pausing the queue. Pause now only stops the queue from advancing to the next item; the in-progress download is left running and completes normally. Resuming afterward continues the queue as expected.
