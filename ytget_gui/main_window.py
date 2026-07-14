@@ -393,6 +393,18 @@ QSplitter::handle {
 #BtnSkip:hover:enabled { color: #E4E4E7; border-color: #3F3F46; }
 #BtnSkip:disabled { color: #2A2D36; }
 
+#BtnStop {
+    background: transparent;
+    color: #3F3F46;
+    border: 1px solid #2A2D36;
+    border-radius: 6px;
+    padding: 9px 14px;
+    font-size: 12px;
+}
+#BtnStop:enabled { color: #F87171; border-color: #4A2A2E; }
+#BtnStop:hover:enabled { color: #FECACA; background: #3A1F22; border-color: #7A3238; }
+#BtnStop:disabled { color: #2A2D36; }
+
 /* ── Progress Bar ── */
 #GlobalProgress {
     background: #21242B;
@@ -526,6 +538,7 @@ class MainWindow(QMainWindow):
         self.current_download_item: Optional[Dict[str, Any]] = None
         self.is_downloading = False
         self.queue_paused = True
+        self._stop_all_requested: bool = False
         self.post_queue_action = "Keep"
         self._initial_queue_len: int = 0
 
@@ -552,6 +565,7 @@ class MainWindow(QMainWindow):
         self.btn_add_inline: QPushButton
         self.btn_start_queue: QPushButton
         self.btn_pause_queue: QPushButton
+        self.btn_stop_all: QPushButton
         self.btn_skip: QPushButton
         self.global_progress: QProgressBar
         self.post_action: QComboBox
@@ -1009,9 +1023,17 @@ class MainWindow(QMainWindow):
         self.btn_skip.setFixedHeight(36)
         self.btn_skip.setToolTip("Skip current item")
 
+        self.btn_stop_all = QPushButton("⏹  STOP")
+        self.btn_stop_all.setObjectName("BtnStop")
+        self.btn_stop_all.setCursor(Qt.PointingHandCursor)
+        self.btn_stop_all.setEnabled(False)
+        self.btn_stop_all.setFixedHeight(36)
+        self.btn_stop_all.setToolTip("Stop the current download.")
+
         lay.addWidget(self.btn_start_queue)
         lay.addWidget(self.btn_pause_queue)
         lay.addWidget(self.btn_skip)
+        lay.addWidget(self.btn_stop_all)
         lay.addStretch(1)
 
         # Right cluster
@@ -1052,6 +1074,7 @@ class MainWindow(QMainWindow):
         self.btn_pause_queue.clicked.connect(self._pause_queue)
         self.btn_advanced.clicked.connect(self._show_advanced_options)
         self.btn_skip.clicked.connect(self._skip_current)
+        self.btn_stop_all.clicked.connect(self._stop_all)
 
     def _setup_menu(self):
         menubar: QMenuBar = self.menuBar()
@@ -1552,6 +1575,26 @@ class MainWindow(QMainWindow):
             self.log("⏭️ Skipping current item...\n", AppStyles.INFO_COLOR, "Info")
             self.download_worker.cancel()
 
+    def _stop_all(self):
+        """Hard-stop the active download: kill its yt-dlp/ffmpeg process tree
+        immediately and pause the queue so nothing else starts. Unlike Pause,
+        the current item is actually killed rather than left running. Unlike
+        clearing the queue, every other queued item is left untouched so the
+        user can resume later with Start."""
+        if not self.is_downloading and not self.queue_paused:
+            self.log("ℹ️ Nothing to stop.\n", AppStyles.INFO_COLOR, "Info")
+            return
+
+        self.log("⏹️ Stopping current download...\n", AppStyles.WARNING_COLOR, "Warning")
+        self._stop_all_requested = True
+        self.queue_paused = True
+
+        if self.is_downloading and self.download_worker:
+            self.download_worker.cancel()
+        else:
+            self._stop_all_requested = False
+            self._update_button_states()
+
     def _download_next(self):
         if self.queue_paused or self.is_downloading or not self.queue:
             if not self.queue and not self.is_downloading:
@@ -1628,6 +1671,19 @@ class MainWindow(QMainWindow):
             self.queue.pop(0)
             self._save_queue_permanent()
         self.current_download_item = None
+
+        if self._stop_all_requested:
+            # Hard stop: the cancelled item stays in the queue (marked
+            # Error) so the user can retry/resume it later with Start --
+            # we only kill the active process and pause the queue, we
+            # don't touch the rest of it.
+            self._stop_all_requested = False
+            self._refresh_queue_list()
+            self._update_button_states()
+            self._update_global_progress_bar()
+            self.log("⏹️ Stopped. Queue is paused; remaining items are untouched.\n", AppStyles.WARNING_COLOR, "Info")
+            return
+
         self._refresh_queue_list()
         self._update_button_states()
         self._update_global_progress_bar()
@@ -2141,6 +2197,7 @@ class MainWindow(QMainWindow):
         self.btn_start_queue.setEnabled(has_items and (self.queue_paused or not self.is_downloading))
         self.btn_pause_queue.setEnabled(self.is_downloading and not self.queue_paused)
         self.btn_skip.setEnabled(self.is_downloading)
+        self.btn_stop_all.setEnabled(self.is_downloading)
 
     # ════════════════════════════════════════════════════════════════════════
     #  PERSISTENT QUEUE
