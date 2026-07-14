@@ -5,6 +5,12 @@
 - Custom templates are validated against a whitelist of safe fields (title, artist, album, uploader, track_number, playlist_index, id, etc.) — invalid or unsafe templates (path separators, illegal characters, unknown fields) are rejected before you can save.
 - Selecting a non-default naming option now overrides filename behavior in all download modes, including single downloads, playlists, and YouTube Music "Top songs / Mix / Radio" flat playlists.
 - If "Fetch richer metadata from YouTube Music" is enabled, ytget defaults to Artist - Title filenames for audio downloads (since that setting fetches per-track artist tags). Any Filename preset you choose now overrides this default regardless of that setting.
+- **Track numbers no longer require "Fetch richer metadata from YouTube Music"**
+  Filename presets that include a track number ("Track # - Title", "Album - Track # - Title") — as
+  well as any custom filename template referencing `%(track_number)s` — now resolve the track number
+  from the playlist position on their own for any playlist. Previously this only worked if the
+  experimental "Fetch richer metadata from YouTube Music" setting was also enabled, causing track
+  numbers to silently show as "Unknown" otherwise.
 
 ### 🐛 Fixed Pause Button
 - Pause button no longer kills the active download. Previously, clicking "Pause" called download_worker.cancel(), which sent terminate()/kill() to the running yt-dlp/ffmpeg process — silently aborting the current item's download instead of pausing the queue. Pause now only stops the queue from advancing to the next item; the in-progress download is left running and completes normally. Resuming afterward continues the queue as expected.
