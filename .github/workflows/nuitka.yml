@@ -1,0 +1,333 @@
+name: Build & Release YTGet
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag Name to Release'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }} - ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x86_64
+            deno_url: https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip
+
+          - os: ubuntu-latest
+            arch: x86_64
+            deno_url: https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip
+
+          - os: macos-latest
+            arch: arm64
+            deno_url: https://github.com/denoland/deno/releases/latest/download/deno-aarch64-apple-darwin.zip
+
+          - os: macos-15
+            arch: x86_64
+            deno_url: https://github.com/denoland/deno/releases/latest/download/deno-x86_64-apple-darwin.zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nuitka ordered-set zstandard
+
+      - name: Install C compiler (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf ccache
+
+      - name: Download Deno
+        shell: bash
+        run: |
+          echo "Downloading Deno from ${{ matrix.deno_url }}"
+          curl -L "${{ matrix.deno_url }}" -o deno.zip
+
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell -Command "Expand-Archive -Path deno.zip -DestinationPath deno_dir"
+            cp deno_dir/deno.exe ./deno.exe
+          else
+            unzip deno.zip -d deno_dir
+            cp deno_dir/deno ./deno
+            chmod +x deno
+          fi
+
+      - name: Download yt-dlp
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -o yt-dlp.exe
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+            chmod +x yt-dlp
+          fi
+
+      - name: Download spotDL
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -L https://github.com/spotDL/spotify-downloader/releases/download/v4.5.0/spotdl-4.5.0-win32.exe -o spotdl.exe
+
+      - name: Download ffmpeg & ffprobe
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            curl -L https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -o ffmpeg.zip
+            powershell -Command "Expand-Archive -Path ffmpeg.zip -DestinationPath ."
+            cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName")" .
+            cp "$(powershell -Command "(Get-ChildItem -Recurse -Filter ffprobe.exe | Select-Object -First 1).FullName")" .
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+            cp $(which ffmpeg) .
+            cp $(which ffprobe) .
+          else
+            curl -L https://evermeet.cx/ffmpeg/ffmpeg-8.1.2.zip -o ffmpeg.zip
+            unzip ffmpeg.zip
+            chmod +x ffmpeg
+            curl -L https://evermeet.cx/ffmpeg/ffprobe-8.1.2.zip -o ffprobe.zip
+            unzip ffprobe.zip
+            chmod +x ffprobe
+          fi
+
+      - name: Download PhantomJS
+        shell: bash
+        run: |
+          WIN_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-windows.zip"
+          MAC_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-macosx.zip"
+          LINUX_URL="https://bitbucket.org/ariya/phantomjs/downloads/phantomjs-2.1.1-linux-x86_64.tar.bz2"
+
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            curl -L "$WIN_URL" -o phantomjs.zip
+            powershell -Command "Expand-Archive -Path phantomjs.zip -DestinationPath phantomjs_dir"
+            cp phantomjs_dir/phantomjs-2.1.1-windows/bin/phantomjs.exe ./phantomjs.exe
+
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            curl -L "$LINUX_URL" -o phantomjs.tar.bz2
+            tar xjf phantomjs.tar.bz2
+            cp phantomjs-2.1.1-linux-x86_64/bin/phantomjs ./phantomjs
+            chmod +x phantomjs
+
+          else
+            curl -L "$MAC_URL" -o phantomjs.zip
+            unzip phantomjs.zip
+            cp phantomjs-2.1.1-macosx/bin/phantomjs ./phantomjs
+            chmod +x phantomjs
+          fi
+
+      - name: Update Info.plist version (macOS only)
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.tag }}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" Info.plist
+
+      - name: Build application (Nuitka)
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.tag }}"
+          # Nuitka wants a 4-part numeric version for Windows metadata; fall back to 0.0.0.0 if the tag isn't numeric-dotted.
+          WIN_VERSION="$VERSION"
+          if ! [[ "$WIN_VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
+            WIN_VERSION="0.0.0.0"
+          fi
+
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            python -m nuitka \
+              --standalone \
+              --enable-plugin=pyside6 \
+              --macos-create-app-bundle \
+              --macos-app-name="YTGet" \
+              --macos-app-version="$VERSION" \
+              --macos-bundle-identifier="com.erfannamira.ytget" \
+              --macos-app-icon="ytget_gui/icon.icns" \
+              --disable-console \
+              --include-data-dir=ytget_gui=ytget_gui \
+              --include-data-files=ffmpeg=ffmpeg \
+              --include-data-files=ffprobe=ffprobe \
+              --include-data-files=phantomjs=phantomjs \
+              --include-data-files=deno=deno \
+              --output-dir=dist \
+              --assume-yes-for-downloads \
+              --remove-output \
+              ytget_gui/main.py
+
+            # Normalize the produced bundle name to YTGet.app
+            if [ ! -d "dist/YTGet.app" ]; then
+              APP_BUNDLE=$(find dist -maxdepth 1 -name "*.app" | head -n 1)
+              mv "$APP_BUNDLE" "dist/YTGet.app"
+            fi
+
+            cp Info.plist "dist/YTGet.app/Contents/Info.plist"
+
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            python -m nuitka \
+              --standalone \
+              --enable-plugin=pyside6 \
+              --windows-console-mode=disable \
+              --windows-icon-from-ico="ytget_gui/icon.ico" \
+              --company-name="ErfanNamira" \
+              --product-name="YTGet" \
+              --file-version="$WIN_VERSION" \
+              --product-version="$WIN_VERSION" \
+              --include-data-dir=ytget_gui=ytget_gui \
+              --include-data-files=yt-dlp.exe=yt-dlp.exe \
+              --include-data-files=ffmpeg.exe=ffmpeg.exe \
+              --include-data-files=ffprobe.exe=ffprobe.exe \
+              --include-data-files=phantomjs.exe=phantomjs.exe \
+              --include-data-files=deno.exe=deno.exe \
+              --include-data-files=spotdl.exe=spotdl.exe \
+              --output-dir=dist \
+              --output-filename=YTGet.exe \
+              --assume-yes-for-downloads \
+              --remove-output \
+              ytget_gui/main.py
+
+            mv dist/main.dist dist/YTGet
+
+          else
+            python -m nuitka \
+              --standalone \
+              --enable-plugin=pyside6 \
+              --linux-icon="ytget_gui/icon.ico" \
+              --include-data-dir=ytget_gui=ytget_gui \
+              --include-data-files=yt-dlp=yt-dlp \
+              --include-data-files=ffmpeg=ffmpeg \
+              --include-data-files=ffprobe=ffprobe \
+              --include-data-files=phantomjs=phantomjs \
+              --include-data-files=deno=deno \
+              --output-dir=dist \
+              --output-filename=YTGet \
+              --assume-yes-for-downloads \
+              --remove-output \
+              ytget_gui/main.py
+
+            mv dist/main.dist dist/YTGet
+          fi
+
+      - name: Smoke test (macOS only)
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          EXEC="./dist/YTGet.app/Contents/MacOS/YTGet"
+          if [ ! -f "$EXEC" ]; then
+            echo "❌ $EXEC not found"; exit 1
+          fi
+          "$EXEC" --version
+
+      - name: Package build
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell Compress-Archive -Path dist/YTGet -DestinationPath YTGet-windows.zip -CompressionLevel Optimal
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            tar czf YTGet-linux.tar.gz -C dist YTGet
+          else
+            cd dist
+            if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+              tar czf YTGet-macOS-arm64.tar.gz YTGet.app
+            else
+              tar czf YTGet-macOS-x86_64.tar.gz YTGet.app
+            fi
+            cd ..
+          fi
+
+      - name: Package build (7z, max compression)
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y p7zip-full
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install p7zip
+          fi
+
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cd dist
+            7z a -t7z -mx=9 ../YTGet-windows.7z YTGet
+            cd ..
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            cd dist
+            7z a -t7z -mx=9 ../YTGet-linux.7z YTGet
+            cd ..
+          else
+            cd dist
+            if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+              7z a -t7z -mx=9 YTGet-macOS-arm64.7z YTGet.app
+            else
+              7z a -t7z -mx=9 YTGet-macOS-x86_64.7z YTGet.app
+            fi
+            cd ..
+          fi
+
+      - name: Generate SHA-256 checksum
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
+            certutil -hashfile YTGet-windows.7z SHA256 > YTGet-windows-7z.sha256
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
+            shasum -a 256 YTGet-linux.7z > YTGet-linux-7z.sha256
+          else
+            if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+              shasum -a 256 dist/YTGet-macOS-arm64.tar.gz > dist/YTGet-macOS-arm64.sha256
+              shasum -a 256 dist/YTGet-macOS-arm64.7z > dist/YTGet-macOS-arm64-7z.sha256
+            else
+              shasum -a 256 dist/YTGet-macOS-x86_64.tar.gz > dist/YTGet-macOS-x86_64.sha256
+              shasum -a 256 dist/YTGet-macOS-x86_64.7z > dist/YTGet-macOS-x86_64-7z.sha256
+            fi
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            YTGet-*.*
+            dist/YTGet-*.tar.gz
+            dist/YTGet-*.7z
+            dist/YTGet-*.sha256
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: ./artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: "${{ github.event.inputs.tag || github.ref_name }}"
+          body_path: RELEASE_NOTES.md
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
