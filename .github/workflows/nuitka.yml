@@ -40,7 +40,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.x'
+          python-version: '3.13'
 
       - name: Install dependencies
         run: |
@@ -161,6 +161,7 @@ jobs:
               --macos-signed-app-name="com.erfannamira.ytget" \
               --macos-app-icon="ytget_gui/icon.icns" \
               --disable-console \
+              --output-filename=YTGet \
               --include-data-dir=ytget_gui=ytget_gui \
               --include-data-files=ffmpeg=ffmpeg \
               --include-data-files=ffprobe=ffprobe \
@@ -228,10 +229,13 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
-          EXEC="./dist/YTGet.app/Contents/MacOS/YTGet"
-          if [ ! -f "$EXEC" ]; then
-            echo "❌ $EXEC not found"; exit 1
+          EXEC=$(find "./dist/YTGet.app/Contents/MacOS" -maxdepth 1 -type f -perm -u+x | head -n 1)
+          if [ -z "$EXEC" ] || [ ! -f "$EXEC" ]; then
+            echo "❌ executable not found in dist/YTGet.app/Contents/MacOS"
+            ls -la "./dist/YTGet.app/Contents/MacOS" || true
+            exit 1
           fi
+          echo "Found executable: $EXEC"
           "$EXEC" --version
 
       - name: Package build
