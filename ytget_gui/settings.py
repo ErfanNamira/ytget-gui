@@ -34,7 +34,7 @@ FILENAME_FORMAT_PRESETS: Dict[str, str] = {
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.7.4"
+    VERSION: str = "2.7.5"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
