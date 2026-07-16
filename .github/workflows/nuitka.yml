@@ -1,4 +1,4 @@
-name: Build & Release YTGet
+name: Build & Release YTGet (Nuitka)
 
 on:
   workflow_dispatch:
