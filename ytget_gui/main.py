@@ -5,12 +5,21 @@ import sys
 from pathlib import Path
 from platform import system
 
+# --- Windows taskbar icon: set AppUserModelID before QApplication is created ---
+if system() == "Windows":
+    import ctypes
+    myappid = "YTGet.2.7.5"
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    except Exception:
+        pass
+        
 from PySide6.QtWidgets import QApplication, QStyleFactory
 from PySide6.QtGui import QIcon, QPalette, QColor
 
 from ytget_gui.main_window import MainWindow
 
-__version__ = "2.7.4"
+__version__ = "2.7.5"
 
 
 def make_dark_palette() -> QPalette:
