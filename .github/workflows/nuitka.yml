@@ -158,7 +158,7 @@ jobs:
               --macos-create-app-bundle \
               --macos-app-name="YTGet" \
               --macos-app-version="$VERSION" \
-              --macos-bundle-identifier="com.erfannamira.ytget" \
+              --macos-app-bundle-identifier="com.erfannamira.ytget" \
               --macos-app-icon="ytget_gui/icon.icns" \
               --disable-console \
               --include-data-dir=ytget_gui=ytget_gui \
