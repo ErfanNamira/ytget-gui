@@ -59,14 +59,12 @@ def which_or_path(candidate: Union[Path, str], exe_name: str) -> Path:
 def default_downloads_dir() -> Path:
     """
     Determine a reasonable default downloads folder:
-      - On Windows: ./Downloads under cwd
-      - On macOS/Linux: ~/Downloads if it exists, otherwise ./Downloads
+      - Prefer the user's real ~/Downloads folder (Windows, macOS, Linux).
+      - Otherwise fall back to ./Downloads under the current working
+        directory, so we don't silently write into an unrelated cwd.
     """
-    if is_windows():
-        return Path(os.path.join(os.getcwd(), "Downloads")).resolve()
-
-    xdg = Path.home() / "Downloads"
-    if xdg.exists() and xdg.is_dir():
-        return xdg
+    home_downloads = Path.home() / "Downloads"
+    if home_downloads.exists() and home_downloads.is_dir():
+        return home_downloads
 
     return (Path(os.getcwd()) / "Downloads").resolve()
