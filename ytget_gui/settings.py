@@ -6,6 +6,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Pattern
 
@@ -127,7 +128,7 @@ class AppSettings:
     EMBED_THUMBNAIL: bool = True
     # HLS preference controls
     PREFER_HLS: bool = True
-    HLS_PREFERRED_DOMAINS: List[str] = field(default_factory=lambda: ["pornhub.com"])
+    HLS_PREFERRED_DOMAINS: List[str] = field(default_factory=list)
     SPOTDL: SpotDLSettings = field(default_factory=SpotDLSettings)    
 
     def __post_init__(self):
@@ -193,27 +194,38 @@ class AppSettings:
           4) Finally, generic best as a last resort.
         """
         label = self._label_for_height(height)
-
-        av1 = f"bestvideo[height={height}][vcodec=av01]+{audio}"
         vp9_map = self.RESOLUTIONS.get(label, "")
+        return self._build_format_chain(height, audio, vp9_map)
+
+    @staticmethod
+    @lru_cache(maxsize=64)
+    def _build_format_chain(height: int, audio: str, vp9_map: str) -> str:
+        # Cached: the UI can re-request the same (height, audio) pair many
+        # times (e.g. re-opening a dropdown), so avoid rebuilding/deduping
+        # the same string chain repeatedly.
+        av1 = f"bestvideo[height={height}][vcodec=av01]+{audio}"
         best_at_or_below = f"bestvideo[height<={height}]+{audio}"
         generic_best = f"bestvideo+{audio}"
         ultimate = "best"
 
         chain = "/".join([av1, vp9_map, best_at_or_below, generic_best, ultimate])
-        return self._dedupe_format_chain(chain)
+        return AppSettings._dedupe_format_chain(chain)
 
     def _label_for_height(self, height: int) -> str:
+        # NOTE: these must exactly match the keys in RESOLUTIONS, or the
+        # VP9 fallback in get_format_for_resolution() silently resolves to
+        # an empty string and is dropped from the format chain.
         return {
-            4320: "🎬 4320p (8K)",
-            2160: "🎬 2160p (4K)",
-            1440: "🎬 1440p (QHD)",
-            1080: "🎬 1080p (FHD)",
-            720:  "🎬 720p (HD)",
-            480:  "🎬 480p (SD)",
-        }.get(height, f"🎬 {height}p")
+            4320: "🎬 YouTube 4320p (8K)",
+            2160: "🎬 YouTube 2160p (4K)",
+            1440: "🎥 YouTube 1440p (QHD)",
+            1080: "🎥 YouTube 1080p (FHD)",
+            720:  "📱 YouTube 720p (HD)",
+            480:  "📱 YouTube 480p (SD)",
+        }.get(height, f"🎬 YouTube {height}p")
 
-    def _dedupe_format_chain(self, chain: str) -> str:
+    @staticmethod
+    def _dedupe_format_chain(chain: str) -> str:
         seen = set()
         parts: List[str] = []
         for seg in (s.strip() for s in chain.split("/") if s.strip()):
