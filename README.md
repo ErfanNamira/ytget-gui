@@ -21,6 +21,8 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
   <img src="https://raw.githubusercontent.com/ErfanNamira/ytget-gui/refs/heads/main/Images/2.6.0.JPG" width="220" />
   <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.4%20(3).JPG" width="220" />
   <img src="https://raw.githubusercontent.com/ErfanNamira/ytget/refs/heads/main/Images/YTGet2.4.3.JPG" width="220" />
+  <img src="https://raw.githubusercontent.com/ErfanNamira/ytget-gui/refs/heads/main/Images/2.7.5.A.jpg" width="220" />
+  <img src="https://raw.githubusercontent.com/ErfanNamira/ytget-gui/refs/heads/main/Images/2.7.5.B.jpg" width="220" />
 </p>
 
 ---
