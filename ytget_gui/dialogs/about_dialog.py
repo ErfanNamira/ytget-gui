@@ -24,7 +24,8 @@ class AboutDialog(QDialog):
 
     def init_ui(self):
         """Initialize the user interface."""
-        self.setWindowTitle(f"About {self.settings.APP_NAME}")
+        app_name = getattr(self.settings, "APP_NAME", "Application")
+        self.setWindowTitle(f"About {app_name}")
         self.setModal(True)
         self.setMinimumSize(600, 500)
         self.resize(650, 550)
@@ -41,17 +42,22 @@ class AboutDialog(QDialog):
         if self._app_icon:
             icon_label = QLabel()
             icon_label.setPixmap(self._app_icon.pixmap(64, 64))
+            # Without a fixed size the label reflows to whatever the pixmap's
+            # native size is (icons are often multi-resolution), which can
+            # visibly jump the header layout on first paint.
+            icon_label.setFixedSize(64, 64)
             header_layout.addWidget(icon_label)
 
         title_layout = QVBoxLayout()
-        app_title = QLabel(self.settings.APP_NAME)
+        app_title = QLabel(app_name)
         title_font = QFont()
         title_font.setPointSize(20)
         title_font.setBold(True)
         app_title.setFont(title_font)
         title_layout.addWidget(app_title)
 
-        version_label = QLabel(f"Version {self.settings.VERSION}")
+        version = getattr(self.settings, "VERSION", "unknown")
+        version_label = QLabel(f"Version {version}")
         version_label.setStyleSheet("color: #666;")
         title_layout.addWidget(version_label)
 
@@ -97,15 +103,19 @@ class AboutDialog(QDialog):
         features_group = QGroupBox("Key Features")
         features_layout = QVBoxLayout(features_group)
         features = [
-            "• Download videos in multiple formats and qualities",
-            "• Extract audio as MP3 or other formats",
-            "• Support for playlists and channels",
-            "• Queue system for batch downloads",
-            "• Cross-platform support (Windows, macOS, Linux)",
-            "• Built-in update management"
+            "Download videos in multiple formats and qualities",
+            "Extract audio as MP3 or other formats",
+            "Support for playlists and channels",
+            "Queue system for batch downloads",
+            "Cross-platform support (Windows, macOS, Linux)",
+            "Built-in update management",
         ]
-        for feature in features:
-            features_layout.addWidget(QLabel(feature))
+        # A single multi-line label is far cheaper than one QLabel per row
+        # (fewer widgets to lay out, style, and repaint) and is functionally
+        # identical for static, non-interactive text like this.
+        features_label = QLabel("\n".join(f"• {f}" for f in features))
+        features_label.setWordWrap(True)
+        features_layout.addWidget(features_label)
         layout.addWidget(features_group)
 
         # Links
