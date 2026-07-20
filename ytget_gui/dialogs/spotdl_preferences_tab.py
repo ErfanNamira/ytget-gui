@@ -27,7 +27,7 @@ multi-select list, which isn't covered by the dialog's stylesheet.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -63,6 +63,13 @@ from ytget_gui.spotdl_settings import (
 # ---------------------------------------------------------------------------
 #  Small helpers
 # ---------------------------------------------------------------------------
+
+def _g(settings: SpotDLSettings, name: str, default):
+    """getattr with a default, so a settings object saved by an older
+    version of the app (missing a newly-added field) doesn't raise
+    AttributeError and take the whole preferences dialog down with it."""
+    return getattr(settings, name, default)
+
 
 def _label(text: str, tooltip: str = "") -> QLabel:
     lbl = QLabel(text)
@@ -244,25 +251,25 @@ class SpotDLPreferencesTab(QScrollArea):
 
         g.addWidget(_label("Format", "Audio format for downloaded tracks"), 0, 0)
         self.fmt_combo = _combo(SPOTDL_FORMATS)
-        idx = SPOTDL_FORMATS.index(settings.SPOTDL_FORMAT) if settings.SPOTDL_FORMAT in SPOTDL_FORMATS else 0
+        idx = SPOTDL_FORMATS.index(_g(settings, "SPOTDL_FORMAT", "")) if _g(settings, "SPOTDL_FORMAT", "") in SPOTDL_FORMATS else 0
         self.fmt_combo.setCurrentIndex(idx)
         g.addWidget(self.fmt_combo, 0, 1)
 
         g.addWidget(_label("Bitrate", "Target bitrate (auto = let spotdl decide)"), 1, 0)
         self.bitrate_combo = _combo(SPOTDL_BITRATES)
-        br_idx = SPOTDL_BITRATES.index(settings.SPOTDL_BITRATE) if settings.SPOTDL_BITRATE in SPOTDL_BITRATES else 0
+        br_idx = SPOTDL_BITRATES.index(_g(settings, "SPOTDL_BITRATE", "")) if _g(settings, "SPOTDL_BITRATE", "") in SPOTDL_BITRATES else 0
         self.bitrate_combo.setCurrentIndex(br_idx)
         g.addWidget(self.bitrate_combo, 1, 1)
 
         g.addWidget(_label("Download threads", "Parallel download threads (1–32)"), 2, 0)
-        self.threads_spin = _spin(1, 32, settings.SPOTDL_THREADS)
+        self.threads_spin = _spin(1, 32, _g(settings, "SPOTDL_THREADS", 4))
         g.addWidget(self.threads_spin, 2, 1)
 
         g.addWidget(_label(
             "Output template",
             "Filename template. Tokens: " + "  ".join(SPOTDL_OUTPUT_TOKENS[:8]) + " …"
         ), 3, 0)
-        self.output_edit = _line(settings.SPOTDL_OUTPUT, "{artists} - {title} - {year}.{output-ext}")
+        self.output_edit = _line(_g(settings, "SPOTDL_OUTPUT", ""), "{artists} - {title} - {year}.{output-ext}")
         self.output_edit.setToolTip("Available tokens:\n" + "\n".join(SPOTDL_OUTPUT_TOKENS))
         g.addWidget(self.output_edit, 3, 1)
 
@@ -277,10 +284,10 @@ class SpotDLPreferencesTab(QScrollArea):
         lyr = QVBoxLayout()
         lyr.setSpacing(4)
         lyr.addWidget(_label("Lyrics (order matters)", "spotdl tries providers left-to-right"))
-        self.lyrics_list = _MultiSelectList(SPOTDL_LYRICS_PROVIDERS, settings.SPOTDL_LYRICS)
+        self.lyrics_list = _MultiSelectList(SPOTDL_LYRICS_PROVIDERS, _g(settings, "SPOTDL_LYRICS", []))
         lyr.addWidget(self.lyrics_list)
         self.lrc_check = _check(
-            "Generate .lrc sidecar files", settings.SPOTDL_GENERATE_LRC,
+            "Generate .lrc sidecar files", _g(settings, "SPOTDL_GENERATE_LRC", False),
             "Write synced lyrics as separate .lrc files next to each track"
         )
         lyr.addWidget(self.lrc_check)
@@ -289,7 +296,7 @@ class SpotDLPreferencesTab(QScrollArea):
         au = QVBoxLayout()
         au.setSpacing(4)
         au.addWidget(_label("Audio sources", "youtube-music gives best metadata"))
-        self.audio_list = _MultiSelectList(SPOTDL_AUDIO_PROVIDERS, settings.SPOTDL_AUDIO_PROVIDERS)
+        self.audio_list = _MultiSelectList(SPOTDL_AUDIO_PROVIDERS, _g(settings, "SPOTDL_AUDIO_PROVIDERS", []))
         au.addWidget(self.audio_list)
         au.addStretch(1)
         prov_cols.addLayout(au, 1)
@@ -311,11 +318,11 @@ class SpotDLPreferencesTab(QScrollArea):
             "Passed directly to yt-dlp via --yt-dlp-args. "
             "Default: --sleep-interval 1 --max-sleep-interval 2"
         ), 0, 0)
-        self.ytdlp_args_edit = _line(settings.SPOTDL_YT_DLP_ARGS, "--sleep-interval 1 --max-sleep-interval 2")
+        self.ytdlp_args_edit = _line(_g(settings, "SPOTDL_YT_DLP_ARGS", ""), "--sleep-interval 1 --max-sleep-interval 2")
         yt.addWidget(self.ytdlp_args_edit, 0, 1)
 
         yt.addWidget(_label("Extra ffmpeg args", "Passed via --ffmpeg-args"), 1, 0)
-        self.ffmpeg_args_edit = _line(settings.SPOTDL_FFMPEG_ARGS, "-b:a 320k")
+        self.ffmpeg_args_edit = _line(_g(settings, "SPOTDL_FFMPEG_ARGS", ""), "-b:a 320k")
         yt.addWidget(self.ffmpeg_args_edit, 1, 1)
 
         yt_lay.addLayout(yt)
@@ -331,25 +338,25 @@ class SpotDLPreferencesTab(QScrollArea):
 
         beh.addWidget(_label("Overwrite mode", "What to do when a file already exists"), 0, 0)
         self.overwrite_combo = _combo(SPOTDL_OVERWRITE_MODES)
-        ow_idx = SPOTDL_OVERWRITE_MODES.index(settings.SPOTDL_OVERWRITE) \
-            if settings.SPOTDL_OVERWRITE in SPOTDL_OVERWRITE_MODES else 0
+        ow_idx = SPOTDL_OVERWRITE_MODES.index(_g(settings, "SPOTDL_OVERWRITE", "")) \
+            if _g(settings, "SPOTDL_OVERWRITE", "") in SPOTDL_OVERWRITE_MODES else 0
         self.overwrite_combo.setCurrentIndex(ow_idx)
         beh.addWidget(self.overwrite_combo, 0, 1)
 
-        self.playlist_num_check = _check("Add playlist numbering to filenames", settings.SPOTDL_PLAYLIST_NUMBERING)
+        self.playlist_num_check = _check("Add playlist numbering to filenames", _g(settings, "SPOTDL_PLAYLIST_NUMBERING", False))
         beh.addWidget(self.playlist_num_check, 1, 0, 1, 2)
 
-        self.skip_explicit_check = _check("Skip explicit tracks", settings.SPOTDL_SKIP_EXPLICIT)
+        self.skip_explicit_check = _check("Skip explicit tracks", _g(settings, "SPOTDL_SKIP_EXPLICIT", False))
         beh.addWidget(self.skip_explicit_check, 2, 0, 1, 2)
 
         self.sponsor_block_check = _check(
-            "Enable SponsorBlock", settings.SPOTDL_SPONSOR_BLOCK,
+            "Enable SponsorBlock", _g(settings, "SPOTDL_SPONSOR_BLOCK", False),
             "Remove sponsored segments from tracks (via yt-dlp SponsorBlock)"
         )
         beh.addWidget(self.sponsor_block_check, 3, 0, 1, 2)
 
         self.add_unavailable_check = _check(
-            "Add unavailable tracks as empty placeholder files", settings.SPOTDL_ADD_UNAVAILABLE
+            "Add unavailable tracks as empty placeholder files", _g(settings, "SPOTDL_ADD_UNAVAILABLE", False)
         )
         beh.addWidget(self.add_unavailable_check, 4, 0, 1, 2)
 
@@ -365,14 +372,14 @@ class SpotDLPreferencesTab(QScrollArea):
         pr.setColumnStretch(1, 1)
 
         self.use_main_proxy_check = _check(
-            "Use the same proxy as the main downloader", settings.SPOTDL_USE_MAIN_PROXY
+            "Use the same proxy as the main downloader", _g(settings, "SPOTDL_USE_MAIN_PROXY", False)
         )
         self.use_main_proxy_check.toggled.connect(self._on_proxy_toggle)
         pr.addWidget(self.use_main_proxy_check, 0, 0, 1, 2)
 
         pr.addWidget(_label("Override proxy URL", "Only used when 'Use main proxy' is unchecked"), 1, 0)
-        self.proxy_edit = _line(settings.SPOTDL_PROXY, "http://user:pass@host:port")
-        self.proxy_edit.setEnabled(not settings.SPOTDL_USE_MAIN_PROXY)
+        self.proxy_edit = _line(_g(settings, "SPOTDL_PROXY", ""), "http://user:pass@host:port")
+        self.proxy_edit.setEnabled(not _g(settings, "SPOTDL_USE_MAIN_PROXY", False))
         pr.addWidget(self.proxy_edit, 1, 1)
 
         pr_lay.addLayout(pr)
