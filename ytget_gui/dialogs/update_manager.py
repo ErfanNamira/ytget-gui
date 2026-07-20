@@ -233,7 +233,7 @@ class UpdateChecker(QThread):
         key = "ytget"
         installed = _current_version(key, self._settings)
         try:
-            latest, assets = self._gh_latest("ErfanNamira", "ytget-gui")
+            latest, _assets = self._gh_latest("ErfanNamira", "ytget-gui")
             # find the release page URL (no direct binary; user visits GitHub)
             dl_url = f"https://github.com/ErfanNamira/ytget-gui/releases/tag/{latest}"
             self.result_ready.emit(key, installed, latest, dl_url)
@@ -295,18 +295,26 @@ class UpdateChecker(QThread):
             self.error.emit(key, str(e))
 
     def run(self):
-        for fn in (
-            self._check_ytget,
-            self._check_ytdlp,
-            self._check_spotdl,
-            self._check_deno,
-        ):
-            if self.isInterruptionRequested():
-                break
-            try:
-                fn()
-            except Exception:
-                pass   # individual errors already emitted inside each method
+        try:
+            for fn in (
+                self._check_ytget,
+                self._check_ytdlp,
+                self._check_spotdl,
+                self._check_deno,
+            ):
+                if self.isInterruptionRequested():
+                    break
+                try:
+                    fn()
+                except Exception:
+                    pass   # individual errors already emitted inside each method
+        finally:
+            # Each "Re-check All" click spins up a brand new UpdateChecker
+            # (and Session); without closing it, the underlying connection
+            # pool's sockets are only reclaimed by GC, which leaks file
+            # descriptors/memory over a long-running session with many
+            # manual re-checks.
+            self._session.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -376,13 +384,31 @@ class UpdateInstaller(QThread):
             os.chmod(path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
     def _install_path_for(self, tool_key: str) -> Path:
-        """Where to write the updated binary."""
+        """Where to write the updated binary.
+
+        Prefer the path the app is *currently configured* to run (e.g.
+        settings.YT_DLP_PATH), falling back to BASE_DIR only when that
+        attribute is unset. Previously this always installed to
+        BASE_DIR/<name>, which silently diverged from the configured path
+        whenever the user pointed YTGet at a binary living elsewhere (a
+        custom install, a system-wide yt-dlp, etc.) — the update would
+        succeed but the app would keep running the old binary.
+        """
         base = self._settings.BASE_DIR
         if tool_key == "yt-dlp":
-            return base / executable_name("yt-dlp")
+            configured = getattr(self._settings, "YT_DLP_PATH", None)
+            return Path(configured) if configured else base / executable_name("yt-dlp")
         if tool_key == "deno":
-            return base / executable_name("deno")
+            configured = getattr(self._settings, "DENO_PATH", None)
+            return Path(configured) if configured else base / executable_name("deno")
         if tool_key == "spotdl":
+            try:
+                from ytget_gui.workers.spotdl_worker import _find_spotdl
+                found = _find_spotdl(self._settings)
+                if found is not None:
+                    return Path(found)
+            except Exception:
+                pass
             return base / executable_name("spotdl")
         return base
 
@@ -391,7 +417,14 @@ class UpdateInstaller(QThread):
     def _install_single_binary(self, tool_key: str, asset_url: str):
         dest = self._install_path_for(tool_key)
         self._log(f"Downloading {tool_key} …")
-        tmp = Path(tempfile.mktemp(suffix=dest.suffix))
+        # tempfile.mktemp only *reserves* a name; another process (or a
+        # concurrent installer thread) can grab it before we open it. Using
+        # mkstemp atomically creates and opens the file, closing the classic
+        # race, and doubles as a guarantee the parent temp dir is writable
+        # before we start streaming a potentially large download into it.
+        fd, tmp_name = tempfile.mkstemp(suffix=dest.suffix)
+        os.close(fd)
+        tmp = Path(tmp_name)
         if not self._download(asset_url, tmp):
             self.finished_err.emit(tool_key, "Download cancelled or failed.")
             return
@@ -414,7 +447,9 @@ class UpdateInstaller(QThread):
         """Download zip, extract deno binary, place in BASE_DIR."""
         dest_dir = self._settings.BASE_DIR
         self._log("Downloading Deno …")
-        tmp_zip = Path(tempfile.mktemp(suffix=".zip"))
+        fd, tmp_zip_name = tempfile.mkstemp(suffix=".zip")
+        os.close(fd)
+        tmp_zip = Path(tmp_zip_name)
         if not self._download(self._url, tmp_zip):
             self.finished_err.emit("deno", "Download cancelled or failed.")
             return
@@ -784,6 +819,8 @@ class UpdateManager(QDialog):
 
     # ── logging ────────────────────────────────────────────────────────────
 
+    _MAX_LOG_BLOCKS = 500
+
     def _log_line(self, tool_key: str, msg: str, color: str = "#52525B"):
         label = TOOLS.get(tool_key, {}).get("label", tool_key)
         html  = (
@@ -792,6 +829,18 @@ class UpdateManager(QDialog):
         )
         self._log.append(html)
         self._log.moveCursor(QTextCursor.End)
+
+        # Without a cap, a session left open through many manual re-checks
+        # and installs accumulates an ever-growing QTextDocument (each
+        # append also pushes an undo entry) for no user-visible benefit —
+        # only the tail of the log is ever read. Trim from the top instead.
+        doc = self._log.document()
+        if doc.blockCount() > self._MAX_LOG_BLOCKS:
+            cursor = QTextCursor(doc)
+            cursor.movePosition(QTextCursor.Start)
+            excess = doc.blockCount() - self._MAX_LOG_BLOCKS
+            cursor.movePosition(QTextCursor.Down, QTextCursor.KeepAnchor, excess)
+            cursor.removeSelectedText()
 
     # ── check flow ─────────────────────────────────────────────────────────
 
