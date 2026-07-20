@@ -626,7 +626,7 @@ class ThumbFetcher(QObject):
 
             out_dir = str(target.parent)
             base = target.stem
-            out_template = str(Path(out_dir) / (base + "%(ext)s"))
+            out_template = str(Path(out_dir) / (base + ".%(ext)s"))
 
             url_for_metadata = self._canonical_watch_url(self.url)
 
