@@ -221,6 +221,19 @@ class QueueCard(QFrame):
     def set_status(self, status: str) -> None:
         self._apply_status_style(status)
 
+    def set_title(self, title: str) -> None:
+        """Update the displayed title (e.g. once metadata/title fetch completes).
+
+        Without this, main_window's `hasattr(widget, "set_title")` check
+        silently fails and the card keeps showing its placeholder text
+        (often the raw URL) until something else forces a full rebuild.
+        """
+        text = _clamp(title or "", 90)
+        if self.title_lbl.text() == text:
+            return
+        self.title_lbl.setText(text)
+        self.title_lbl.setToolTip(title or "")
+
     def set_progress(self, value: int) -> None:
         v = max(0, min(100, int(value)))
         if v == self._last_progress_value:
