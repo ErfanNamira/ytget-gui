@@ -255,6 +255,12 @@ class AdvancedOptionsDialog(QtWidgets.QDialog):
             accessible_name="Clip end time",
         )
 
+        # Temporarily disabled: clip extraction has known bugs, greyed out until fixed.
+        self.clip_start.setEnabled(False)
+        self.clip_end.setEnabled(False)
+        self.clip_start.setToolTip("Clip extraction is temporarily disabled due to a known bug.")
+        self.clip_end.setToolTip("Clip extraction is temporarily disabled due to a known bug.")
+
         form.addWidget(self._form_label("Start time"), 1, 0)
         form.addWidget(self.clip_start, 1, 1)
         form.addWidget(self._form_label("End time"), 2, 0)
@@ -480,8 +486,8 @@ class AdvancedOptionsDialog(QtWidgets.QDialog):
 
         # Base tooltips (used when valid)
         self._base_tips = {
-            self.clip_start: "Start time. Examples: 75, 01:15, 1:02:45",
-            self.clip_end: "End time. Examples: 120, 02:00, 01:10:05",
+            self.clip_start: "Clip extraction is temporarily disabled due to a known bug.",
+            self.clip_end: "Clip extraction is temporarily disabled due to a known bug.",
             self.playlist_items: "Comma-separated indices and ranges (e.g., 1, 3-5, 10).",
         }
 
