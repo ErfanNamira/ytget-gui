@@ -70,6 +70,13 @@ _TEMPLATE_PLACEHOLDER_RE = re.compile(
 # characters plus path separators (this is a filename stub, not a full path).
 _TEMPLATE_ILLEGAL_LITERAL_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
+# Field validators, compiled once and shared across all dialog instances
+# (previously recompiled every time PreferencesDialog was constructed).
+_RX_RATE = QtCore.QRegularExpression(r"^\s*$|^\d+(\.\d+)?\s*[KkMmGg]$")
+_RX_LANGS = QtCore.QRegularExpression(r"^\s*$|^\s*[A-Za-z]{2,3}(\s*,\s*[A-Za-z]{2,3})*\s*$")
+_RX_ITEMS = QtCore.QRegularExpression(r"^\s*$|^\s*\d+(\s*-\s*\d+)?(\s*,\s*\d+(\s*-\s*\d+)?)*\s*$")
+_RX_DATE = QtCore.QRegularExpression(r"^\s*$|^\d{8}$")
+
 
 class PreferencesDialog(QtWidgets.QDialog):
 
@@ -1425,10 +1432,10 @@ class PreferencesDialog(QtWidgets.QDialog):
 
     # ---------- Validation ----------
     def _wire_validation(self) -> None:
-        self._rx_rate = QtCore.QRegularExpression(r"^\s*$|^\d+(\.\d+)?\s*[KkMmGg]$")
-        self._rx_langs = QtCore.QRegularExpression(r"^\s*$|^\s*[A-Za-z]{2,3}(\s*,\s*[A-Za-z]{2,3})*\s*$")
-        self._rx_items = QtCore.QRegularExpression(r"^\s*$|^\s*\d+(\s*-\s*\d+)?(\s*,\s*\d+(\s*-\s*\d+)?)*\s*$")
-        self._rx_date = QtCore.QRegularExpression(r"^\s*$|^\d{8}$")
+        self._rx_rate = _RX_RATE
+        self._rx_langs = _RX_LANGS
+        self._rx_items = _RX_ITEMS
+        self._rx_date = _RX_DATE
 
         self.limit_rate_input.setValidator(QtGui.QRegularExpressionValidator(self._rx_rate, self))
         self.languages_input.setValidator(QtGui.QRegularExpressionValidator(self._rx_langs, self))
@@ -1495,8 +1502,10 @@ class PreferencesDialog(QtWidgets.QDialog):
 
         # Remove every valid placeholder, checking its field name(s) against the whitelist
         pos = 0
+        found_placeholder = False
         literal_chunks: List[str] = []
         for m in _TEMPLATE_PLACEHOLDER_RE.finditer(working):
+            found_placeholder = True
             literal_chunks.append(working[pos:m.start()])
             fields = m.group("fields").split(",")
             for f in fields:
@@ -1518,7 +1527,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         if raw != raw.strip(" .") :
             return False, "Cannot start or end with a space or a period"
 
-        if not _TEMPLATE_PLACEHOLDER_RE.search(working):
+        if not found_placeholder:
             return False, "Include at least one field, e.g. %(title)s"
 
         if len(raw) > 180:
@@ -1849,8 +1858,12 @@ class PreferencesDialog(QtWidgets.QDialog):
     def _apply_snapshot(self, data: dict) -> None:
         # Network
         self.proxy_input.setText(data.get("PROXY_URL", ""))
+        self.ignore_ssl_errors.setChecked(bool(data.get("IGNORE_SSL_ERRORS", False)))
         self.cookies_browser_combo.setCurrentText(data.get("COOKIES_FROM_BROWSER", ""))
         self.cookies_path_input.setText(str(data.get("COOKIES_PATH", "") or ""))
+        self.cookies_auto_refresh.setChecked(bool(data.get("COOKIES_AUTO_REFRESH", False)))
+        last = data.get("COOKIES_LAST_IMPORTED", "")
+        self.cookies_last_label.setText(f"Last imported: {last}" if last else "")
         self.limit_rate_input.setText(data.get("LIMIT_RATE", ""))
         self.retries_spin.setValue(int(data.get("RETRIES", self.retries_spin.value())))
 
@@ -1890,6 +1903,12 @@ class PreferencesDialog(QtWidgets.QDialog):
         vf = data.get("VIDEO_FORMAT", ".mkv") or ".mkv"
         if vf not in (".mkv", ".mp4", ".webm"):
             vf = ".mkv"
+
+        # Thumbnail flags
+        self.write_thumbnail.setChecked(bool(data.get("WRITE_THUMBNAIL", False)))
+        self.convert_thumbnails.setChecked(bool(data.get("CONVERT_THUMBNAILS", True)))
+        self.embed_thumbnail.setChecked(bool(data.get("EMBED_THUMBNAIL", True)))
+
         self.video_format_combo.setCurrentText(vf)
 
         # Output
@@ -1964,7 +1983,7 @@ class PreferencesDialog(QtWidgets.QDialog):
                 try:
                     setattr(self.settings, k, v)
                 except Exception:
-                    # هgnore non-writable attributes
+                    # Ignore non-writable attributes
                     pass
         # Apply SpotDL tab settings
         try:
@@ -2004,7 +2023,7 @@ class PreferencesDialog(QtWidgets.QDialog):
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
         # Intercept Enter/Return in any QLineEdit to trigger Save via Ctrl+Enter or ⌘+Enter
         if event.type() == QtCore.QEvent.KeyPress and isinstance(obj, QtWidgets.QLineEdit):
-            ke = QtGui.QKeyEvent(event)
+            ke = event  # already a QKeyEvent for KeyPress events; avoid an extra copy-construction
             mods = ke.modifiers()
             # On Windows/Linux use Ctrl, on macOS use Meta (⌘)
             if (mods & (QtCore.Qt.ControlModifier | QtCore.Qt.MetaModifier)) and \
