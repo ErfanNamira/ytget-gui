@@ -284,3 +284,13 @@ class QueueCard(QFrame):
             self.setProperty("elevated", False)
             self._repolish()
         return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):
+        # Re-elide against the label's *actual* current width rather than
+        # a fixed guess, so the URL doesn't stay over-truncated on wide
+        # windows or under-truncated (causing wrapping/scrollbars) on
+        # narrow ones.
+        super().resizeEvent(event)
+        width = self.meta_lbl.width()
+        if width > 0:
+            self._set_elided_meta(self._full_meta_text, max_width=width)
