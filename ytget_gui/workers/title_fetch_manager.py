@@ -66,29 +66,32 @@ class TitleFetchQueue(QObject):
         self._stopping = True
 
     def _process_next(self):
-        if self._stopping:
-            self._queue.clear()
-            self._pending.clear()
-            self._running = False
-            self.idle.emit()
+        # Iterative drain loop (not recursive): a recursive version here grows
+        # the call stack by one frame per queued URL and can raise
+        # RecursionError on large batches/playlists.
+        if self._running:
             return
-
-        if not self._queue:
-            self._running = False
-            self.idle.emit()
-            return
-
-        url = self._queue.popleft()
         self._running = True
-        self.started_one.emit(url)
-
         try:
-            self._fetch_one(url)
+            while True:
+                if self._stopping:
+                    self._queue.clear()
+                    self._pending.clear()
+                    break
+
+                if not self._queue:
+                    break
+
+                url = self._queue.popleft()
+                self.started_one.emit(url)
+                try:
+                    self._fetch_one(url)
+                finally:
+                    self._pending.discard(url)
+                    self.finished_one.emit(url)
         finally:
-            self._pending.discard(url)
-            self.finished_one.emit(url)
-            # Continue with next
-            self._process_next()
+            self._running = False
+            self.idle.emit()
 
     def _fetch_one(self, url: str):
         """
