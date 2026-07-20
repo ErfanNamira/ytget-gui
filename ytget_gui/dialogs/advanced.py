@@ -46,6 +46,20 @@ def _tint(color: QtGui.QColor, factor: float) -> QtGui.QColor:
 
 
 # ----------------------------
+# Shared validation patterns
+# ----------------------------
+# Compiled once at import time and reused by every dialog instance instead of
+# being rebuilt (and re-parsed by the regex engine) each time the dialog is
+# opened. QRegularExpression is safe to share across QRegularExpressionValidator
+# instances since it's copy-on-write and read-only once matched.
+_TIME_PATTERN = r"^(?:\d+|(?:\d{1,3}:)?[0-5]?\d:[0-5]\d)$"
+_TIME_RX = QtCore.QRegularExpression(_TIME_PATTERN)
+
+_PLAYLIST_PATTERN = r"^\s*\d+\s*(?:-\s*\d+\s*)?(?:\s*,\s*\d+\s*(?:-\s*\d+\s*)?)*\s*$"
+_PLAYLIST_RX = QtCore.QRegularExpression(_PLAYLIST_PATTERN)
+
+
+# ----------------------------
 # Controls
 # ----------------------------
 class UISwitch(QtWidgets.QCheckBox):
@@ -453,13 +467,11 @@ class AdvancedOptionsDialog(QtWidgets.QDialog):
     def _init_validators(self) -> None:
         # Time: seconds or [H:]MM:SS with MM/SS in 00-59
         # Allow hours with 1–3 digits, minutes/seconds 00–59; also allow M:SS
-        time_pattern = r"^(?:\d+|(?:\d{1,3}:)?[0-5]?\d:[0-5]\d)$"
-        self._time_rx = QtCore.QRegularExpression(time_pattern)
+        self._time_rx = _TIME_RX
         self._time_validator = QtGui.QRegularExpressionValidator(self._time_rx, self)
 
         # Playlist items: "1, 3-5, 10"
-        pl_pattern = r"^\s*\d+\s*(?:-\s*\d+\s*)?(?:\s*,\s*\d+\s*(?:-\s*\d+\s*)?)*\s*$"
-        self._pl_rx = QtCore.QRegularExpression(pl_pattern)
+        self._pl_rx = _PLAYLIST_RX
         self._pl_validator = QtGui.QRegularExpressionValidator(self._pl_rx, self)
 
         self.clip_start.setValidator(self._time_validator)
