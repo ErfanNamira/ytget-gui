@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, QTimer
 import os
 import re
+import shutil
 import signal
 import sys
 import time
@@ -384,15 +385,6 @@ class DownloadWorker(QObject):
             self.finished.emit(exit_code)
 
     # --- Helpers ---
-    def _post_finish_cleanup(self):
-        try:
-            if self._is_audio_download():
-                cleaned = self._clean_music_video_tags()
-                if cleaned > 0:
-                    self._add_log(f"✨ Cleaned {cleaned} filename(s).\n", AppStyles.SUCCESS_COLOR)
-        except Exception:
-            pass
-
     def _short(self, title: str) -> str:
         title = title or ""
         return title[:50] + "..." if len(title) > 50 else title
@@ -433,7 +425,6 @@ class DownloadWorker(QObject):
         if not url:
             return False
         try:
-            import subprocess
             result = subprocess.run(
                 [
                     str(self.settings.YT_DLP_PATH),
@@ -460,9 +451,6 @@ class DownloadWorker(QObject):
         %(autonumber)s at postprocessing time in this mode, so we tag the files
         directly from their "NNN - ..." filenames after the download finishes.
         """
-        import shutil
-        import subprocess
-
         d = getattr(self, "_flat_playlist_dir", None)
         if not d or not Path(d).exists():
             return 0
@@ -890,67 +878,48 @@ class DownloadWorker(QObject):
         except Exception:
             buf = []
 
-        # Coalesce consecutive entries with same color to reduce signal count
-        coalesced: List[Tuple[str, str]] = []
+        # Coalesce consecutive entries with the same color to reduce signal count.
+        def _emit_pending(color: Optional[str], parts: List[str], emitted_bytes: int, emitted_entries: int):
+            if not color or not parts:
+                return emitted_bytes, emitted_entries
+            combined = "\n".join(parts)
+            try:
+                self.log.emit(combined, color)
+            except Exception:
+                pass
+            return emitted_bytes + len(combined.encode("utf-8")), emitted_entries + 1
+
         cur_text_parts: List[str] = []
         cur_color: Optional[str] = None
         emitted_bytes = 0
         emitted_entries = 0
+        cutoff_idx: Optional[int] = None  # index into buf where we stopped, if capped
 
-        for text, color in buf:
+        for i, (text, color) in enumerate(buf):
+            if emitted_entries >= self._max_entries_per_flush or emitted_bytes > self._max_emit_bytes:
+                cutoff_idx = i
+                break
+
             if cur_color is None:
-                cur_color = color
-                cur_text_parts = [text]
+                cur_color, cur_text_parts = color, [text]
             elif color == cur_color:
                 cur_text_parts.append(text)
             else:
-                combined = "\n".join(cur_text_parts)
-                size = len(combined.encode("utf-8"))
-                if emitted_bytes + size > self._max_emit_bytes or emitted_entries >= self._max_entries_per_flush:
-                    # reached cap, push what we have and stop further emits this flush
-                    if combined:
-                        try:
-                            self.log.emit(combined, cur_color)
-                        except Exception:
-                            pass
-                    emitted_bytes += size
-                    emitted_entries += 1
-                    # stop further emits this flush, requeue remaining buf to log_buffer
-                    remaining = buf[buf.index((text, color)):]
-                    # push remaining back to front of buffer
-                    try:
-                        self._log_buffer[0:0] = remaining
-                    except Exception:
-                        # if that fails, append to buffer
-                        self._log_buffer.extend(remaining)
-                    cur_color = None
-                    cur_text_parts = []
-                    break
-                else:
-                    try:
-                        self.log.emit(combined, cur_color)
-                    except Exception:
-                        pass
-                    emitted_bytes += size
-                    emitted_entries += 1
-                    cur_color = color
-                    cur_text_parts = [text]
+                emitted_bytes, emitted_entries = _emit_pending(cur_color, cur_text_parts, emitted_bytes, emitted_entries)
+                cur_color, cur_text_parts = color, [text]
 
-        # emit any final coalesced chunk if we haven't hit caps
-        if cur_color and cur_text_parts and emitted_entries < self._max_entries_per_flush and emitted_bytes < self._max_emit_bytes:
-            combined = "\n".join(cur_text_parts)
-            size = len(combined.encode("utf-8"))
-            if emitted_bytes + size <= self._max_emit_bytes:
-                try:
-                    self.log.emit(combined, cur_color)
-                except Exception:
-                    pass
-            else:
-                # push back if too big
-                try:
-                    self._log_buffer.insert(0, (combined, cur_color))
-                except Exception:
-                    pass
+        if cutoff_idx is None:
+            # Went through the whole buffer; emit whatever's left over.
+            emitted_bytes, emitted_entries = _emit_pending(cur_color, cur_text_parts, emitted_bytes, emitted_entries)
+        else:
+            # Hit a cap mid-buffer: emit what we'd accumulated so far (if any),
+            # then requeue everything from cutoff_idx onward, using the actual
+            # position rather than a value-based lookup (which could match an
+            # earlier, identical (text, color) pair and corrupt the buffer).
+            emitted_bytes, emitted_entries = _emit_pending(cur_color, cur_text_parts, emitted_bytes, emitted_entries)
+            remaining = buf[cutoff_idx:]
+            if remaining:
+                self._log_buffer[0:0] = remaining
 
     def _flush_logs_now(self):
         try:
