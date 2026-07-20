@@ -5,21 +5,22 @@ import sys
 from pathlib import Path
 from platform import system
 
+__version__ = "2.7.5"
+
 # --- Windows taskbar icon: set AppUserModelID before QApplication is created ---
 if system() == "Windows":
     import ctypes
-    myappid = "YTGet.2.7.5"
+    myappid = f"YTGet.{__version__}"
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except Exception:
         pass
-        
+
 from PySide6.QtWidgets import QApplication, QStyleFactory
 from PySide6.QtGui import QIcon, QPalette, QColor
 
 from ytget_gui.main_window import MainWindow
-
-__version__ = "2.7.5"
+from ytget_gui.styles import refresh_styles
 
 
 def make_dark_palette() -> QPalette:
@@ -66,6 +67,10 @@ def main():
     # 2) Force Qt Fusion style and install our dark palette globally
     app.setStyle(QStyleFactory.create("Fusion"))
     app.setPalette(make_dark_palette())
+
+    # 2b) Now that QApplication + primary screen exist, recompute the
+    #     DPI-scaled QSS in AppStyles (it was a placeholder at import time).
+    refresh_styles()
 
     # 3) Application metadata
     app.setApplicationName("YTGet")
