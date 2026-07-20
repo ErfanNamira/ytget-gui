@@ -10,6 +10,7 @@ import hashlib
 import webbrowser
 import platform
 import subprocess
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from shutil import which
@@ -627,14 +628,16 @@ class MainWindow(QMainWindow):
             if not hasattr(self, "_log_entries"):
                 self._log_entries = []
             self._log_entries.append((final_text, final_color, final_level))
-            max_lines = getattr(self.settings, "MAX_LOG_LINES", 500)
+            max_lines = getattr(self.settings, "MAX_LOG_LINES", MAX_LOG_LINES)
             if len(self._log_entries) > max_lines:
                 self._log_entries = self._log_entries[-max_lines:]
             filt_text = self.filter_combo.currentText() if hasattr(self, "filter_combo") else "All"
-            if filt_text == "All":
+            if filt_text == "All" or filt_text == final_level:
                 self._append_to_console(final_text, final_color)
-            else:
-                self._render_log()
+            # else: line doesn't match the active filter, so it's already
+            # stored in _log_entries and will show up next time the filter
+            # changes (see filter_combo.currentTextChanged -> _render_log).
+            # No need to rebuild the whole console for every filtered-out line.
 
     def _render_log(self):
         try:
@@ -981,6 +984,8 @@ class MainWindow(QMainWindow):
         # Log output
         self.log_output = QTextEdit(readOnly=True)
         self.log_output.setObjectName("Console")
+        self.log_output.setUndoRedoEnabled(False)
+        self.log_output.document().setMaximumBlockCount(max(1, getattr(self.settings, "MAX_LOG_LINES", MAX_LOG_LINES)))
         self.log_output.setStyleSheet(
             "QTextEdit#Console { background:#16181E; color:#52525B; "
             "border:none; font-family:'JetBrains Mono','Fira Code',monospace; "
@@ -1326,8 +1331,17 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # NOTE: previously this unconditionally called self._refresh_queue_list(),
+        # which clears and rebuilds every QListWidgetItem/QueueCard from scratch.
+        # Since metadata for a playlist arrives one URL at a time, that made
+        # bulk enqueues O(n^2) in both CPU time and widget allocations (n
+        # rebuilds of up to n widgets each). The block above already performs
+        # the equivalent incremental update in place, so just keep the
+        # visible list count/filter state in sync instead of rebuilding.
         try:
-            self._refresh_queue_list()
+            self.count_chip.setText(str(self.queue_list.count()))
+            self.queue_empty_state.setVisible(self.queue_list.count() == 0)
+            self._apply_queue_filter(self.search_box.text())
         except Exception:
             pass
         try:
@@ -1805,25 +1819,87 @@ class MainWindow(QMainWindow):
     #  QUEUE PANE HELPERS
     # ════════════════════════════════════════════════════════════════════════
 
+    def _sync_queue_from_visual(self) -> None:
+        """
+        Rebuild self.queue to match the current on-screen order of queue_list.
+
+        Qt performs drag-and-drop reordering directly on the list widget's
+        model. For a single-row drag it emits one rowsMoved signal whose
+        indices line up cleanly with a pop/insert against self.queue, but for
+        a *multi*-row drag it can emit several rowsMoved signals in sequence,
+        each describing an intermediate state of Qt's own model. Replaying
+        those indices against self.queue one at a time (the previous
+        approach) assumes each signal's indices are still valid against our
+        already-mutated self.queue, which isn't guaranteed -- so self.queue's
+        order (and, in edge cases, which rows are considered "in range")
+        drifts away from what's actually shown, and a later action that maps
+        a visual row straight to a self.queue index can raise IndexError.
+
+        Instead of trying to replay every intermediate move, just rebuild
+        self.queue from scratch using the *final* visual order, matching
+        each QListWidgetItem back to its queue dict via the URL stored in
+        that item's Qt.UserRole data (set in _add_queue_card_to_list and
+        kept up to date in _on_metadata_fetched). This is correct regardless
+        of how many rowsMoved signals fired or in what order.
+        """
+        pools: Dict[str, "deque[Dict[str, Any]]"] = {}
+        for it in self.queue:
+            url = it.get("url", "")
+            pools.setdefault(url, deque()).append(it)
+
+        new_queue: List[Dict[str, Any]] = []
+        for i in range(self.queue_list.count()):
+            lw_item = self.queue_list.item(i)
+            data = lw_item.data(Qt.UserRole) or {}
+            url = data.get("url", "") if isinstance(data, dict) else ""
+            pool = pools.get(url)
+            if pool:
+                new_queue.append(pool.popleft())
+
+        # Defensive: if any queue entries weren't represented visually for
+        # some reason, don't silently drop them -- append what's left over
+        # (order among these leftovers is unspecified but no data is lost).
+        for pool in pools.values():
+            while pool:
+                new_queue.append(pool.popleft())
+
+        self.queue = new_queue
+
     def _on_rows_moved(self, src_parent, src_start, src_end, dst_parent, dst_row):
-        if src_end != src_start:
-            return
-        if not (0 <= src_start < len(self.queue)):
-            return
-        # Don't allow moving the actively-downloading item (index 0 while downloading)
-        if self.is_downloading and src_start == 0:
-            # Revert: refresh so the UI snaps back
+        # Resync self.queue directly from the list widget's new visual order
+        # rather than replaying pop/insert against the reported indices --
+        # see _sync_queue_from_visual for why that's needed for multi-row
+        # drags.
+        self._sync_queue_from_visual()
+
+        needs_refresh = False
+
+        # Don't allow the actively-downloading item to be dragged away from
+        # the top of the queue; if it moved, snap it back to index 0.
+        if self.is_downloading and self.current_download_item is not None:
+            try:
+                idx = self.queue.index(self.current_download_item)
+            except ValueError:
+                idx = -1
+            if idx > 0:
+                item = self.queue.pop(idx)
+                self.queue.insert(0, item)
+                needs_refresh = True
+
+        # If something else now sits at position 0 while a download is
+        # active, reset its progress/status so it doesn't visually inherit
+        # the active download's state.
+        if self.is_downloading and self.queue and self.queue[0] is not self.current_download_item:
+            item = self.queue[0]
+            if item.get("progress") or item.get("status") not in ("Pending", "Completed", "Error"):
+                item["progress"] = 0
+                if item.get("status") not in ("Completed", "Error"):
+                    item["status"] = "Pending"
+                needs_refresh = True
+
+        if needs_refresh:
             self._refresh_queue_list()
-            return
-        item = self.queue.pop(src_start)
-        insert_at = dst_row if dst_row <= len(self.queue) else len(self.queue)
-        # If another item is being placed at position 0 while something is downloading,
-        # reset its progress so it doesn't visually inherit the active download's state.
-        if self.is_downloading and insert_at == 0:
-            item["progress"] = 0
-            if item.get("status") not in ("Completed", "Error"):
-                item["status"] = "Pending"
-        self.queue.insert(insert_at, item)
+
         self._save_queue_permanent()
         self._update_button_states()
 
@@ -1967,7 +2043,12 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
 
     def _bulk_remove_selected(self):
+        # Make sure self.queue matches the visible order before mapping
+        # visual rows to queue indices (defends against any residual
+        # drag-and-drop desync).
+        self._sync_queue_from_visual()
         rows = sorted({i.row() for i in self.queue_list.selectedIndexes()}, reverse=True)
+        rows = [r for r in rows if 0 <= r < len(self.queue)]
         if not rows:
             return
         if self.is_downloading and rows and 0 in rows and self.download_worker:
@@ -1998,7 +2079,13 @@ class MainWindow(QMainWindow):
         self._update_global_progress_bar()
 
     def _bulk_move_selected(self, top: bool = False, bottom: bool = False):
+        # Make sure self.queue matches the visible order before mapping
+        # visual rows to queue indices (defends against any residual
+        # drag-and-drop desync). This is what prevented the
+        # "list index out of range" crash on IndexError at self.queue[r].
+        self._sync_queue_from_visual()
         rows = sorted({i.row() for i in self.queue_list.selectedIndexes()})
+        rows = [r for r in rows if 0 <= r < len(self.queue)]
         if not rows:
             return
         # While downloading, don't allow moving the actively-downloading item (row 0)
