@@ -17,6 +17,7 @@ import threading
 from ytget_gui.styles import AppStyles
 from ytget_gui.settings import AppSettings, FILENAME_FORMAT_PRESETS
 from ytget_gui.workers import cookies as CookieManager
+from ytget_gui.workers import ssl_utils
 
 @dataclass
 class QueueItem:
@@ -282,6 +283,11 @@ class DownloadWorker(QObject):
                     if p and p not in parts:
                         parts.insert(0, p)
                 env["PATH"] = os.pathsep.join(parts)
+
+            ssl_env = getattr(self, "_ssl_env", None)
+            if ssl_env:
+                env.update(ssl_env)
+
             return env
         except Exception:
             return None
@@ -802,8 +808,11 @@ class DownloadWorker(QObject):
         except Exception:
             pass
 
-        if getattr(self.settings, "IGNORE_SSL_ERRORS", False):
-            cmd.append("--no-check-certificates")
+        # SSL/CA handling (supports MITM-DomainFronting style local proxies
+        # via a trusted custom CA cert, falling back to --no-check-certificates
+        # only if no custom CA is configured)
+        _verify, _ytdlp_ssl_args, self._ssl_env = ssl_utils.resolve_ssl_config(self.settings)
+        cmd.extend(_ytdlp_ssl_args)
 
         cmd.append(it.get("url", ""))
 
