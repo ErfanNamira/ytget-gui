@@ -35,7 +35,7 @@ FILENAME_FORMAT_PRESETS: Dict[str, str] = {
 
 @dataclass
 class AppSettings:
-    VERSION: str = "2.7.5"
+    VERSION: str = "2.7.6"
     APP_NAME: str = "YTGet"
     GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
 
@@ -94,6 +94,12 @@ class AppSettings:
 
     PROXY_URL: str = ""
     IGNORE_SSL_ERRORS: bool = False
+    # Path to a self-signed CA certificate to trust explicitly (e.g. the
+    # mycert.crt you generate yourself for a local MITM/domain-fronting proxy
+    # such as https://github.com/patterniha/MITM-DomainFronting). When set,
+    # this takes precedence over IGNORE_SSL_ERRORS: TLS validation stays on,
+    # it just also trusts this one certificate, instead of trusting nothing.
+    CUSTOM_CA_CERT: str = ""
     SPONSORBLOCK_CATEGORIES: List[str] = field(default_factory=list)
     CHAPTERS_MODE: str = "embed"       # none|embed|split
     WRITE_SUBS: bool = False
@@ -247,6 +253,7 @@ class AppSettings:
         config = {
             "PROXY_URL": self.PROXY_URL,
             "IGNORE_SSL_ERRORS": self.IGNORE_SSL_ERRORS,
+            "CUSTOM_CA_CERT": self.CUSTOM_CA_CERT,
             "SPONSORBLOCK_CATEGORIES": self.SPONSORBLOCK_CATEGORIES,
             "CHAPTERS_MODE": self.CHAPTERS_MODE,
             "WRITE_SUBS": self.WRITE_SUBS,
@@ -302,6 +309,7 @@ class AppSettings:
             # Basic flags
             self.PROXY_URL = config.get("PROXY_URL", self.PROXY_URL)
             self.IGNORE_SSL_ERRORS = config.get("IGNORE_SSL_ERRORS", self.IGNORE_SSL_ERRORS)
+            self.CUSTOM_CA_CERT = config.get("CUSTOM_CA_CERT", self.CUSTOM_CA_CERT)
             self.SPONSORBLOCK_CATEGORIES = config.get("SPONSORBLOCK_CATEGORIES", self.SPONSORBLOCK_CATEGORIES)
             self.CHAPTERS_MODE = config.get("CHAPTERS_MODE", self.CHAPTERS_MODE)
             self.WRITE_SUBS = config.get("WRITE_SUBS", self.WRITE_SUBS)
