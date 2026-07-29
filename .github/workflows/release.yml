@@ -78,7 +78,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          curl -L https://github.com/spotDL/spotify-downloader/releases/download/v4.5.0/spotdl-4.5.0-win32.exe -o spotdl.exe
+          curl -L https://github.com/spotDL/spotify-downloader/releases/download/v4.5.2/spotdl-4.5.2-win32.exe -o spotdl.exe
 
       - name: Download ffmpeg & ffprobe
         shell: bash
