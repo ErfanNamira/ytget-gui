@@ -1,39 +1,24 @@
 ## ✨ What's New
+- **🔑 Custom CA certificate support** for local MITM/domain-fronting proxies (e.g. [MITM-DomainFronting](https://github.com/patterniha/MITM-DomainFronting)). A new `Custom CA certificate` field in **Preferences → Network** lets you point at a self-signed cert (e.g. `mycert.crt`) so TLS validation keeps working against that specific certificate instead of being disabled outright.
 
-### 🔄 Queue & Drag-and-Drop Improvements
-- Refactored queue handling so the visual order in the UI stays in sync with the internal queue state — fixes cases where drag-and-drop reordering could drift from what actually gets downloaded.
-- Log filtering now correctly follows the synchronized queue order.
-- Queue cards can now update their displayed title in place via a new internal `set_title` method, instead of requiring a full card rebuild.
-- Improved thumbnail loading and metadata display on queue cards.
+### 🛠️ Fixed
+- **Thumbnail downloads ignored the "Ignore SSL certificate errors" setting entirely.** `ThumbFetcher._download_with_requests()` never passed `verify=` to `requests.get()`, so it always enforced full certificate validation regardless of the toggle — this is what made SSL bypass appear broken when using a MITM-style local proxy for thumbnails specifically.
+- `title_fetch_manager.py`'s metadata-fetch queue had **no SSL handling at all** (no `--no-check-certificates`, no custom CA support), unlike its sibling `title_fetcher.py`. Both now behave identically.
+- SSL/CA behavior was previously inconsistent across `download_worker.py`, `title_fetcher.py`, `title_fetch_manager.py`, and `thumb_fetcher.py` — some only patched the yt-dlp subprocess flags, others missed it entirely. All four now resolve SSL/CA config through the same `ssl_utils.resolve_ssl_config()` helper.
 
-### 🖥️ UI & Rendering Fixes
-- Fixed a truncation issue where the metadata label on queue cards wouldn't resize properly to fit its content.
-- Styling functions now compute DPI scale and font size dynamically, improving appearance consistency across displays with different scaling settings.
-- App style refresh is now correctly triggered after the application style is applied on launch.
+### ⚙️ Changed
+- When a custom CA cert is configured, it's now propagated to yt-dlp/ffmpeg subprocesses via `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, and `CURL_CA_BUNDLE` environment variables, so nested TLS stacks (Python's `ssl`, `requests`/`urllib3`, libcurl-linked tools) all trust it consistently — not just the in-process `requests` calls.
+- `IGNORE_SSL_ERRORS` (blanket bypass) is now treated as a fallback, only applied when no valid `CUSTOM_CA_CERT` is set. Configuring a custom CA is the preferred, safer path since it keeps real certificate validation active.
 
-### ⚙️ Preferences & Settings
-- Refactored Preferences dialog field validators to share compiled regular expressions across dialog instances instead of recompiling them each time — reduces overhead when opening Preferences.
-- Refactored regex patterns used for time and playlist validation.
-- Settings retrieval now goes through a shared helper function, improving backward compatibility with settings saved by older versions of ytget.
-- About dialog now reads settings via `getattr`, avoiding errors on missing/older settings keys.
-
-### 📁 Default Downloads Folder
-- The default downloads directory now prefers the user's real `~/Downloads` folder across all platforms (Windows, macOS, Linux), removing the previous platform-specific special-casing.
-
-### 🛠️ Reliability & Internals
-- Fixed output template file extension formatting.
-- Fixed a formatting issue in the title fetcher.
-- `_process_next` now uses an iterative loop instead of recursion for processing queued URLs — prevents a potential `RecursionError` when processing very large batches/playlists.
-- Cleaned up `download_worker.py`: removed unused imports and streamlined log emission for clarity and efficiency.
-- Update manager now has improved error handling and more robust installation paths.
-- Application ID now includes the version number.
+### 📝 Notes
+- If you use a `socks5://` proxy URL (e.g. `socks5://127.0.0.1:10808` for a local v2rayN-based MITM proxy), make sure `requests[socks]` (the `pysocks` extra) is installed, or thumbnail fetching will raise a proxy error.
 
 ---
 ## 🆚 Updated Dependencies
 - **yt-dlp:** `2026.07.04`
 - **ffmpeg:** `8.1.2`  
-- **deno:**  `2.9.3`
-- **SpotDL (Windows only):**  `4.5.0`
+- **deno:**  `2.9.4`
+- **SpotDL (Windows only):**  `4.5.2`
 ---
 ### 📥 Official Downloads
 <table align="center">
