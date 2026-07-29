@@ -516,6 +516,17 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.ignore_ssl_errors.setToolTip("Adds --no-check-certificates to yt-dlp. Use only if you trust your network.")
         pf.addWidget(self._form_row("", self.ignore_ssl_errors))
 
+        self.custom_ca_cert_input = self._line_edit(
+            placeholder="Path to a self-signed CA cert (e.g. mycert.crt)",
+            tip="Trust this specific certificate instead of disabling verification entirely. "
+                "Used for local MITM/domain-fronting proxies (e.g. MITM-DomainFronting) where "
+                "you generated your own cert. Takes precedence over 'Ignore SSL certificate errors'.",
+        )
+        self.custom_ca_cert_input.setAccessibleName("Custom CA certificate path")
+        self.custom_ca_cert_input.setAccessibleDescription("Select a self-signed CA certificate to trust for MITM proxies")
+        ca_cert_row = self._picker_row(self.custom_ca_cert_input, "Browse…", self._browse_ca_cert)
+        pf.addWidget(self._form_row("Custom CA certificate", ca_cert_row))
+
         self.cookies_last_label = QtWidgets.QLabel("")
         self.cookies_last_label.setObjectName("formDescription")
         pf.addWidget(self.cookies_last_label)
@@ -1355,6 +1366,16 @@ class PreferencesDialog(QtWidgets.QDialog):
         if path:
             self.cookies_path_input.setText(path)
 
+    def _browse_ca_cert(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select Custom CA Certificate",
+            str(self.settings.BASE_DIR),
+            "Certificates (*.crt *.pem *.cer);;All Files (*)",
+        )
+        if path:
+            self.custom_ca_cert_input.setText(path)
+
     def _on_import_cookies(self) -> None:
         browser = self.import_cookies_combo.currentText().strip() or self.cookies_browser_combo.currentText().strip()
         if not browser:
@@ -1539,6 +1560,9 @@ class PreferencesDialog(QtWidgets.QDialog):
         proxy = self.proxy_input.text().strip()
         proxy_ok = (proxy == "") or proxy.startswith(("http://", "https://", "socks5://"))
 
+        ca_cert_txt = self.custom_ca_cert_input.text().strip()
+        ca_cert_ok = (ca_cert_txt == "") or Path(ca_cert_txt).is_file()
+
         # Cookies: ok if browser chosen; if not, file path can be empty
         cookies_ok = True
 
@@ -1568,6 +1592,7 @@ class PreferencesDialog(QtWidgets.QDialog):
             filename_ok, filename_err = True, ""
 
         self._mark_error(self.proxy_input, not proxy_ok, "Must start with http://, https://, or socks5://")
+        self._mark_error(self.custom_ca_cert_input, not ca_cert_ok, "File does not exist")
         self._mark_error(self.limit_rate_input, not rate_ok, "Use a number with K, M, or G (e.g., 500K, 5M, 1G)")
         self._mark_error(
             self.languages_input,
@@ -1578,7 +1603,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         self._mark_error(self.date_after, not date_ok, "Must be YYYYMMDD (e.g., 20240101)")
         self._mark_error(self.custom_filename_input, is_custom_filename and not filename_ok, filename_err or None)
 
-        all_ok = proxy_ok and cookies_ok and rate_ok and langs_ok and items_ok and date_ok and archive_ok and filename_ok
+        all_ok = proxy_ok and ca_cert_ok and cookies_ok and rate_ok and langs_ok and items_ok and date_ok and archive_ok and filename_ok
         self._set_save_enabled(all_ok)
 
     def _set_save_enabled(self, enabled: bool) -> None:
@@ -1604,6 +1629,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         for w in (
             # Network
             self.proxy_input,
+            self.custom_ca_cert_input,
             self.cookies_path_input,
             self.cookies_browser_combo,
             self.import_cookies_combo,
@@ -1791,6 +1817,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.cookies_browser_combo.setCurrentText(getattr(self.settings, "COOKIES_FROM_BROWSER", "") or "")
         self.cookies_auto_refresh.setChecked(bool(getattr(self.settings, "COOKIES_AUTO_REFRESH", False)))
         self.ignore_ssl_errors.setChecked(self.settings.IGNORE_SSL_ERRORS)
+        self.custom_ca_cert_input.setText(getattr(self.settings, "CUSTOM_CA_CERT", "") or "")
         last = getattr(self.settings, "COOKIES_LAST_IMPORTED", "")
         self.cookies_last_label.setText(f"Last imported: {last}" if last else "")        
         self.retries_spin.setValue(int(getattr(self.settings, "RETRIES", 3)))
@@ -1859,6 +1886,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         # Network
         self.proxy_input.setText(data.get("PROXY_URL", ""))
         self.ignore_ssl_errors.setChecked(bool(data.get("IGNORE_SSL_ERRORS", False)))
+        self.custom_ca_cert_input.setText(data.get("CUSTOM_CA_CERT", ""))
         self.cookies_browser_combo.setCurrentText(data.get("COOKIES_FROM_BROWSER", ""))
         self.cookies_path_input.setText(str(data.get("COOKIES_PATH", "") or ""))
         self.cookies_auto_refresh.setChecked(bool(data.get("COOKIES_AUTO_REFRESH", False)))
@@ -1939,6 +1967,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         return {
             "PROXY_URL": self.proxy_input.text().strip(),
             "IGNORE_SSL_ERRORS": self.ignore_ssl_errors.isChecked(),
+            "CUSTOM_CA_CERT": self.custom_ca_cert_input.text().strip(),
             "COOKIES_PATH": Path(self.cookies_path_input.text().strip()) if self.cookies_path_input.text().strip() else Path(""),
             "COOKIES_FROM_BROWSER": self.cookies_browser_combo.currentText().strip(),
             "COOKIES_AUTO_REFRESH": self.cookies_auto_refresh.isChecked(),
@@ -2053,6 +2082,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         fields: List[QtWidgets.QLineEdit] = []
         for w in (
             getattr(self, "proxy_input", None),
+            getattr(self, "custom_ca_cert_input", None),
             getattr(self, "cookies_path_input", None),
             getattr(self, "limit_rate_input", None),
             getattr(self, "languages_input", None),
@@ -2067,7 +2097,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         return fields
 
     def _first_error_widget(self) -> Optional[QtWidgets.QWidget]:
-        for w in (self.proxy_input, self.limit_rate_input, self.languages_input, self.playlist_items, self.date_after, self.custom_filename_input):
+        for w in (self.proxy_input, self.custom_ca_cert_input, self.limit_rate_input, self.languages_input, self.playlist_items, self.date_after, self.custom_filename_input):
             if (w.property("state") or "") == "error":
                 return w
         return None
