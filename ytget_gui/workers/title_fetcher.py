@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject, Signal
 
 from ytget_gui.settings import AppSettings
 from ytget_gui.workers import cookies as CookieManager
+from ytget_gui.workers import ssl_utils
 
 
 class TitleFetcher(QObject):
@@ -126,9 +127,11 @@ class TitleFetcher(QObject):
                 "--flat-playlist",
             ]
 
-            # Add SSL bypass if enabled
-            if getattr(self.settings, "IGNORE_SSL_ERRORS", False):
-                cmd.append("--no-check-certificates")
+            # SSL/CA handling (supports MITM-DomainFronting style local proxies
+            # via a trusted custom CA cert, falling back to --no-check-certificates
+            # only if no custom CA is configured)
+            _verify, _ytdlp_ssl_args, _ssl_env = ssl_utils.resolve_ssl_config(self.settings)
+            cmd.extend(_ytdlp_ssl_args)
 
             # Add URL
             cmd.append(self.url)
@@ -169,6 +172,10 @@ class TitleFetcher(QObject):
                     env["PATH"] = cur_path
                     if os.name == "nt" and not env.get("PATHEXT"):
                         env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+            except Exception:
+                pass
+            try:
+                env.update(_ssl_env)
             except Exception:
                 pass
 
