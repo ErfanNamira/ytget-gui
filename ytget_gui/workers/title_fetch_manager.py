@@ -14,6 +14,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Slot
 from ytget_gui.settings import AppSettings
 from ytget_gui.workers import cookies as CookieManager
+from ytget_gui.workers import ssl_utils
 
 
 class TitleFetchQueue(QObject):
@@ -164,6 +165,12 @@ class TitleFetchQueue(QObject):
         if proxy_url:
             cmd.extend(["--proxy", proxy_url])
 
+        # SSL/CA handling (supports MITM-DomainFronting style local proxies
+        # via a trusted custom CA cert, falling back to --no-check-certificates
+        # only if no custom CA is configured)
+        _verify, _ytdlp_ssl_args, _ssl_env = ssl_utils.resolve_ssl_config(self.settings)
+        cmd.extend(_ytdlp_ssl_args)
+
         # Prepare environment for subprocess so phantomjs and bundled binaries are visible immediately
         env = os.environ.copy()
         try:
@@ -181,6 +188,10 @@ class TitleFetchQueue(QObject):
             if os.name == "nt":
                 if not env.get("PATHEXT"):
                     env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+        except Exception:
+            pass
+        try:
+            env.update(_ssl_env)
         except Exception:
             pass
 
