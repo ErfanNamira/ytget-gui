@@ -22,6 +22,7 @@ from PySide6.QtCore import QObject, Signal
 
 from ytget_gui.settings import AppSettings
 from ytget_gui.workers import cookies as CookieManager
+from ytget_gui.workers import ssl_utils
 
 
 def _safe_name(s: str) -> str:
@@ -298,8 +299,8 @@ class ThumbFetcher(QObject):
                 "--flat-playlist",
             ]
 
-            if getattr(self.settings, "IGNORE_SSL_ERRORS", False):
-                cmd.append("--no-check-certificates")
+            _verify, _ytdlp_ssl_args, _ssl_env = ssl_utils.resolve_ssl_config(self.settings)
+            cmd.extend(_ytdlp_ssl_args)
 
             cmd.append(url_for_metadata)
 
@@ -340,6 +341,10 @@ class ThumbFetcher(QObject):
                 env["PATH"] = cur_path
                 if os.name == "nt" and not env.get("PATHEXT"):
                     env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+            except Exception:
+                pass
+            try:
+                env.update(_ssl_env)
             except Exception:
                 pass
 
@@ -519,8 +524,11 @@ class ThumbFetcher(QObject):
         if proxy:
             proxies = {"http": proxy, "https": proxy}
 
+        requests_verify, _ytdlp_args, _env = ssl_utils.resolve_ssl_config(self.settings)
+        ssl_utils.maybe_suppress_insecure_warning(requests_verify)
+
         try:
-            with requests.get(thumb_url, headers=headers, stream=True, timeout=self.timeout, proxies=proxies, allow_redirects=True) as r:
+            with requests.get(thumb_url, headers=headers, stream=True, timeout=self.timeout, proxies=proxies, allow_redirects=True, verify=requests_verify) as r:
                 try:
                     r.raise_for_status()
                 except RequestException as e:
@@ -639,8 +647,8 @@ class ThumbFetcher(QObject):
                 out_template,
             ]
 
-            if getattr(self.settings, "IGNORE_SSL_ERRORS", False):
-                cmd.append("--no-check-certificates")
+            _verify, _ytdlp_ssl_args, _ssl_env = ssl_utils.resolve_ssl_config(self.settings)
+            cmd.extend(_ytdlp_ssl_args)
 
             cmd.append(url_for_metadata)
 
@@ -681,6 +689,10 @@ class ThumbFetcher(QObject):
                 env["PATH"] = cur_path
                 if os.name == "nt" and not env.get("PATHEXT"):
                     env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+            except Exception:
+                pass
+            try:
+                env.update(_ssl_env)
             except Exception:
                 pass
 
