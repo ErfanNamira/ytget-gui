@@ -541,89 +541,109 @@ class UpdateInstaller(QThread):
 
 _QSS = """
 QDialog {
-    background: #09090B;
-    color: #E4E4E7;
-    font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #0a0e1a, stop:0.3 #15102e,
+        stop:0.6 #1e1b4b, stop:1 #0c1733);
+    color: #F4F4F8;
+    font-family: "Inter", "Segoe UI", sans-serif;
     font-size: 13px;
 }
-QLabel { color: #E4E4E7; }
+QLabel { color: #F4F4F8; background: transparent; }
 #Title {
-    font-size: 16px;
-    font-weight: 700;
+    font-size: 18px;
+    font-weight: 800;
     color: #00E5FF;
-    letter-spacing: 1px;
+    letter-spacing: 0.5px;
 }
 #Subtitle {
     font-size: 11px;
-    color: #52525B;
+    color: rgba(255, 255, 255, 120);
 }
 QFrame#Divider {
-    background: #1E1E24;
+    background: rgba(255, 255, 255, 20);
     min-height: 1px;
     max-height: 1px;
+    border: none;
 }
-/* ── Tool row ── */
+/* ── Tool row — glass card ── */
 QFrame#ToolRow {
-    background: #111113;
-    border: 1px solid #1E1E24;
-    border-radius: 8px;
+    background: rgba(255, 255, 255, 15);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 12px;
 }
 QFrame#ToolRow:hover {
-    border-color: #2A2A34;
+    background: rgba(255, 255, 255, 25);
+    border: 1px solid rgba(255, 255, 255, 50);
 }
-#ToolIcon  { font-size: 22px; }
-#ToolLabel { font-weight: 700; font-size: 13px; color: #E4E4E7; }
-#VersionInstalled { font-size: 11px; color: #52525B; }
-#VersionLatest    { font-size: 11px; color: #00E5FF; }
+#ToolIcon  { font-size: 22px; background: transparent; }
+#ToolLabel { font-weight: 700; font-size: 13px; color: #F4F4F8; background: transparent; }
+#VersionInstalled { font-size: 11px; color: rgba(255, 255, 255, 120); background: transparent; }
+#VersionLatest    { font-size: 11px; color: #00E5FF; background: transparent; }
 #StatusBadge {
-    border-radius: 4px;
-    padding: 2px 8px;
+    border-radius: 6px;
+    padding: 2px 10px;
     font-size: 11px;
     font-weight: 700;
 }
-/* ── Buttons ── */
+/* ── Buttons — glass ── */
 QPushButton#BtnUpdate {
-    background: #00E5FF;
-    color: #09090B;
-    border: none;
-    border-radius: 6px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #00E5FF, stop:1 #00B8FF);
+    color: #0a0e1a;
+    border: 1px solid rgba(0, 229, 255, 100);
+    border-radius: 8px;
     padding: 6px 16px;
     font-weight: 700;
     font-size: 12px;
 }
-QPushButton#BtnUpdate:hover   { background: #33EEFF; }
-QPushButton#BtnUpdate:disabled { background: #1A2E33; color: #3A5560; }
+QPushButton#BtnUpdate:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #33EEFF, stop:1 #33CCFF);
+}
+QPushButton#BtnUpdate:disabled {
+    background: rgba(255, 255, 255, 10);
+    color: rgba(255, 255, 255, 60);
+    border: 1px solid rgba(255, 255, 255, 15);
+}
 QPushButton#BtnRefresh {
-    background: #141418;
-    color: #A1A1AA;
-    border: 1px solid #27272A;
-    border-radius: 6px;
+    background: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 180);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
     padding: 6px 14px;
     font-size: 12px;
 }
-QPushButton#BtnRefresh:hover { color: #E4E4E7; border-color: #3F3F46; }
+QPushButton#BtnRefresh:hover {
+    color: #F4F4F8;
+    border: 1px solid rgba(255, 255, 255, 50);
+    background: rgba(255, 255, 255, 25);
+}
 QPushButton#BtnClose {
-    background: #141418;
-    color: #A1A1AA;
-    border: 1px solid #27272A;
-    border-radius: 6px;
+    background: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 180);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
     padding: 6px 14px;
     font-size: 12px;
 }
-QPushButton#BtnClose:hover { color: #E4E4E7; border-color: #3F3F46; }
-/* ── Log pane ── */
+QPushButton#BtnClose:hover {
+    color: #F4F4F8;
+    border: 1px solid rgba(255, 255, 255, 50);
+    background: rgba(255, 255, 255, 25);
+}
+/* ── Log pane — dark glass ── */
 QTextEdit#LogPane {
-    background: #070709;
-    color: #52525B;
-    border: 1px solid #1A1A20;
-    border-radius: 6px;
+    background: rgba(5, 5, 15, 200);
+    color: rgba(255, 255, 255, 160);
+    border: 1px solid rgba(255, 255, 255, 20);
+    border-radius: 8px;
     font-size: 11px;
     font-family: "JetBrains Mono", Consolas, monospace;
-    padding: 6px;
+    padding: 8px;
 }
 /* ── Progress ── */
 QProgressBar {
-    background: #1A1A20;
+    background: rgba(255, 255, 255, 20);
     border: none;
     border-radius: 3px;
     height: 4px;
@@ -631,34 +651,36 @@ QProgressBar {
     color: transparent;
 }
 QProgressBar::chunk {
-    background: #00E5FF;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #00E5FF, stop:1 #7C4DFF);
     border-radius: 3px;
 }
 /* ── Scroll ── */
 QScrollArea { border: none; background: transparent; }
 QScrollBar:vertical {
-    background: #09090B;
-    width: 6px;
-    border-radius: 3px;
+    background: transparent;
+    width: 8px;
+    border-radius: 4px;
 }
 QScrollBar::handle:vertical {
-    background: #27272A;
-    border-radius: 3px;
+    background: rgba(255, 255, 255, 40);
+    border-radius: 4px;
     min-height: 20px;
 }
-QScrollBar::handle:vertical:hover { background: #3F3F46; }
+QScrollBar::handle:vertical:hover { background: rgba(255, 255, 255, 70); }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 """
 
 # ── status badge colours ────────────────────────────────────────────────────
 _STATUS_STYLE = {
-    "checking":  ("background:#1A1A20; color:#71717A;", "Checking…"),
-    "up_to_date":("background:#14291A; color:#22C55E;", "Up to date"),
-    "update":    ("background:#2A1818; color:#F87171;", "Update available"),
-    "error":     ("background:#2A1A0A; color:#FB923C;", "Error"),
-    "installing":("background:#1A1A20; color:#00E5FF;", "Installing…"),
-    "done":      ("background:#14291A; color:#22C55E;", "Updated ✓"),
-    "warning":   ("background:#2A1A0A; color:#FB923C;", "Manual update"),
+    "checking":   ("background: rgba(255, 255, 255, 25); color: rgba(255, 255, 255, 150);", "Checking…"),
+    "up_to_date": ("background: rgba(34, 211, 165, 30); color: #22D3A5; border: 1px solid rgba(34, 211, 165, 60);", "Up to date"),
+    "update":     ("background: rgba(0, 229, 255, 30); color: #00E5FF; border: 1px solid rgba(0, 229, 255, 60);", "Update available"),
+    "error":      ("background: rgba(248, 113, 113, 30); color: #F87171; border: 1px solid rgba(248, 113, 113, 60);", "Error"),
+    "installing": ("background: rgba(0, 229, 255, 30); color: #00E5FF; border: 1px solid rgba(0, 229, 255, 60);", "Installing…"),
+    "done":       ("background: rgba(34, 211, 165, 30); color: #22D3A5; border: 1px solid rgba(34, 211, 165, 60);", "Updated ✓"),
+    "warning":    ("background: rgba(251, 191, 36, 30); color: #FBBF24; border: 1px solid rgba(251, 191, 36, 60);", "Manual update"),
 }
 
 
