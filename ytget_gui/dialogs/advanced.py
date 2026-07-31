@@ -348,121 +348,118 @@ class AdvancedOptionsDialog(QtWidgets.QDialog):
         except Exception:
             base = ""
 
-        pal = self.palette()
-        win = pal.color(QtGui.QPalette.Window)
-        base_bg = pal.color(QtGui.QPalette.Base)
-        text = pal.color(QtGui.QPalette.Text)
-        highlight = pal.color(QtGui.QPalette.Highlight)
-        is_dark = _is_dark(win)
-
-        # Compute accessible colors with good contrast on dark and light setups.
-        strong_text = QtGui.QColor("#EAEFF7") if is_dark else QtGui.QColor("#0E1320")
-        muted_text = QtGui.QColor("#AAB4C0") if is_dark else QtGui.QColor("#5B6470")
-        section_text = QtGui.QColor("#C2CAD6") if is_dark else QtGui.QColor("#3A4250")
-        border_c = QtGui.QColor("#39414D") if is_dark else QtGui.QColor("#D9DEE5")
-        divider_c = QtGui.QColor("#2B313B") if is_dark else QtGui.QColor("#E7EBF0")
-        field_bg = _mix(base_bg, QtGui.QColor("#0F131A"), 0.7) if is_dark else QtGui.QColor("#FFFFFF")
-        field_bg_hover = _mix(field_bg, QtGui.QColor("#ffffff"), 0.06 if is_dark else 0.02)
-        focus_ring = highlight
-        focus_text_on_highlight = _contrast_on(highlight)
-        error_border = QtGui.QColor("#F97066") if is_dark else QtGui.QColor("#D13438")
-        error_bg = QtGui.QColor(255, 92, 92, 28 if is_dark else 18)
+        # Glassmorphism palette — fixed values for consistency
+        win_bg       = "#0a0e1a"
+        page_bg      = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0a0e1a, stop:0.3 #15102e, stop:0.6 #1e1b4b, stop:1 #0c1733)"
+        strong_text  = "#F4F4F8"
+        muted_text   = "rgba(255, 255, 255, 150)"
+        section_text = "rgba(255, 255, 255, 180)"
+        border_c     = "rgba(255, 255, 255, 30)"
+        divider_c    = "rgba(255, 255, 255, 20)"
+        field_bg     = "rgba(255, 255, 255, 15)"
+        field_hover  = "rgba(255, 255, 255, 22)"
+        highlight    = "#00E5FF"
+        accent2      = "#7C4DFF"
+        error_border = "#F87171"
+        error_bg     = "rgba(248, 113, 113, 25)"
 
         css = f"""
-        /* Dialog surface */
         QDialog {{
-            background: { _hex(win) };
+            background: {page_bg};
         }}
 
-        /* Header */
         #dlgTitle {{
             font-size: 18px;
-            font-weight: 600;
-            color: { _hex(strong_text) };
+            font-weight: 700;
+            color: {strong_text};
             margin-bottom: 2px;
         }}
         #dlgSubtitle {{
             font-size: 12px;
-            color: { _hex(muted_text) };
+            color: {muted_text};
         }}
 
-        /* Section labels */
         #sectionLabel {{
             font-size: 11px;
-            font-weight: 600;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.4px;
-            color: { _hex(section_text) };
+            letter-spacing: 0.6px;
+            color: {highlight};
             padding: 4px 0 2px 0;
         }}
 
-        /* Form labels */
         #formLabel {{
             font-size: 12px;
-            color: { _hex(muted_text) };
+            color: {muted_text};
             padding-top: 4px;
         }}
 
-        /* Inputs */
         QLineEdit#input {{
-            background: { _hex(field_bg) };
-            color: { _hex(strong_text) };
-            border: 1px solid { _hex(border_c) };
+            background: {field_bg};
+            color: {strong_text};
+            border: 1px solid {border_c};
             border-radius: 10px;
             padding: 8px 12px;
-            selection-background-color: { _hex(highlight) };
-            selection-color: { _hex(focus_text_on_highlight) };
+            selection-background-color: {highlight};
+            selection-color: #0a0e1a;
             font-size: 13px;
         }}
         QLineEdit#input:hover {{
-            background: { _hex(field_bg_hover) };
-            border-color: { _hex(_mix(border_c, highlight, 0.25)) };
+            background: {field_hover};
+            border: 1px solid rgba(255, 255, 255, 50);
         }}
         QLineEdit#input:focus {{
-            border-color: { _hex(highlight) };
+            border: 1px solid {highlight};
+            background: rgba(0, 229, 255, 10);
             outline: none;
         }}
         QLineEdit#input[state="error"] {{
-            border-color: { _hex(error_border) };
-            background: { _hex(error_bg) };
+            border: 1px solid {error_border};
+            background: {error_bg};
         }}
         QLineEdit#input:disabled {{
-            color: { _hex(_mix(muted_text, strong_text, 0.3)) };
-            background: { _hex(_mix(field_bg, win, 0.2)) };
+            color: rgba(255, 255, 255, 80);
+            background: rgba(255, 255, 255, 8);
+            border: 1px solid rgba(255, 255, 255, 15);
         }}
 
-        /* Divider */
         #divider {{
-            background: { _hex(divider_c) };
+            background: {divider_c};
             min-height: 1px;
+            max-height: 1px;
+            border: none;
         }}
 
-        /* Buttons */
         QDialogButtonBox QPushButton {{
             border-radius: 10px;
-            padding: 8px 14px;
+            padding: 8px 16px;
             font-weight: 600;
+            font-size: 13px;
+            min-width: 80px;
         }}
         QDialogButtonBox QPushButton:default {{
-            background: { _hex(highlight) };
-            color: { _hex(focus_text_on_highlight) };
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 {highlight}, stop:1 {accent2});
+            color: #ffffff;
+            border: none;
+        }}
+        QDialogButtonBox QPushButton:default:hover {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #33EEFF, stop:1 #9C6DFF);
         }}
         QDialogButtonBox QPushButton:!default {{
-            background: transparent;
-            color: { _hex(strong_text) };
-            border: 1px solid { _hex(border_c) };
+            background: {field_bg};
+            color: {strong_text};
+            border: 1px solid {border_c};
         }}
-        QDialogButtonBox QPushButton:hover {{
-            border-color: { _hex(_mix(border_c, highlight, 0.35)) };
-        }}
-        QDialogButtonBox QPushButton:pressed {{
-            padding-top: 9px;
-            padding-bottom: 7px;
+        QDialogButtonBox QPushButton:!default:hover {{
+            border: 1px solid rgba(255, 255, 255, 50);
+            background: {field_hover};
         }}
         QDialogButtonBox QPushButton:disabled {{
-            color: { _hex(_mix(muted_text, strong_text, 0.2)) };
-            background: { _hex(_mix(win, field_bg, 0.2)) };
-            border-color: { _hex(_mix(border_c, win, 0.2)) };
+            color: rgba(255, 255, 255, 60);
+            background: rgba(255, 255, 255, 8);
+            border: 1px solid rgba(255, 255, 255, 15);
         }}
         """
         self.setStyleSheet((base + "\n" + css).strip())
