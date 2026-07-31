@@ -1026,63 +1026,37 @@ class PreferencesDialog(QtWidgets.QDialog):
         return page
 
     # ---------- Styling ----------
-    def _apply_styles(self) -> None:               
+    def _apply_styles(self) -> None:
         base = ""
         try:
             base = getattr(AppStyles, "DIALOG", "") or ""
         except Exception:
             base = ""
 
-        pal = self.palette()
-        win = pal.color(QtGui.QPalette.Window)
-        base_bg = pal.color(QtGui.QPalette.Base)
-        highlight = pal.color(QtGui.QPalette.Highlight)
-
-        def _hex(c: QtGui.QColor) -> str:
-            c = c.toRgb()
-            return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
-
-        def _is_dark(c: QtGui.QColor) -> bool:
-            return (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()) < 128
-
-        def _mix(a: QtGui.QColor, b: QtGui.QColor, t: float) -> QtGui.QColor:
-            return QtGui.QColor(
-                int(a.red() * (1 - t) + b.red() * t),
-                int(a.green() * (1 - t) + b.green() * t),
-                int(a.blue() * (1 - t) + b.blue() * t),
-            )
-
-        def _contrast_on(bg: QtGui.QColor) -> QtGui.QColor:
-            yiq = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
-            return QtGui.QColor("#0b0b0b") if yiq > 150 else QtGui.QColor("#ffffff")
-
-        is_dark = _is_dark(win)
-        strong_text = QtGui.QColor("#EAEFF7") if is_dark else QtGui.QColor("#0E1320")
-        muted_text = QtGui.QColor("#AAB4C0") if is_dark else QtGui.QColor("#5B6470")
-        section_text = QtGui.QColor("#C2CAD6") if is_dark else QtGui.QColor("#3A4250")
-        border_c = QtGui.QColor("#39414D") if is_dark else QtGui.QColor("#D9DEE5")
-        divider_c = QtGui.QColor("#2B313B") if is_dark else QtGui.QColor("#E7EBF0")
-        card_bg = _mix(base_bg, QtGui.QColor("#0F131A"), 0.7) if is_dark else QtGui.QColor("#FFFFFF")
-        card_hover = _mix(card_bg, QtGui.QColor("#ffffff"), 0.06 if is_dark else 0.02)
-        field_bg = card_bg
-        field_hover = card_hover
-        focus_text_on_highlight = _contrast_on(highlight)
-        error_border = QtGui.QColor("#F97066") if is_dark else QtGui.QColor("#D13438")
-        error_bg = QtGui.QColor(255, 92, 92, 28 if is_dark else 18)
-        brand_accent = _mix(highlight, strong_text, 0.8)
-
-        accent2 = _mix(highlight, QtGui.QColor("#7C4DFF") if is_dark else QtGui.QColor("#5B8CFF"), 0.5)
-        page_bg = _mix(win, QtGui.QColor("#05070C") if is_dark else QtGui.QColor("#F4F6FA"), 0.35)
-        rail_bg = _mix(win, QtGui.QColor("#0B0E14") if is_dark else QtGui.QColor("#FFFFFF"), 0.55 if is_dark else 0.6)
-        good = QtGui.QColor("#3DD68C") if is_dark else QtGui.QColor("#1F9D5A")
-        warn = QtGui.QColor("#F5A623")
+        # Glassmorphism palette
+        page_bg   = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0a0e1a, stop:0.3 #15102e, stop:0.6 #1e1b4b, stop:1 #0c1733)"
+        rail_bg   = "rgba(10, 10, 25, 180)"
+        card_bg   = "rgba(255, 255, 255, 15)"
+        card_hover = "rgba(255, 255, 255, 25)"
+        field_bg  = "rgba(255, 255, 255, 15)"
+        field_hover = "rgba(255, 255, 255, 22)"
+        strong_text  = "#F4F4F8"
+        muted_text   = "rgba(255, 255, 255, 150)"
+        section_text = "rgba(255, 255, 255, 180)"
+        border_c  = "rgba(255, 255, 255, 30)"
+        divider_c = "rgba(255, 255, 255, 20)"
+        highlight = "#00E5FF"
+        accent2   = "#7C4DFF"
+        error_border = "#F87171"
+        error_bg  = "rgba(248, 113, 113, 25)"
+        good = "#22D3A5"
+        warn = "#FBBF24"
 
         css = f"""
         QDialog {{
-            background: {_hex(page_bg)};
+            background: {page_bg};
         }}
 
-        /* ---------- Header ---------- */
         #header {{
             background: transparent;
         }}
@@ -1090,25 +1064,25 @@ class PreferencesDialog(QtWidgets.QDialog):
             border-radius: 12px;
             font-size: 18px;
             font-weight: 700;
-            color: {_hex(focus_text_on_highlight)};
+            color: #ffffff;
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 {_hex(highlight)}, stop:1 {_hex(accent2)});
+                stop:0 {highlight}, stop:1 {accent2});
+            border: 1px solid rgba(255, 255, 255, 40);
         }}
         #dlgTitle {{
             font-size: 21px;
             font-weight: 800;
             letter-spacing: 0.1px;
-            color: {_hex(strong_text)};
+            color: {strong_text};
         }}
         #dlgSubtitle {{
             font-size: 12.5px;
-            color: {_hex(muted_text)};
+            color: {muted_text};
         }}
 
-        /* ---------- Sidebar / nav rail ---------- */
         QListWidget#sidebar {{
-            background: {_hex(rail_bg)};
-            border: 1px solid {_hex(border_c)};
+            background: {rail_bg};
+            border: 1px solid {border_c};
             border-radius: 16px;
             padding: 6px 6px;
             outline: 0;
@@ -1117,34 +1091,33 @@ class PreferencesDialog(QtWidgets.QDialog):
             padding: 7px 10px 7px 12px;
             margin: 1px 2px;
             border-radius: 11px;
-            color: {_hex(muted_text)};
+            color: {muted_text};
             font-size: 13px;
             font-weight: 500;
             border: 1px solid transparent;
         }}
         QListWidget#sidebar::item:hover {{
-            background: {_hex(_mix(rail_bg, highlight, 0.10))};
-            color: {_hex(strong_text)};
+            background: rgba(255, 255, 255, 15);
+            color: {strong_text};
         }}
         QListWidget#sidebar::item:selected {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 {_hex(_mix(rail_bg, highlight, 0.32))},
-                stop:1 {_hex(_mix(rail_bg, accent2, 0.20))});
-            border: 1px solid {_hex(_mix(border_c, highlight, 0.55))};
-            color: {_hex(strong_text)};
+                stop:0 rgba(0, 229, 255, 40),
+                stop:1 rgba(124, 77, 255, 25));
+            border: 1px solid rgba(0, 229, 255, 60);
+            color: {strong_text};
             font-weight: 700;
         }}
         QComboBox#sectionCombo {{
             min-height: 30px;
-            border: 1px solid {_hex(border_c)};
+            border: 1px solid {border_c};
             border-radius: 11px;
             padding: 4px 10px;
-            background: {_hex(card_bg)};
-            color: {_hex(strong_text)};
+            background: {card_bg};
+            color: {strong_text};
             font-weight: 600;
         }}
 
-        /* ---------- Scroll area ---------- */
         QScrollArea#scrollArea {{
             background: transparent;
             border: none;
@@ -1154,62 +1127,63 @@ class PreferencesDialog(QtWidgets.QDialog):
         }}
         QScrollBar:vertical {{
             background: transparent;
-            width: 10px;
+            width: 8px;
             margin: 2px;
         }}
         QScrollBar::handle:vertical {{
-            background: {_hex(_mix(border_c, muted_text, 0.3))};
-            border-radius: 5px;
+            background: rgba(255, 255, 255, 40);
+            border-radius: 4px;
             min-height: 30px;
         }}
         QScrollBar::handle:vertical:hover {{
-            background: {_hex(_mix(border_c, highlight, 0.4))};
+            background: rgba(255, 255, 255, 70);
         }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
             height: 0px;
         }}
 
-        /* ---------- Cards ---------- */
         QFrame#card {{
-            background: {_hex(card_bg)};
-            border: 1px solid {_hex(border_c)};
+            background: {card_bg};
+            border: 1px solid {border_c};
             border-radius: 16px;
         }}
         QFrame#card:hover {{
-            border-color: {_hex(_mix(border_c, highlight, 0.4))};
-            background: {_hex(field_hover)};
+            border: 1px solid rgba(255, 255, 255, 50);
+            background: {card_hover};
         }}
         QLabel#cardTitle {{
             font-size: 14.5px;
             font-weight: 700;
-            color: {_hex(strong_text)};
+            color: {strong_text};
+            background: transparent;
         }}
         QLabel#cardSubtitle {{
             font-size: 12px;
-            color: {_hex(muted_text)};
+            color: {muted_text};
+            background: transparent;
         }}
 
-        /* ---------- Section and form labels ---------- */
         #sectionLabel {{
             font-size: 11px;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.6px;
-            color: {_hex(_mix(section_text, highlight, 0.25))};
+            color: {highlight};
         }}
         #formLabel {{
             font-size: 12.5px;
-            color: {_hex(muted_text)};
+            color: {muted_text};
+            background: transparent;
         }}
         #formDescription {{
             font-size: 12px;
-            color: {_hex(muted_text)};
+            color: {muted_text};
+            background: transparent;
         }}
 
-        /* ---------- Filename template help box ---------- */
         QFrame#helpBox {{
-            background: {_hex(_mix(card_bg, highlight, 0.05))};
-            border: 1px dashed {_hex(_mix(border_c, highlight, 0.3))};
+            background: rgba(0, 229, 255, 8);
+            border: 1px dashed rgba(0, 229, 255, 40);
             border-radius: 12px;
         }}
         QLabel#helpBoxTitle {{
@@ -1217,44 +1191,47 @@ class PreferencesDialog(QtWidgets.QDialog):
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            color: {_hex(_mix(section_text, highlight, 0.25))};
+            color: {highlight};
+            background: transparent;
         }}
         QLabel#helpBoxCategory {{
             font-size: 11px;
             font-weight: 700;
-            color: {_hex(muted_text)};
+            color: {muted_text};
+            background: transparent;
         }}
         QLabel#helpBoxTokens {{
             font-size: 12px;
-            color: {_hex(strong_text)};
+            color: {strong_text};
+            background: transparent;
         }}
         QLabel#helpBoxExample {{
             font-size: 11px;
-            color: {_hex(muted_text)};
+            color: {muted_text};
+            background: transparent;
         }}
 
-        /* ---------- Inputs ---------- */
         QLineEdit#input, QComboBox#combo, QSpinBox#spin {{
-            background: {_hex(field_bg)};
-            color: {_hex(strong_text)};
-            border: 1.5px solid {_hex(border_c)};
-            border-radius: 11px;
+            background: {field_bg};
+            color: {strong_text};
+            border: 1px solid {border_c};
+            border-radius: 10px;
             padding: 6px 10px;
-            selection-background-color: {_hex(highlight)};
-            selection-color: {_hex(focus_text_on_highlight)};
+            selection-background-color: {highlight};
+            selection-color: #0a0e1a;
             font-size: 13px;
         }}
         QLineEdit#input:hover, QComboBox#combo:hover, QSpinBox#spin:hover {{
-            background: {_hex(field_hover)};
-            border-color: {_hex(_mix(border_c, highlight, 0.35))};
+            background: {field_hover};
+            border: 1px solid rgba(255, 255, 255, 50);
         }}
         QLineEdit#input:focus, QComboBox#combo:focus, QSpinBox#spin:focus {{
-            border: 1.5px solid {_hex(highlight)};
-            background: {_hex(field_hover)};
+            border: 1px solid {highlight};
+            background: rgba(0, 229, 255, 10);
         }}
         QLineEdit#input[state="error"] {{
-            border-color: {_hex(error_border)};
-            background: {_hex(error_bg)};
+            border: 1px solid {error_border};
+            background: {error_bg};
         }}
         QComboBox#combo::drop-down, QComboBox#sectionCombo::drop-down {{
             border: none;
@@ -1262,54 +1239,54 @@ class PreferencesDialog(QtWidgets.QDialog):
         }}
 
         QCheckBox#check, QRadioButton#radio {{
-            color: {_hex(strong_text)};
+            color: {strong_text};
             font-size: 13px;
             spacing: 8px;
+            background: transparent;
         }}
         QCheckBox#check::indicator, QRadioButton#radio::indicator {{
             width: 17px;
             height: 17px;
             border-radius: 5px;
-            border: 1.5px solid {_hex(border_c)};
-            background: {_hex(field_bg)};
+            border: 1px solid {border_c};
+            background: {field_bg};
         }}
         QRadioButton#radio::indicator {{
             border-radius: 9px;
         }}
         QCheckBox#check::indicator:hover, QRadioButton#radio::indicator:hover {{
-            border-color: {_hex(_mix(border_c, highlight, 0.5))};
+            border: 1px solid rgba(255, 255, 255, 60);
         }}
         QCheckBox#check::indicator:checked, QRadioButton#radio::indicator:checked {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 {_hex(highlight)}, stop:1 {_hex(accent2)});
-            border-color: {_hex(highlight)};
+                stop:0 {highlight}, stop:1 {accent2});
+            border: 1px solid {highlight};
         }}
 
-        /* ---------- Divider ---------- */
         #divider {{
-            background: {_hex(divider_c)};
+            background: {divider_c};
             min-height: 1px;
             max-height: 1px;
             border: none;
         }}
 
-        /* ---------- Footer ---------- */
         #footer {{
             background: transparent;
         }}
         #status {{
-            color: {_hex(muted_text)};
+            color: {muted_text};
             font-size: 12.5px;
             font-weight: 600;
+            background: transparent;
         }}
         #status[state="dirty"] {{
-            color: {_hex(warn)};
+            color: {warn};
         }}
         #status[state="clean"] {{
-            color: {_hex(good)};
+            color: {good};
         }}
         QDialogButtonBox QPushButton {{
-            border-radius: 11px;
+            border-radius: 10px;
             padding: 7px 16px;
             font-weight: 700;
             font-size: 13px;
@@ -1317,28 +1294,27 @@ class PreferencesDialog(QtWidgets.QDialog):
         }}
         QDialogButtonBox QPushButton:default {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 {_hex(highlight)}, stop:1 {_hex(accent2)});
-            color: {_hex(focus_text_on_highlight)};
+                stop:0 {highlight}, stop:1 {accent2});
+            color: #ffffff;
             border: none;
         }}
         QDialogButtonBox QPushButton:default:hover {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 {_hex(_mix(highlight, QtGui.QColor('#ffffff'), 0.12))},
-                stop:1 {_hex(_mix(accent2, QtGui.QColor('#ffffff'), 0.12))});
+                stop:0 #33EEFF, stop:1 #9C6DFF);
         }}
         QDialogButtonBox QPushButton:!default {{
-            background: transparent;
-            color: {_hex(strong_text)};
-            border: 1.5px solid {_hex(border_c)};
+            background: {field_bg};
+            color: {strong_text};
+            border: 1px solid {border_c};
         }}
         QDialogButtonBox QPushButton:!default:hover {{
-            border-color: {_hex(_mix(border_c, highlight, 0.4))};
-            background: {_hex(_mix(card_bg, highlight, 0.06))};
+            border: 1px solid rgba(255, 255, 255, 50);
+            background: {field_hover};
         }}
         QDialogButtonBox QPushButton:disabled {{
-            color: {_hex(_mix(muted_text, strong_text, 0.25))};
-            background: {_hex(_mix(win, field_bg, 0.2))};
-            border-color: {_hex(_mix(border_c, win, 0.2))};
+            color: rgba(255, 255, 255, 60);
+            background: rgba(255, 255, 255, 8);
+            border: 1px solid rgba(255, 255, 255, 15);
         }}
         """
         self.setStyleSheet((base + "\n" + css).strip())
