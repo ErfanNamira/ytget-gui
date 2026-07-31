@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional, Callable, List, Tuple
 
 from PySide6.QtCore import Qt, Signal, QEvent, QSize
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QColor
 from PySide6.QtWidgets import (
     QWidget,
     QHBoxLayout,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QMenu,
     QSizePolicy,
+    QGraphicsDropShadowEffect,
 )
 
 __all__ = ["QueueCard"]
@@ -26,38 +27,39 @@ def _clamp(text: str, n: int) -> str:
 
 
 STATUS_COLORS = {
-    "Pending": "#4B5565",
-    "Queued": "#4B5565",
-    "Downloading": "#6EA8FE",
-    "Completed": "#55D187",
-    "Error": "#FF6B6B",
-    "Skipped": "#D1A85F",
-    "Cancelled": "#8A8FA3",
+    "Pending":    "#6B7280",
+    "Queued":     "#6B7280",
+    "Downloading":"#00E5FF",
+    "Completed":  "#22D3A5",
+    "Error":      "#F87171",
+    "Skipped":    "#FBBF24",
+    "Cancelled":  "#9CA3AF",
 }
-_DEFAULT_STATUS_COLOR = "#4B5565"
+_DEFAULT_STATUS_COLOR = "#6B7285"
+
+# Status chip backgrounds (rgba glass style)
+STATUS_CHIP_STYLES = {
+    "Pending":    "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);",
+    "Queued":     "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);",
+    "Downloading":"background: rgba(0, 229, 255, 30); color: #00E5FF; border: 1px solid rgba(0, 229, 255, 80);",
+    "Completed":  "background: rgba(34, 211, 165, 30); color: #22D3A5; border: 1px solid rgba(34, 211, 165, 80);",
+    "Error":      "background: rgba(248, 113, 113, 30); color: #F87171; border: 1px solid rgba(248, 113, 113, 80);",
+    "Skipped":    "background: rgba(251, 191, 36, 30); color: #FBBF24; border: 1px solid rgba(251, 191, 36, 80);",
+    "Cancelled":  "background: rgba(156, 163, 175, 30); color: #9CA3AF; border: 1px solid rgba(156, 163, 175, 60);",
+}
+_DEFAULT_CHIP_STYLE = "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);"
 
 
 class QueueCard(QFrame):
     """
-    Queue item card:
-    - Drag handle
-    - Optional thumbnail
-    - Title, URL/meta
-    - Status chip
-    - Micro progress + percent
-    - Overflow menu with pluggable actions
-
-    Signals:
-      - removed: emitted when the delete/remove is triggered
-      - movedUp: emitted when move-up is triggered
-      - movedDown: emitted when move-down is triggered
+    Queue item card — glassmorphism style.
     """
 
     removed = Signal()
     movedUp = Signal()
     movedDown = Signal()
 
-    THUMB_SIZE = QSize(120, 68)  # matches fallback card size in main_window
+    THUMB_SIZE = QSize(120, 68)
 
     def __init__(
         self,
@@ -73,11 +75,18 @@ class QueueCard(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setProperty("elevated", False)
 
+        # Glass drop shadow for depth
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(16)
+        shadow.setColor(QColor(0, 0, 0, 60))
+        shadow.setOffset(0, 2)
+        self.setGraphicsEffect(shadow)
+
         self._context_actions: List[Tuple[str, Callable[[], None]]] = []
         self._last_meta_width: int = -1
         self._last_progress_value: int = -1
         self._last_thumb_path: Optional[str] = None
-        self._last_thumb_pixmap_key: Optional[int] = None  # cacheKey() of last source pixmap
+        self._last_thumb_pixmap_key: Optional[int] = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -96,17 +105,13 @@ class QueueCard(QFrame):
             self.thumb = QLabel()
             self.thumb.setFixedSize(self.THUMB_SIZE)
             self.thumb.setObjectName("Thumb")
-            # NOTE: scaledContents deliberately left False. We pre-scale and
-            # center-crop pixmaps ourselves in _make_thumbnail_pixmap so the
-            # aspect ratio is preserved; letting Qt additionally stretch the
-            # result via scaledContents would re-distort it.
             self.thumb.setScaledContents(False)
             self.thumb.setAlignment(Qt.AlignCenter)
             root.addWidget(self.thumb)
         else:
             self.thumb = None
 
-        # Center block (title, meta, progress)
+        # Center block
         center = QVBoxLayout()
         center.setSpacing(4)
 
@@ -126,7 +131,7 @@ class QueueCard(QFrame):
 
         center.addLayout(title_row)
 
-        # meta row (elide long URLs to avoid scrollbars)
+        # meta row
         meta_row = QHBoxLayout()
         meta_row.setSpacing(8)
 
@@ -135,13 +140,11 @@ class QueueCard(QFrame):
         self.meta_lbl.setObjectName("CardMeta")
         self.meta_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.meta_lbl.setWordWrap(False)
-        # allow the label to shrink instead of forcing scrollbars
         self.meta_lbl.setMinimumWidth(0)
         self.meta_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         meta_row.addWidget(self.meta_lbl, 1)
         center.addLayout(meta_row)
 
-        # set initial elided text and tooltip
         self._set_elided_meta(self._full_meta_text, max_width=220, force=True)
 
         progress_row = QHBoxLayout()
@@ -165,7 +168,7 @@ class QueueCard(QFrame):
 
         root.addLayout(center, 1)
 
-        # Right side: overflow + hidden compat controls
+        # Right side
         right = QVBoxLayout()
         right.setSpacing(6)
 
@@ -212,8 +215,7 @@ class QueueCard(QFrame):
         self.setMouseTracking(True)
         self.installEventFilter(self)
 
-        # Initial style (also ensures dynamic properties set above are
-        # actually applied by the style engine before first paint)
+        # Initial style
         self._apply_status_style(status)
 
     # ----- Public API -----
@@ -222,12 +224,6 @@ class QueueCard(QFrame):
         self._apply_status_style(status)
 
     def set_title(self, title: str) -> None:
-        """Update the displayed title (e.g. once metadata/title fetch completes).
-
-        Without this, main_window's `hasattr(widget, "set_title")` check
-        silently fails and the card keeps showing its placeholder text
-        (often the raw URL) until something else forces a full rebuild.
-        """
         text = _clamp(title or "", 90)
         if self.title_lbl.text() == text:
             return
@@ -237,39 +233,29 @@ class QueueCard(QFrame):
     def set_progress(self, value: int) -> None:
         v = max(0, min(100, int(value)))
         if v == self._last_progress_value:
-            return  # avoid redundant repaint/relayout work
+            return
         self._last_progress_value = v
         self.progress.setValue(v)
         self.percent_lbl.setText(f"{v}%")
 
     def set_context_actions(self, items: List[Tuple[str, Callable[[], None]]]) -> None:
-        """
-        Provide context menu actions, e.g.
-        [("Open in browser", fn), ("Copy URL", fn2)]
-        """
         self._context_actions = items
 
     def set_thumbnail_pixmap(self, pix: Optional[QPixmap]) -> None:
-        """Optionally set the thumbnail pixmap directly."""
         if self.thumb is None or pix is None or pix.isNull():
             return
-
-        # Skip re-scaling work if this is literally the same source pixmap
-        # we already rendered (common when refreshing/re-adding cards).
         key = pix.cacheKey()
         if key == self._last_thumb_pixmap_key:
             return
         self._last_thumb_pixmap_key = key
-        self._last_thumb_path = None  # pixmap set directly, not via path cache
-
+        self._last_thumb_path = None
         self.thumb.setPixmap(self._make_thumbnail_pixmap(pix))
 
     def set_thumbnail_path(self, path: str) -> None:
-        """Load a pixmap from path and set as thumbnail."""
         if not path or self.thumb is None:
             return
         if path == self._last_thumb_path:
-            return  # already showing this exact file
+            return
         pix = QPixmap(path)
         if pix.isNull():
             return
@@ -280,12 +266,6 @@ class QueueCard(QFrame):
     # ----- Internal helpers -----
 
     def _make_thumbnail_pixmap(self, pix: QPixmap) -> QPixmap:
-        """
-        Scale to fill THUMB_SIZE while preserving aspect ratio, then center
-        crop to exactly THUMB_SIZE. Avoids both letterboxing and the
-        distortion that setScaledContents(True) would otherwise introduce
-        on top of an already-aspect-scaled pixmap.
-        """
         size = self.THUMB_SIZE
         scaled = pix.scaled(size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
         if scaled.size() == size:
@@ -296,9 +276,8 @@ class QueueCard(QFrame):
 
     def _apply_status_style(self, status: str) -> None:
         self.status_chip.setText(status)
-        # Expose a color hint via dynamic property; QSS can read it indirectly
-        color = STATUS_COLORS.get(status, _DEFAULT_STATUS_COLOR)
-        self.setProperty("statusColor", color)
+        chip_style = STATUS_CHIP_STYLES.get(status, _DEFAULT_CHIP_STYLE)
+        self.status_chip.setStyleSheet(chip_style)
         self._repolish()
 
     def _open_context_menu(self) -> None:
@@ -320,13 +299,9 @@ class QueueCard(QFrame):
         style.polish(self)
 
     def _set_elided_meta(self, text: str, max_width: int = 220, force: bool = False) -> None:
-        """
-        Elide the meta text (URL) to avoid scrollbars.
-        max_width is the pixel width available for the label.
-        """
         self._full_meta_text = text or ""
         if not force and max_width == self._last_meta_width:
-            return  # nothing changed since last elide pass
+            return
         self._last_meta_width = max_width
         try:
             fm = self.meta_lbl.fontMetrics()
@@ -334,7 +309,6 @@ class QueueCard(QFrame):
             self.meta_lbl.setText(elided)
             self.meta_lbl.setToolTip(self._full_meta_text)
         except Exception:
-            # fallback to raw truncated text
             self.meta_lbl.setText(_clamp(self._full_meta_text, 64))
             self.meta_lbl.setToolTip(self._full_meta_text)
 
@@ -351,11 +325,6 @@ class QueueCard(QFrame):
         return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):
-        # Re-elide against the label's *actual* current width rather than
-        # a fixed guess, so the URL doesn't stay over-truncated on wide
-        # windows or under-truncated (causing wrapping/scrollbars) on
-        # narrow ones. _set_elided_meta short-circuits if width is
-        # unchanged, so this is cheap on no-op resizes (e.g. vertical-only).
         super().resizeEvent(event)
         width = self.meta_lbl.width()
         if width > 0:
