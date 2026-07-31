@@ -121,8 +121,6 @@ def _check(text: str, checked: bool, tooltip: str = "") -> QCheckBox:
 
 
 def _card(title: str, subtitle: str = "") -> tuple[QFrame, QVBoxLayout]:
-    """Builds a card matching PreferencesDialog's card style and returns
-    (card_frame, content_layout) so callers can add rows to content_layout."""
     card = QFrame()
     card.setObjectName("card")
     v = QVBoxLayout(card)
@@ -143,8 +141,8 @@ def _card(title: str, subtitle: str = "") -> tuple[QFrame, QVBoxLayout]:
     v.addLayout(head)
 
     eff = QGraphicsDropShadowEffect(card)
-    eff.setBlurRadius(18)
-    eff.setColor(QColor(0, 0, 0, 60))
+    eff.setBlurRadius(20)
+    eff.setColor(QColor(0, 0, 0, 80))
     eff.setOffset(0, 6)
     card.setGraphicsEffect(eff)
 
@@ -171,20 +169,33 @@ class _MultiSelectList(QListWidget):
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if c in selected else Qt.Unchecked)
             self.addItem(item)
-        # Scoped styling: the dialog's QSS doesn't target plain QListWidget
-        # (only #sidebar), so this list styles itself to match the card look.
         self.setStyleSheet("""
             QListWidget#multiList {
-                background: transparent;
-                border: none;
+                background: rgba(255, 255, 255, 10);
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 8px;
                 font-size: 12.5px;
+                padding: 4px;
             }
             QListWidget#multiList::item {
-                padding: 3px 4px;
+                padding: 4px 6px;
                 border-radius: 6px;
+                color: rgba(255, 255, 255, 180);
             }
             QListWidget#multiList::item:hover {
-                background: rgba(127, 127, 127, 0.12);
+                background: rgba(255, 255, 255, 25);
+            }
+            QListWidget#multiList::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 4px;
+                border: 1px solid rgba(255, 255, 255, 40);
+                background: rgba(255, 255, 255, 15);
+            }
+            QListWidget#multiList::indicator:checked {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #00E5FF, stop:1 #7C4DFF);
+                border: 1px solid #00E5FF;
             }
         """)
         self._fit_to_contents()
