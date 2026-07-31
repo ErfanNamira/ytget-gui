@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import sys
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QColor
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTabWidget, QWidget, QTextBrowser, QGroupBox,
-    QGridLayout, QFrame
+    QGridLayout, QFrame, QGraphicsDropShadowEffect
 )
 
 from ytget_gui.settings import AppSettings
+from ytget_gui.styles import AppStyles
 
 
 class AboutDialog(QDialog):
@@ -28,10 +29,94 @@ class AboutDialog(QDialog):
         self.setWindowTitle(f"About {app_name}")
         self.setModal(True)
         self.setMinimumSize(600, 500)
-        self.resize(650, 550)
+        self.resize(660, 560)
 
         if self._app_icon:
             self.setWindowIcon(self._app_icon)
+
+        # Glassmorphism dialog background
+        self.setStyleSheet(f"""
+            QDialog {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #0a0e1a, stop:0.3 #15102e,
+                    stop:0.6 #1e1b4b, stop:1 #0c1733);
+                color: #F4F4F8;
+                font-family: "Inter", "Segoe UI", sans-serif;
+            }}
+            QLabel {{
+                color: #F4F4F8;
+                background: transparent;
+            }}
+            QGroupBox {{
+                font-weight: bold;
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 12px;
+                margin-top: 1ex;
+                background: rgba(255, 255, 255, 15);
+                padding-top: 12px;
+                color: #F4F4F8;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top center;
+                padding: 0 8px;
+                color: #00E5FF;
+            }}
+            QTabWidget::pane {{
+                border: 1px solid rgba(255, 255, 255, 25);
+                border-radius: 10px;
+                background: rgba(255, 255, 255, 10);
+            }}
+            QTabBar::tab {{
+                background: rgba(255, 255, 255, 15);
+                color: rgba(255, 255, 255, 150);
+                border: 1px solid rgba(255, 255, 255, 25);
+                border-bottom: none;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                padding: 6px 16px;
+                margin-right: 2px;
+            }}
+            QTabBar::tab:selected {{
+                background: rgba(0, 229, 255, 30);
+                color: #00E5FF;
+                border-color: rgba(0, 229, 255, 60);
+            }}
+            QTabBar::tab:hover {{
+                background: rgba(255, 255, 255, 25);
+                color: #F4F4F8;
+            }}
+            QTextBrowser {{
+                background: rgba(5, 5, 15, 180);
+                color: rgba(255, 255, 255, 160);
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 8px;
+                font-family: "JetBrains Mono", Consolas, monospace;
+                font-size: 11px;
+                padding: 8px;
+            }}
+            QPushButton {{
+                background: rgba(255, 255, 255, 15);
+                color: rgba(255, 255, 255, 180);
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 8px;
+                padding: 8px 20px;
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: rgba(255, 255, 255, 25);
+                color: #F4F4F8;
+                border: 1px solid rgba(255, 255, 255, 50);
+            }}
+            QFrame {{
+                background: transparent;
+            }}
+            QFrame[frameShape="4"] {{
+                background: rgba(255, 255, 255, 20);
+                max-height: 1px;
+            }}
+        """)
 
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(15)
@@ -42,10 +127,13 @@ class AboutDialog(QDialog):
         if self._app_icon:
             icon_label = QLabel()
             icon_label.setPixmap(self._app_icon.pixmap(64, 64))
-            # Without a fixed size the label reflows to whatever the pixmap's
-            # native size is (icons are often multi-resolution), which can
-            # visibly jump the header layout on first paint.
             icon_label.setFixedSize(64, 64)
+            # Glass icon container
+            icon_label.setStyleSheet("""
+                background: rgba(255, 255, 255, 15);
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 16px;
+            """)
             header_layout.addWidget(icon_label)
 
         title_layout = QVBoxLayout()
@@ -54,11 +142,12 @@ class AboutDialog(QDialog):
         title_font.setPointSize(20)
         title_font.setBold(True)
         app_title.setFont(title_font)
+        app_title.setStyleSheet("color: #F4F4F8;")
         title_layout.addWidget(app_title)
 
         version = getattr(self.settings, "VERSION", "unknown")
         version_label = QLabel(f"Version {version}")
-        version_label.setStyleSheet("color: #666;")
+        version_label.setStyleSheet("color: rgba(255, 255, 255, 150); font-size: 13px;")
         title_layout.addWidget(version_label)
 
         header_layout.addLayout(title_layout)
@@ -68,7 +157,8 @@ class AboutDialog(QDialog):
         # Separator
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
+        separator.setFrameShadow(QFrame.Plain)
+        separator.setStyleSheet("background: rgba(255, 255, 255, 20); max-height: 1px; border: none;")
         main_layout.addWidget(separator)
 
         # Tab widget
@@ -88,6 +178,7 @@ class AboutDialog(QDialog):
     def create_about_tab(self):
         """Create the About tab with project description and links."""
         about_widget = QWidget()
+        about_widget.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(about_widget)
         layout.setSpacing(15)
 
@@ -97,6 +188,7 @@ class AboutDialog(QDialog):
             "Built with Python and PySide6, powered by yt-dlp."
         )
         desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("color: rgba(255, 255, 255, 180); font-size: 13px; line-height: 1.6;")
         layout.addWidget(desc_label)
 
         # Features
@@ -110,30 +202,30 @@ class AboutDialog(QDialog):
             "Cross-platform support (Windows, macOS, Linux)",
             "Built-in update management",
         ]
-        # A single multi-line label is far cheaper than one QLabel per row
-        # (fewer widgets to lay out, style, and repaint) and is functionally
-        # identical for static, non-interactive text like this.
         features_label = QLabel("\n".join(f"• {f}" for f in features))
         features_label.setWordWrap(True)
+        features_label.setStyleSheet("color: rgba(255, 255, 255, 160); font-size: 12px;")
         features_layout.addWidget(features_label)
         layout.addWidget(features_group)
 
         # Links
         links_group = QGroupBox("Links")
         links_layout = QGridLayout(links_group)
-        github_link = QLabel('<a href="https://github.com/ErfanNamira/ytget-gui">GitHub Repository</a>')
+        link_style = "color: #00E5FF; text-decoration: none;"
+        
+        github_link = QLabel(f'<a href="https://github.com/ErfanNamira/ytget-gui" style="color: #00E5FF;">GitHub Repository</a>')
         github_link.setOpenExternalLinks(True)
         github_link.setTextFormat(Qt.RichText)
         links_layout.addWidget(QLabel("Source Code:"), 0, 0)
         links_layout.addWidget(github_link, 0, 1)
 
-        issue_link = QLabel('<a href="https://github.com/ErfanNamira/ytget-gui/issues">Report an Issue</a>')
+        issue_link = QLabel(f'<a href="https://github.com/ErfanNamira/ytget-gui/issues" style="color: #00E5FF;">Report an Issue</a>')
         issue_link.setOpenExternalLinks(True)
         issue_link.setTextFormat(Qt.RichText)
         links_layout.addWidget(QLabel("Report Issue:"), 1, 0)
         links_layout.addWidget(issue_link, 1, 1)
 
-        docs_link = QLabel('<a href="https://github.com/ErfanNamira/ytget-gui#readme">Documentation</a>')
+        docs_link = QLabel(f'<a href="https://github.com/ErfanNamira/ytget-gui#readme" style="color: #00E5FF;">Documentation</a>')
         docs_link.setOpenExternalLinks(True)
         docs_link.setTextFormat(Qt.RichText)
         links_layout.addWidget(QLabel("Documentation:"), 2, 0)
@@ -143,11 +235,14 @@ class AboutDialog(QDialog):
 
         # Credits
         credits_label = QLabel(
-            "<b>Credits:</b><br>"
+            "<b style='color: #F4F4F8;'>Credits:</b><br>"
+            "<span style='color: rgba(255,255,255,160);'>"
             "• yt-dlp - YouTube downloader engine<br>"
             "• PySide6 - Qt for Python framework"
+            "</span>"
         )
         credits_label.setWordWrap(True)
+        credits_label.setTextFormat(Qt.RichText)
         layout.addWidget(credits_label)
 
         layout.addStretch()
@@ -156,6 +251,7 @@ class AboutDialog(QDialog):
     def create_license_tab(self):
         """Create the License tab."""
         license_widget = QWidget()
+        license_widget.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(license_widget)
         license_text = QTextBrowser()
         license_text.setPlainText(self.get_license_text())
