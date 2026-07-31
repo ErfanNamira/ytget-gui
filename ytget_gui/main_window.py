@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QLabel,
     QProgressBar,
+    QGraphicsDropShadowEffect,
 )
 
 from ytget_gui.settings import AppSettings
@@ -68,29 +69,40 @@ def short(text: str, n: int = 50) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  THEME — Obsidian Steel: deep blacks, electric cyan accents, sharp geometry
+#  THEME — Glassmorphism: frosted glass panels over deep space gradient
+# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+#  THEME — Glassmorphism: frosted glass panels over deep space gradient
 # ─────────────────────────────────────────────────────────────────────────────
 QSS_THEME = """
-/* ── Root ── */
+/* ── Root: deep space gradient backdrop (matches Advanced dialog) ── */
 QMainWindow {
-    background: #1B1D24;
-    color: #E4E4E7;
-    font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #0a0e1a,
+        stop:0.3 #15102e,
+        stop:0.6 #1e1b4b,
+        stop:1 #0c1733);
+    color: #F4F4F8;
+    font-family: "Inter", "SF Pro Display", "Segoe UI", sans-serif;
     font-size: 13px;
 }
 
-/* ── Top Bar ── */
+/* Central widget must be transparent so the gradient shows through */
+#CentralWidget {
+    background: transparent;
+}
+
+/* ── Top Bar — transparent to show gradient ── */
 #TopBar {
-    background: #202329;
-    border-bottom: 1px solid #2A2D36;
+    background: transparent;
+    border-bottom: 1px solid rgba(255, 255, 255, 20);
 }
 
 /* ── Brand ── */
 #Brand {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
-    font-size: 17px;
-    font-weight: 700;
-    letter-spacing: 1px;
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
     color: #00E5FF;
 }
 
@@ -101,163 +113,216 @@ QMainWindow {
 }
 
 #VersionChip {
-    background: #262930;
-    border: 1px solid #363A45;
-    color: #52525B;
+    background: rgba(255, 255, 255, 25);
+    border: 1px solid rgba(255, 255, 255, 40);
+    color: rgba(255, 255, 255, 180);
     font-size: 10px;
-    font-family: "JetBrains Mono", monospace;
-    border-radius: 4px;
-    padding: 2px 7px;
+    border-radius: 6px;
+    padding: 2px 8px;
 }
 
-/* ── URL Input Area ── */
+/* ── URL Input Area — glass ── */
 #UrlWrap {
-    background: #1C1F25;
-    border: 1px solid #33363F;
-    border-radius: 6px;
+    background: rgba(255, 255, 255, 15);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 10px;
+}
+#UrlWrap:hover {
+    background: rgba(255, 255, 255, 20);
+    border: 1px solid rgba(255, 255, 255, 50);
 }
 #UrlWrap:focus-within {
-    border-color: #00E5FF;
-    background: #182024;
+    border: 1px solid rgba(0, 229, 255, 150);
+    background: rgba(0, 229, 255, 15);
 }
 #UrlWrap QLineEdit {
     background: transparent;
     border: none;
-    color: #E4E4E7;
-    font-family: "JetBrains Mono", monospace;
+    color: #F4F4F8;
+    font-family: "Inter", "Segoe UI", sans-serif;
     font-size: 13px;
     padding: 9px 12px;
     selection-background-color: #00E5FF;
-    selection-color: #1B1D24;
+    selection-color: #0a0e1a;
 }
 
-/* ── Format Combo ── */
+/* ── Format Combo — glass ── */
 #FormatBox {
-    background: #22252C;
-    border: 1px solid #33363F;
-    border-radius: 6px;
-    color: #A1A1AA;
-    font-family: "JetBrains Mono", monospace;
+    background: rgba(255, 255, 255, 15);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 200);
     font-size: 12px;
-    padding: 7px 10px;
+    padding: 7px 12px;
     min-width: 130px;
 }
-#FormatBox:hover { border-color: #3F3F46; }
+#FormatBox:hover {
+    background: rgba(255, 255, 255, 25);
+    border: 1px solid rgba(255, 255, 255, 50);
+}
+#FormatBox::drop-down {
+    border: none;
+    width: 22px;
+}
+#FormatBox::down-arrow {
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid rgba(255, 255, 255, 150);
+    margin-right: 8px;
+}
 #FormatBox QAbstractItemView {
-    background: #22252C;
-    border: 1px solid #33363F;
-    color: #E4E4E7;
-    selection-background-color: #00E5FF22;
-    selection-color: #00E5FF;
+    background: rgba(20, 20, 40, 240);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
+    color: #F4F4F8;
+    selection-background-color: rgba(0, 229, 255, 80);
+    selection-color: #ffffff;
+    padding: 4px;
+    outline: none;
 }
 
 /* ── Generic Buttons ── */
 QPushButton {
-    font-family: "JetBrains Mono", monospace;
+    font-family: "Inter", "Segoe UI", sans-serif;
     font-size: 12px;
 }
 
 #BtnAdd {
-    background: #00E5FF;
-    color: #1B1D24;
-    border: none;
-    border-radius: 6px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #00E5FF, stop:1 #00B8FF);
+    color: #0a0e1a;
+    border: 1px solid rgba(0, 229, 255, 100);
+    border-radius: 8px;
     padding: 8px 18px;
     font-weight: 700;
     font-size: 12px;
     letter-spacing: 0.5px;
 }
-#BtnAdd:hover { background: #33EEFF; }
-#BtnAdd:disabled { background: #2A3E43; color: #4A6570; }
+#BtnAdd:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #33EEFF, stop:1 #33CCFF);
+}
+#BtnAdd:disabled {
+    background: rgba(255, 255, 255, 10);
+    color: rgba(255, 255, 255, 80);
+    border: 1px solid rgba(255, 255, 255, 20);
+}
 
 #BtnPaste {
-    background: #262930;
-    color: #71717A;
-    border: 1px solid #33363F;
-    border-radius: 6px;
+    background: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 180);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
     padding: 8px 14px;
 }
-#BtnPaste:hover { color: #E4E4E7; border-color: #3F3F46; }
+#BtnPaste:hover {
+    background: rgba(255, 255, 255, 25);
+    color: #F4F4F8;
+    border: 1px solid rgba(255, 255, 255, 50);
+}
 
 #BtnClear {
     background: transparent;
-    color: #3F3F46;
+    color: rgba(255, 255, 255, 100);
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 6px 10px;
     font-size: 14px;
 }
-#BtnClear:hover { color: #71717A; }
+#BtnClear:hover {
+    color: rgba(255, 255, 255, 200);
+    background: rgba(255, 255, 255, 15);
+}
 
 #BtnTopbar {
-    background: #22252C;
-    color: #71717A;
-    border: 1px solid #33363F;
-    border-radius: 6px;
+    background: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 180);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
     padding: 7px 13px;
 }
-#BtnTopbar:hover { color: #E4E4E7; border-color: #3F3F46; background: #282B33; }
+#BtnTopbar:hover {
+    color: #F4F4F8;
+    border: 1px solid rgba(255, 255, 255, 50);
+    background: rgba(255, 255, 255, 25);
+}
 
 /* ── Splitter ── */
 QSplitter::handle {
-    background: #2A2D36;
+    background: rgba(255, 255, 255, 15);
     width: 1px;
 }
+QSplitter::handle:hover {
+    background: rgba(0, 229, 255, 100);
+}
 
-/* ── Queue Pane ── */
+/* ── Queue Pane — transparent to show gradient ── */
 #QueuePane {
-    background: #1B1E24;
-    border-right: 1px solid #2A2D36;
+    background: transparent;
+    border-right: 1px solid rgba(255, 255, 255, 20);
 }
 
 #QueueHeader {
-    background: #1B1E24;
-    border-bottom: 1px solid #262930;
+    background: transparent;
+    border-bottom: 1px solid rgba(255, 255, 255, 15);
 }
 
 #PaneLabel {
-    font-family: "JetBrains Mono", monospace;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 2px;
-    color: #3F3F46;
+    color: rgba(255, 255, 255, 120);
 }
 
 #CountBadge {
-    background: #00E5FF18;
+    background: rgba(0, 229, 255, 30);
     color: #00E5FF;
-    border: 1px solid #00E5FF33;
-    border-radius: 3px;
+    border: 1px solid rgba(0, 229, 255, 60);
+    border-radius: 6px;
     font-size: 10px;
-    font-family: "JetBrains Mono", monospace;
-    padding: 1px 6px;
+    padding: 1px 7px;
 }
 
 #SearchBox {
-    background: #21242B;
-    border: 1px solid #2A2D36;
-    border-radius: 5px;
-    color: #A1A1AA;
-    font-family: "JetBrains Mono", monospace;
+    background: rgba(255, 255, 255, 15);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 200);
     font-size: 12px;
     padding: 6px 10px;
 }
-#SearchBox:focus { border-color: #363A45; color: #E4E4E7; }
+#SearchBox:focus {
+    border: 1px solid rgba(0, 229, 255, 120);
+    background: rgba(0, 229, 255, 10);
+    color: #F4F4F8;
+}
 
 #SortBox {
-    background: #21242B;
-    border: 1px solid #2A2D36;
-    border-radius: 5px;
-    color: #52525B;
-    font-family: "JetBrains Mono", monospace;
+    background: rgba(255, 255, 255, 15);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 150);
     font-size: 11px;
     padding: 5px 8px;
 }
+#SortBox::drop-down { border: none; width: 18px; }
+#SortBox::down-arrow {
+    width: 0; height: 0;
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-top: 4px solid rgba(255, 255, 255, 120);
+    margin-right: 6px;
+}
 #SortBox QAbstractItemView {
-    background: #22252C;
-    border: 1px solid #33363F;
-    color: #E4E4E7;
-    selection-background-color: #00E5FF22;
+    background: rgba(20, 20, 40, 240);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
+    color: #F4F4F8;
+    selection-background-color: rgba(0, 229, 255, 80);
+    padding: 4px;
+    outline: none;
 }
 
 /* ── Queue List ── */
@@ -269,242 +334,409 @@ QSplitter::handle {
     background: transparent;
     border: none;
     padding: 0px;
+    border-radius: 12px;
+}
+#QueueList::item:selected {
+    background: rgba(0, 229, 255, 20);
+    border-radius: 12px;
 }
 
 /* ── Empty State ── */
 #EmptyState {
-    color: #33363F;
+    color: rgba(255, 255, 255, 80);
     background: transparent;
-    font-family: "JetBrains Mono", monospace;
     font-size: 12px;
 }
 
-/* ── Bulk Bar ── */
+/* ── Bulk Bar — glass ── */
 #BulkBar {
-    background: #1D2226;
-    border-top: 1px solid #253540;
+    background: rgba(0, 229, 255, 15);
+    border-top: 1px solid rgba(0, 229, 255, 40);
 }
 #BulkLabel {
     color: #00E5FF;
     font-size: 11px;
-    font-family: "JetBrains Mono", monospace;
 }
 #BulkBtn {
-    background: transparent;
-    color: #52525B;
-    border: 1px solid #2A2D36;
-    border-radius: 4px;
+    background: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 150);
+    border: 1px solid rgba(255, 255, 255, 25);
+    border-radius: 6px;
     padding: 4px 10px;
     font-size: 11px;
 }
-#BulkBtn:hover { color: #E4E4E7; border-color: #3F3F46; }
+#BulkBtn:hover {
+    color: #F4F4F8;
+    border: 1px solid rgba(255, 255, 255, 50);
+    background: rgba(255, 255, 255, 25);
+}
 
-/* ── Console Pane ── */
+/* ── Console Pane — dark frosted glass (log part) ── */
 #ConsolePane {
-    background: #1B1D24;
+    background: rgba(5, 5, 15, 220);
+    border-left: 1px solid rgba(255, 255, 255, 20);
 }
 
 #ConsolePaneLabel {
-    font-family: "JetBrains Mono", monospace;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 2px;
-    color: #3F3F46;
+    color: rgba(255, 255, 255, 120);
 }
 
 #FilterBox {
-    background: #21242B;
-    border: 1px solid #2A2D36;
-    border-radius: 5px;
-    color: #52525B;
-    font-family: "JetBrains Mono", monospace;
+    background: rgba(255, 255, 255, 15);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 150);
     font-size: 11px;
     padding: 5px 8px;
     min-width: 80px;
 }
+#FilterBox::drop-down { border: none; width: 18px; }
+#FilterBox::down-arrow {
+    width: 0; height: 0;
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-top: 4px solid rgba(255, 255, 255, 120);
+    margin-right: 6px;
+}
 #FilterBox QAbstractItemView {
-    background: #22252C;
-    border: 1px solid #33363F;
-    color: #E4E4E7;
-    selection-background-color: #00E5FF22;
+    background: rgba(20, 20, 40, 240);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
+    color: #F4F4F8;
+    selection-background-color: rgba(0, 229, 255, 80);
+    padding: 4px;
+    outline: none;
 }
 
 #ConsoleTool {
-    background: transparent;
-    color: #3F3F46;
-    border: 1px solid #2A2D36;
-    border-radius: 4px;
+    background: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 120);
+    border: 1px solid rgba(255, 255, 255, 25);
+    border-radius: 6px;
     padding: 4px 10px;
     font-size: 11px;
 }
-#ConsoleTool:hover { color: #71717A; border-color: #33363F; }
+#ConsoleTool:hover {
+    color: rgba(255, 255, 255, 200);
+    border: 1px solid rgba(255, 255, 255, 45);
+    background: rgba(255, 255, 255, 25);
+}
 
 #Console {
-    background: #16181E;
-    color: #71717A;
+    background: transparent;
+    color: rgba(255, 255, 255, 160);
     border: none;
-    border-top: 1px solid #21242B;
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    border-top: 1px solid rgba(255, 255, 255, 15);
+    font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
     font-size: 12px;
-    padding: 12px;
+    padding: 14px;
     line-height: 1.7;
 }
 
-/* ── Bottom Bar ── */
+/* ── Bottom Bar — transparent to show gradient ── */
 #BottomBar {
-    background: #1B1E24;
-    border-top: 1px solid #262930;
+    background: transparent;
+    border-top: 1px solid rgba(255, 255, 255, 20);
 }
 
 #BtnStart {
-    background: #00E5FF;
-    color: #1B1D24;
-    border: none;
-    border-radius: 6px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #00E5FF, stop:1 #00B8FF);
+    color: #0a0e1a;
+    border: 1px solid rgba(0, 229, 255, 100);
+    border-radius: 8px;
     padding: 9px 22px;
     font-weight: 700;
     font-size: 13px;
     letter-spacing: 0.5px;
     min-width: 90px;
 }
-#BtnStart:hover { background: #33EEFF; }
-#BtnStart:disabled { background: #1C3238; color: #2A5560; }
+#BtnStart:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #33EEFF, stop:1 #33CCFF);
+}
+#BtnStart:disabled {
+    background: rgba(255, 255, 255, 10);
+    color: rgba(255, 255, 255, 60);
+    border: 1px solid rgba(255, 255, 255, 15);
+}
 
 #BtnPause {
-    background: #262930;
-    color: #52525B;
-    border: 1px solid #33363F;
-    border-radius: 6px;
+    background: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 120);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
     padding: 9px 18px;
     font-size: 12px;
 }
-#BtnPause:enabled { color: #A1A1AA; border-color: #3F3F46; }
-#BtnPause:hover:enabled { color: #E4E4E7; background: #2E3139; }
-#BtnPause:disabled { color: #33363F; border-color: #262930; }
+#BtnPause:enabled {
+    color: rgba(255, 255, 255, 200);
+    border: 1px solid rgba(255, 255, 255, 45);
+}
+#BtnPause:hover:enabled {
+    color: #F4F4F8;
+    background: rgba(255, 255, 255, 25);
+    border: 1px solid rgba(255, 255, 255, 60);
+}
+#BtnPause:disabled {
+    color: rgba(255, 255, 255, 50);
+    border: 1px solid rgba(255, 255, 255, 15);
+}
 
 #BtnSkip {
-    background: transparent;
-    color: #3F3F46;
-    border: 1px solid #2A2D36;
-    border-radius: 6px;
+    background: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 100);
+    border: 1px solid rgba(255, 255, 255, 25);
+    border-radius: 8px;
     padding: 9px 14px;
     font-size: 12px;
 }
-#BtnSkip:enabled { color: #71717A; border-color: #33363F; }
-#BtnSkip:hover:enabled { color: #E4E4E7; border-color: #3F3F46; }
-#BtnSkip:disabled { color: #2A2D36; }
+#BtnSkip:enabled {
+    color: rgba(255, 255, 255, 180);
+    border: 1px solid rgba(255, 255, 255, 45);
+}
+#BtnSkip:hover:enabled {
+    color: #F4F4F8;
+    border: 1px solid rgba(255, 255, 255, 60);
+    background: rgba(255, 255, 255, 25);
+}
+#BtnSkip:disabled {
+    color: rgba(255, 255, 255, 40);
+    border: 1px solid rgba(255, 255, 255, 15);
+}
 
 #BtnStop {
-    background: transparent;
-    color: #3F3F46;
-    border: 1px solid #2A2D36;
-    border-radius: 6px;
+    background: rgba(248, 113, 113, 15);
+    color: rgba(248, 113, 113, 120);
+    border: 1px solid rgba(248, 113, 113, 30);
+    border-radius: 8px;
     padding: 9px 14px;
     font-size: 12px;
 }
-#BtnStop:enabled { color: #F87171; border-color: #4A2A2E; }
-#BtnStop:hover:enabled { color: #FECACA; background: #3A1F22; border-color: #7A3238; }
-#BtnStop:disabled { color: #2A2D36; }
+#BtnStop:enabled {
+    color: #F87171;
+    border: 1px solid rgba(248, 113, 113, 50);
+}
+#BtnStop:hover:enabled {
+    color: #FECACA;
+    background: rgba(248, 113, 113, 30);
+    border: 1px solid rgba(248, 113, 113, 80);
+}
+#BtnStop:disabled {
+    color: rgba(255, 255, 255, 40);
+    border: 1px solid rgba(255, 255, 255, 15);
+    background: rgba(255, 255, 255, 10);
+}
 
 /* ── Progress Bar ── */
 #GlobalProgress {
-    background: #21242B;
+    background: rgba(255, 255, 255, 15);
     border: none;
     border-radius: 2px;
     max-height: 3px;
 }
 #GlobalProgress::chunk {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #00E5FF, stop:1 #00BFFF);
+        stop:0 #00E5FF, stop:0.5 #7C4DFF, stop:1 #00B8FF);
     border-radius: 2px;
 }
 
 /* ── Post Action / Path ── */
 #PostActionBox {
-    background: #21242B;
-    border: 1px solid #2A2D36;
-    border-radius: 5px;
-    color: #52525B;
-    font-family: "JetBrains Mono", monospace;
+    background: rgba(255, 255, 255, 15);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 150);
     font-size: 11px;
     padding: 5px 8px;
     min-width: 95px;
 }
+#PostActionBox::drop-down { border: none; width: 18px; }
+#PostActionBox::down-arrow {
+    width: 0; height: 0;
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-top: 4px solid rgba(255, 255, 255, 120);
+    margin-right: 6px;
+}
 #PostActionBox QAbstractItemView {
-    background: #22252C;
-    border: 1px solid #33363F;
-    color: #E4E4E7;
-    selection-background-color: #00E5FF22;
+    background: rgba(20, 20, 40, 240);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
+    color: #F4F4F8;
+    selection-background-color: rgba(0, 229, 255, 80);
+    padding: 4px;
+    outline: none;
 }
 #AfterLabel {
-    color: #3F3F46;
+    color: rgba(255, 255, 255, 120);
     font-size: 11px;
-    font-family: "JetBrains Mono", monospace;
 }
 #PathBtn {
-    background: transparent;
-    color: #3F3F46;
-    border: 1px solid #2A2D36;
-    border-radius: 5px;
+    background: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 120);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
     padding: 5px 10px;
     font-size: 11px;
-    font-family: "JetBrains Mono", monospace;
     max-width: 260px;
 }
-#PathBtn:hover { color: #71717A; border-color: #33363F; }
+#PathBtn:hover {
+    color: rgba(255, 255, 255, 200);
+    border: 1px solid rgba(255, 255, 255, 50);
+    background: rgba(255, 255, 255, 25);
+}
 
 /* ── Scrollbars ── */
 QScrollBar:vertical {
     background: transparent;
-    width: 6px;
+    width: 8px;
     margin: 0;
     border: none;
 }
 QScrollBar::handle:vertical {
-    background: #2A2D36;
-    border-radius: 3px;
+    background: rgba(255, 255, 255, 40);
+    border-radius: 4px;
     min-height: 24px;
 }
-QScrollBar::handle:vertical:hover { background: #33363F; }
+QScrollBar::handle:vertical:hover {
+    background: rgba(255, 255, 255, 70);
+}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+
 QScrollBar:horizontal {
     background: transparent;
-    height: 6px;
+    height: 8px;
     margin: 0;
     border: none;
 }
 QScrollBar::handle:horizontal {
-    background: #2A2D36;
-    border-radius: 3px;
+    background: rgba(255, 255, 255, 40);
+    border-radius: 4px;
     min-width: 24px;
 }
+QScrollBar::handle:horizontal:hover {
+    background: rgba(255, 255, 255, 70);
+}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 
-/* ── Menu Bar ── */
+/* ── Menu Bar — frosted glass ── */
 QMenuBar {
-    background: #1B1D24;
-    color: #52525B;
-    font-family: "JetBrains Mono", monospace;
+    background: transparent;
+    color: rgba(255, 255, 255, 150);
+    font-family: "Inter", "Segoe UI", sans-serif;
     font-size: 12px;
-    border-bottom: 1px solid #21242B;
+    border-bottom: 1px solid rgba(255, 255, 255, 20);
     padding: 2px 4px;
 }
 QMenuBar::item:selected {
-    background: #22252C;
-    color: #E4E4E7;
-    border-radius: 4px;
+    background: rgba(255, 255, 255, 25);
+    color: #F4F4F8;
+    border-radius: 6px;
 }
 QMenu {
-    background: #21242B;
-    border: 1px solid #2A2D36;
-    color: #A1A1AA;
-    font-family: "JetBrains Mono", monospace;
+    background: rgba(20, 20, 40, 240);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 10px;
+    color: rgba(255, 255, 255, 200);
+    font-family: "Inter", "Segoe UI", sans-serif;
     font-size: 12px;
-    padding: 4px;
+    padding: 6px;
 }
-QMenu::item { padding: 6px 20px 6px 12px; border-radius: 4px; }
-QMenu::item:selected { background: #262930; color: #E4E4E7; }
-QMenu::separator { height: 1px; background: #2A2D36; margin: 4px 8px; }
+QMenu::item {
+    padding: 6px 24px 6px 14px;
+    border-radius: 6px;
+}
+QMenu::item:selected {
+    background: rgba(0, 229, 255, 40);
+    color: #F4F4F8;
+}
+QMenu::separator {
+    height: 1px;
+    background: rgba(255, 255, 255, 20);
+    margin: 4px 8px;
+}
+
+/* ── Queue Card — glass ── */
+QFrame#QueueCard {
+    background: rgba(255, 255, 255, 18);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 12px;
+}
+QFrame#QueueCard[elevated="true"] {
+    background: rgba(255, 255, 255, 30);
+    border: 1px solid rgba(255, 255, 255, 50);
+}
+QFrame#QueueCard #DragHandle {
+    color: rgba(255, 255, 255, 60);
+    font-size: 14px;
+}
+QFrame#QueueCard #Thumb {
+    background: rgba(0, 0, 0, 100);
+    border: 1px solid rgba(255, 255, 255, 20);
+    border-radius: 8px;
+}
+QFrame#QueueCard #CardTitle {
+    color: #F4F4F8;
+    font-size: 13px;
+    font-weight: 600;
+}
+QFrame#QueueCard #CardMeta {
+    color: rgba(255, 255, 255, 120);
+    font-size: 11px;
+}
+QFrame#QueueCard #StatusChip {
+    border-radius: 6px;
+    padding: 1px 8px;
+    font-size: 10px;
+    font-weight: 600;
+}
+QFrame#QueueCard #Progress {
+    background: rgba(255, 255, 255, 20);
+    border: none;
+    border-radius: 3px;
+}
+QFrame#QueueCard #Progress::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #00E5FF, stop:1 #7C4DFF);
+    border-radius: 3px;
+}
+QFrame#QueueCard #Percent {
+    color: rgba(255, 255, 255, 150);
+    font-size: 10px;
+}
+QFrame#QueueCard #IconBtn {
+    background: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 120);
+    border: 1px solid rgba(255, 255, 255, 25);
+    border-radius: 6px;
+    font-size: 11px;
+}
+QFrame#QueueCard #IconBtn:hover {
+    background: rgba(255, 255, 255, 25);
+    color: #F4F4F8;
+}
+
+/* ── Tooltip ── */
+QToolTip {
+    background: rgba(20, 20, 40, 240);
+    color: #F4F4F8;
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 11px;
+}
+
+/* ── Drop active state ── */
+#QueuePane[dropActive="true"] {
+    background: rgba(0, 229, 255, 30);
+    border-right: 2px solid rgba(0, 229, 255, 120);
+}
 """
 
 MAX_LOG_LINES = 200
@@ -620,9 +852,7 @@ class MainWindow(QMainWindow):
             final_content = s.replace("🚀", "").strip()
             final_text = f"{prefix}{final_content}".strip()
             final_color = color if color else AppStyles.INFO_COLOR
-            # Normalize level to Title-case so filter items ("Warning", "Error") match exactly
             _level_norm = str(level).strip().capitalize() if level else "Info"
-            # Map known aliases
             _level_map = {"Success": "Info", "Process": "Info", "Warn": "Warning"}
             final_level = _level_map.get(_level_norm, _level_norm)
             if not hasattr(self, "_log_entries"):
@@ -634,10 +864,6 @@ class MainWindow(QMainWindow):
             filt_text = self.filter_combo.currentText() if hasattr(self, "filter_combo") else "All"
             if filt_text == "All" or filt_text == final_level:
                 self._append_to_console(final_text, final_color)
-            # else: line doesn't match the active filter, so it's already
-            # stored in _log_entries and will show up next time the filter
-            # changes (see filter_combo.currentTextChanged -> _render_log).
-            # No need to rebuild the whole console for every filtered-out line.
 
     def _render_log(self):
         try:
@@ -688,12 +914,13 @@ class MainWindow(QMainWindow):
         self.resize(1280, 820)
         self.setMinimumSize(900, 600)
 
-        # Font stack — monospace
-        f = QFont("JetBrains Mono", 10)
+        # Font — modern sans-serif for glassmorphism
+        f = QFont("Inter", 10)
         self.setFont(f)
         self.setStyleSheet(QSS_THEME)
 
         central = QWidget()
+        central.setObjectName("CentralWidget")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
@@ -736,6 +963,15 @@ class MainWindow(QMainWindow):
 
         self.setAcceptDrops(True)
 
+    # ── Helper: add glass shadow to a widget ────────────────────────────────
+    @staticmethod
+    def _add_glass_shadow(widget: QWidget, blur: int = 20, alpha: int = 80, y: int = 4) -> None:
+        eff = QGraphicsDropShadowEffect(widget)
+        eff.setBlurRadius(blur)
+        eff.setColor(QColor(0, 0, 0, alpha))
+        eff.setOffset(0, y)
+        widget.setGraphicsEffect(eff)
+
     # ── Top Bar ─────────────────────────────────────────────────────────────
     def _build_top_bar(self) -> QWidget:
         bar = QFrame()
@@ -767,7 +1003,7 @@ class MainWindow(QMainWindow):
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color: #2A2D36;")
+        sep.setStyleSheet("color: rgba(255, 255, 255, 30);")
         sep.setFixedHeight(24)
         lay.addWidget(sep)
 
@@ -952,7 +1188,7 @@ class MainWindow(QMainWindow):
 
         # Console toolbar
         toolbar = QFrame()
-        toolbar.setStyleSheet("background:#1B1E24; border-bottom:1px solid #21242B;")
+        toolbar.setStyleSheet("background: transparent; border-bottom: 1px solid rgba(255, 255, 255, 15);")
         toolbar.setFixedHeight(42)
         t_lay = QHBoxLayout(toolbar)
         t_lay.setContentsMargins(16, 0, 12, 0)
@@ -987,9 +1223,10 @@ class MainWindow(QMainWindow):
         self.log_output.setUndoRedoEnabled(False)
         self.log_output.document().setMaximumBlockCount(max(1, getattr(self.settings, "MAX_LOG_LINES", MAX_LOG_LINES)))
         self.log_output.setStyleSheet(
-            "QTextEdit#Console { background:#16181E; color:#52525B; "
-            "border:none; font-family:'JetBrains Mono','Fira Code',monospace; "
-            "font-size:12px; padding:16px; }"
+            "QTextEdit#Console { background: rgba(5, 5, 15, 200); color: rgba(255, 255, 255, 160); "
+            "border: none; border-top: 1px solid rgba(255, 255, 255, 15); "
+            "font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; "
+            "font-size: 12px; padding: 16px; }"
         )
         v.addWidget(self.log_output, 1)
 
@@ -1199,6 +1436,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+            # Add glass shadow to the card
+            self._add_glass_shadow(card, blur=16, alpha=60, y=2)
+
             def _open_in_browser():
                 webbrowser.open(url)
 
@@ -1275,9 +1515,6 @@ class MainWindow(QMainWindow):
         current_label = self.format_box.currentText()
         chosen_format = self.settings.RESOLUTIONS.get(current_label, "best")
 
-        # Check queue DATA membership separately from visual list-item presence.
-        # _add_to_queue pre-creates a placeholder card (so list_item is found),
-        # but does NOT add to self.queue yet — that always happens here on metadata arrival.
         already_in_queue = any(q.get("url") == key for q in self.queue)
 
         if not already_in_queue:
@@ -1294,7 +1531,6 @@ class MainWindow(QMainWindow):
                     "is_playlist": bool(is_playlist),
                 }
                 self.queue.append(qitem)
-                # Only add a new visual card if no placeholder already exists in the list
                 if list_item is None:
                     self._add_queue_card_to_list(url=key, title=title, video_id=video_id, show_thumbnail=True)
                 try:
@@ -1317,7 +1553,6 @@ class MainWindow(QMainWindow):
                 if isinstance(data, dict):
                     data.update({"title": title, "video_id": video_id, "thumbnail_url": thumb_url})
                     list_item.setData(Qt.UserRole, data)
-                    # Also update the card widget's displayed title
                     widget = self.queue_list.itemWidget(list_item)
                     if widget and hasattr(widget, "set_title"):
                         try:
@@ -1331,13 +1566,6 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # NOTE: previously this unconditionally called self._refresh_queue_list(),
-        # which clears and rebuilds every QListWidgetItem/QueueCard from scratch.
-        # Since metadata for a playlist arrives one URL at a time, that made
-        # bulk enqueues O(n^2) in both CPU time and widget allocations (n
-        # rebuilds of up to n widgets each). The block above already performs
-        # the equivalent incremental update in place, so just keep the
-        # visible list count/filter state in sync instead of rebuilding.
         try:
             self.count_chip.setText(str(self.queue_list.count()))
             self.queue_empty_state.setVisible(self.queue_list.count() == 0)
@@ -1574,12 +1802,6 @@ class MainWindow(QMainWindow):
         if not self.is_downloading:
             self.log("ℹ️ Queue is not running.\n", AppStyles.INFO_COLOR, "Info")
             return
-        # Only stop the queue from advancing to the next item. Do NOT cancel
-        # the worker here — that kills the in-progress yt-dlp/ffmpeg process
-        # and throws away the current item's progress. The active download
-        # is left running; _on_download_finished() already checks
-        # `queue_paused` and will refrain from starting the next item once
-        # this one completes.
         self.queue_paused = True
         self.log("⏸️ Queue paused. Current download will keep running and the next item will wait.\n", AppStyles.INFO_COLOR, "Info")
         self._update_button_states()
@@ -1590,11 +1812,6 @@ class MainWindow(QMainWindow):
             self.download_worker.cancel()
 
     def _stop_all(self):
-        """Hard-stop the active download: kill its yt-dlp/ffmpeg process tree
-        immediately and pause the queue so nothing else starts. Unlike Pause,
-        the current item is actually killed rather than left running. Unlike
-        clearing the queue, every other queued item is left untouched so the
-        user can resume later with Start."""
         if not self.is_downloading and not self.queue_paused:
             self.log("ℹ️ Nothing to stop.\n", AppStyles.INFO_COLOR, "Info")
             return
@@ -1661,13 +1878,11 @@ class MainWindow(QMainWindow):
             return
         self.current_download_item["status"] = status
         self._save_queue_permanent()
-        # Find the card for the *currently downloading* URL, not index 0
         target_url = self.current_download_item.get("url", "")
         for i in range(self.queue_list.count()):
             lw_item = self.queue_list.item(i)
             data = lw_item.data(Qt.UserRole) or {}
             if data.get("url") == target_url:
-                # Keep UserRole in sync too
                 data["status"] = status
                 lw_item.setData(Qt.UserRole, data)
                 w = self.queue_list.itemWidget(lw_item)
@@ -1687,10 +1902,6 @@ class MainWindow(QMainWindow):
         self.current_download_item = None
 
         if self._stop_all_requested:
-            # Hard stop: the cancelled item stays in the queue (marked
-            # Error) so the user can retry/resume it later with Start --
-            # we only kill the active process and pause the queue, we
-            # don't touch the rest of it.
             self._stop_all_requested = False
             self._refresh_queue_list()
             self._update_button_states()
@@ -1722,21 +1933,14 @@ class MainWindow(QMainWindow):
                 on_finished=lambda action=self.post_queue_action: self.post_queue_action_signal.emit(action)
             )
             if not started:
-                # Cover cropping already running (unlikely here); still perform the post-queue action.
                 self.post_queue_action_signal.emit(self.post_queue_action)
         else:
             self.post_queue_action_signal.emit(self.post_queue_action)
 
     def _run_cover_crop_manual(self):
-        """Manually trigger the cover-crop worker from the Tools menu, e.g. to
-        clean up covers after a queue that finished with errors or was never
-        completed."""
         self._start_cover_crop_worker()
 
     def _start_cover_crop_worker(self, on_finished=None) -> bool:
-        """Starts the CoverCropWorker on a background thread against the
-        current downloads directory. Returns False (without starting a new
-        run) if a cover-crop pass is already in progress, otherwise True."""
         if self._cover_crop_running:
             self.log("ℹ️ Cover cropping is already running.\n", AppStyles.INFO_COLOR, "Info")
             return False
@@ -1761,11 +1965,6 @@ class MainWindow(QMainWindow):
         return True
 
     def _on_cover_crop_thread_finished(self):
-        """Clears our Python-side references once the cover-crop thread has
-        finished, so a stale (or about-to-be C++-deleted) QThread/worker
-        can't be touched by a later run. Runs after the deleteLater calls
-        above have been scheduled, since Qt invokes queued/direct slots
-        connected to the same signal in connection order."""
         self.cover_thread = None
         self.cover_worker = None
         self._cover_crop_running = False
@@ -1820,28 +2019,6 @@ class MainWindow(QMainWindow):
     # ════════════════════════════════════════════════════════════════════════
 
     def _sync_queue_from_visual(self) -> None:
-        """
-        Rebuild self.queue to match the current on-screen order of queue_list.
-
-        Qt performs drag-and-drop reordering directly on the list widget's
-        model. For a single-row drag it emits one rowsMoved signal whose
-        indices line up cleanly with a pop/insert against self.queue, but for
-        a *multi*-row drag it can emit several rowsMoved signals in sequence,
-        each describing an intermediate state of Qt's own model. Replaying
-        those indices against self.queue one at a time (the previous
-        approach) assumes each signal's indices are still valid against our
-        already-mutated self.queue, which isn't guaranteed -- so self.queue's
-        order (and, in edge cases, which rows are considered "in range")
-        drifts away from what's actually shown, and a later action that maps
-        a visual row straight to a self.queue index can raise IndexError.
-
-        Instead of trying to replay every intermediate move, just rebuild
-        self.queue from scratch using the *final* visual order, matching
-        each QListWidgetItem back to its queue dict via the URL stored in
-        that item's Qt.UserRole data (set in _add_queue_card_to_list and
-        kept up to date in _on_metadata_fetched). This is correct regardless
-        of how many rowsMoved signals fired or in what order.
-        """
         pools: Dict[str, "deque[Dict[str, Any]]"] = {}
         for it in self.queue:
             url = it.get("url", "")
@@ -1856,9 +2033,6 @@ class MainWindow(QMainWindow):
             if pool:
                 new_queue.append(pool.popleft())
 
-        # Defensive: if any queue entries weren't represented visually for
-        # some reason, don't silently drop them -- append what's left over
-        # (order among these leftovers is unspecified but no data is lost).
         for pool in pools.values():
             while pool:
                 new_queue.append(pool.popleft())
@@ -1866,16 +2040,10 @@ class MainWindow(QMainWindow):
         self.queue = new_queue
 
     def _on_rows_moved(self, src_parent, src_start, src_end, dst_parent, dst_row):
-        # Resync self.queue directly from the list widget's new visual order
-        # rather than replaying pop/insert against the reported indices --
-        # see _sync_queue_from_visual for why that's needed for multi-row
-        # drags.
         self._sync_queue_from_visual()
 
         needs_refresh = False
 
-        # Don't allow the actively-downloading item to be dragged away from
-        # the top of the queue; if it moved, snap it back to index 0.
         if self.is_downloading and self.current_download_item is not None:
             try:
                 idx = self.queue.index(self.current_download_item)
@@ -1886,9 +2054,6 @@ class MainWindow(QMainWindow):
                 self.queue.insert(0, item)
                 needs_refresh = True
 
-        # If something else now sits at position 0 while a download is
-        # active, reset its progress/status so it doesn't visually inherit
-        # the active download's state.
         if self.is_downloading and self.queue and self.queue[0] is not self.current_download_item:
             item = self.queue[0]
             if item.get("progress") or item.get("status") not in ("Pending", "Completed", "Error"):
@@ -1959,6 +2124,7 @@ class MainWindow(QMainWindow):
             card = None
         if card:
             card.setObjectName("QueueCard")
+            self._add_glass_shadow(card, blur=16, alpha=60, y=2)
             try:
                 card.progress.setVisible(False)
                 card.percent_lbl.setVisible(False)
@@ -2043,9 +2209,6 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
 
     def _bulk_remove_selected(self):
-        # Make sure self.queue matches the visible order before mapping
-        # visual rows to queue indices (defends against any residual
-        # drag-and-drop desync).
         self._sync_queue_from_visual()
         rows = sorted({i.row() for i in self.queue_list.selectedIndexes()}, reverse=True)
         rows = [r for r in rows if 0 <= r < len(self.queue)]
@@ -2079,16 +2242,11 @@ class MainWindow(QMainWindow):
         self._update_global_progress_bar()
 
     def _bulk_move_selected(self, top: bool = False, bottom: bool = False):
-        # Make sure self.queue matches the visible order before mapping
-        # visual rows to queue indices (defends against any residual
-        # drag-and-drop desync). This is what prevented the
-        # "list index out of range" crash on IndexError at self.queue[r].
         self._sync_queue_from_visual()
         rows = sorted({i.row() for i in self.queue_list.selectedIndexes()})
         rows = [r for r in rows if 0 <= r < len(self.queue)]
         if not rows:
             return
-        # While downloading, don't allow moving the actively-downloading item (row 0)
         if self.is_downloading and 0 in rows:
             rows = [r for r in rows if r != 0]
             if not rows:
@@ -2097,8 +2255,6 @@ class MainWindow(QMainWindow):
         for r in reversed(rows):
             self.queue.pop(r)
         if top:
-            # If downloading, items going to position 0 would sit before the active download.
-            # Insert after index 0 (the active item stays at 0).
             if self.is_downloading and self.queue:
                 for i, it in enumerate(items):
                     it["progress"] = 0
