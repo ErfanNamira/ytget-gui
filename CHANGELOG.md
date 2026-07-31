@@ -1,3 +1,5 @@
+### v 2.7.7 **Glassmorphism UI Update**
+- This release introduces a massive visual overhaul of the entire application, transitioning from the opaque "Obsidian Steel" theme to a vibrant Glassmorphism design language. 
 ### v 2.7.6 **Custom CA certificate support**
 - Custom CA certificate support for local MITM/domain-fronting proxies (e.g. MITM-DomainFronting). A new Custom CA certificate field in Preferences → Network lets you point at a self-signed cert (e.g. mycert.crt) so TLS validation keeps working against that specific certificate instead of being disabled outright.
 ### v 2.7.3 **Opus Audio, SpotDL Reliability & UI Refinements**
