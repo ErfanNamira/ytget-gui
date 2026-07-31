@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from platform import system
 
-__version__ = "2.7.6"
+__version__ = "2.7.7"
 
 # --- Windows taskbar icon: set AppUserModelID before QApplication is created ---
 if system() == "Windows":
@@ -25,15 +25,16 @@ from ytget_gui.styles import refresh_styles
 
 def make_dark_palette() -> QPalette:
     """
-    Build a Fusion‐style dark palette covering all common roles.
+    Build a Fusion-style dark palette covering all common roles.
+    Tuned for the glassmorphism theme — deep indigo base with cyan accents.
     """
     pal = QPalette()
 
-    # Core colors
-    dark_bg    = QColor("#242731")   # was #161A22
-    dark_alt   = QColor("#2c303a")   # was #1E242E
-    light_txt  = QColor("#EAEAF2")   
-    highlight  = QColor("#3A77FF")   
+    # Core colors — deep space indigo for the glass backdrop
+    dark_bg    = QColor("#0a0e1a")
+    dark_alt   = QColor("#15102e")
+    light_txt  = QColor("#F4F4F8")
+    highlight  = QColor("#00E5FF")
 
     # Window / widget backgrounds
     pal.setColor(QPalette.Window,         dark_bg)
@@ -50,7 +51,7 @@ def make_dark_palette() -> QPalette:
 
     # Selection
     pal.setColor(QPalette.Highlight,      highlight)
-    pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    pal.setColor(QPalette.HighlightedText, QColor("#0a0e1a"))
 
     return pal
 
@@ -80,7 +81,6 @@ def main():
     # 4) Load the appropriate icon for each platform
     icon_dir = Path(__file__).parent
     if system() == "Darwin":
-        # On macOS, prefer .icns
         icns = icon_dir / "icon.icns"
         if icns.exists():
             app.setWindowIcon(QIcon(str(icns)))
@@ -89,7 +89,6 @@ def main():
             if ico.exists():
                 app.setWindowIcon(QIcon(str(ico)))
     else:
-        # On Windows/Linux, use .ico
         ico = icon_dir / "icon.ico"
         if ico.exists():
             app.setWindowIcon(QIcon(str(ico)))
