@@ -1874,20 +1874,35 @@ class MainWindow(QMainWindow):
         self.download_thread.start()
 
     def _on_download_status(self, status: str):
+        # `status` here is actually the throttled progress text emitted by
+        # DownloadWorker (e.g. "45% ETA 00:12"), not a queue status label
+        # ("Downloading"/"Completed"/...). Overwriting current_download_item
+        # ["status"] with it used to corrupt the status chip and, because
+        # set_progress() was never called anywhere, the progress bar stayed
+        # at 0% for the whole download. Parse the percentage out and drive
+        # the progress bar with it instead, leaving "status" alone.
         if self.current_download_item is None:
             return
-        self.current_download_item["status"] = status
-        self._save_queue_permanent()
+
+        m = re.search(r"(\d{1,3})\s*%", status or "")
+        if not m:
+            return
+        try:
+            pct = max(0, min(100, int(m.group(1))))
+        except ValueError:
+            return
+
+        self.current_download_item["progress"] = pct
         target_url = self.current_download_item.get("url", "")
         for i in range(self.queue_list.count()):
             lw_item = self.queue_list.item(i)
             data = lw_item.data(Qt.UserRole) or {}
             if data.get("url") == target_url:
-                data["status"] = status
+                data["progress"] = pct
                 lw_item.setData(Qt.UserRole, data)
                 w = self.queue_list.itemWidget(lw_item)
                 if isinstance(w, QueueCard):
-                    w.set_status(status)
+                    w.set_progress(pct)
                 break
 
     def _on_download_finished(self, exit_code: int):
@@ -1896,7 +1911,14 @@ class MainWindow(QMainWindow):
             self.current_download_item["status"] = "Completed" if exit_code == 0 else "Error"
             self.current_download_item["progress"] = 100 if exit_code == 0 else 0
             self._save_queue_permanent()
-        if exit_code == 0 and self.queue:
+        # Always advance past the item that just finished, whether it
+        # succeeded or failed. Previously only exit_code == 0 popped the
+        # item, so a failure (e.g. yt-dlp exiting 1) left the same item at
+        # queue[0]; since it's still in self.queue, the next _download_next()
+        # call picked it right back up and re-ran the same download from
+        # scratch -- which is why a failing playlist kept restarting from
+        # the beginning instead of moving on.
+        if self.queue:
             self.queue.pop(0)
             self._save_queue_permanent()
         self.current_download_item = None
