@@ -1,3 +1,14 @@
+### v 2.7.8
+- Queue progress bar no longer stuck at 0% during downloads. The worker's
+  progress updates (e.g. "45% ETA 00:12") were being misread as a status
+  label instead of a percentage, so the progress bar was never actually
+  updated. Progress now updates live as each download proceeds.
+- Fixed a bug where a failed download (e.g. yt-dlp exiting with an error)
+  would restart from the beginning instead of moving on. The queue only
+  advanced past an item on success, so on failure the same item — including
+  full playlists — was picked back up and re-downloaded from scratch,
+  looping repeatedly until stopped manually. The queue now always advances
+  after a download finishes, whether it succeeded or failed.
 ### v 2.7.7 **Glassmorphism UI Update**
 - This release introduces a massive visual overhaul of the entire application, transitioning from the opaque "Obsidian Steel" theme to a vibrant Glassmorphism design language. 
 ### v 2.7.6 **Custom CA certificate support**
