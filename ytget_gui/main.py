@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from platform import system
 
-__version__ = "2.7.7"
+__version__ = "2.7.8"
 
 # --- Windows taskbar icon: set AppUserModelID before QApplication is created ---
 if system() == "Windows":
