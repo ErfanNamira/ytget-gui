@@ -62,28 +62,23 @@ class AppSettings:
         )
     )
 
-    # ── FIX: Every format string now ends with /best as ultimate fallback ──
-    # Previously, if the specific format codes (251+248 etc.) or the
-    # bestvideo[height<=N]+bestaudio chain weren't available, yt-dlp
-    # errored with "Requested format is not available" instead of falling
-    # back to something downloadable. The trailing /best prevents that.
     RESOLUTIONS: Dict[str, str] = field(
         default_factory=lambda: {
-            # --- YouTube-optimized presets (with /best fallback) ---
-            "🎬 YouTube 4320p (8K)": "bestvideo[height=4320][vcodec=vp9]+bestaudio/bestvideo[height<=4320]+bestaudio/best",
-            "🎬 YouTube 2160p (4K)": "251+313/bestvideo[height<=2160]+bestaudio/best",
-            "🎥 YouTube 1440p (QHD)": "251+271/bestvideo[height<=1440]+bestaudio/best",
-            "🎥 YouTube 1080p (FHD)": "251+248/bestvideo[height<=1080]+bestaudio/best",
-            "📱 YouTube 720p (HD)":  "251+247/bestvideo[height<=720]+bestaudio/best",
-            "📱 YouTube 480p (SD)":  "251+244/bestvideo[height<=480]+bestaudio/best",
+            # --- YouTube-optimized presets (keep existing) ---
+            "🎬 YouTube 4320p (8K)": "bestvideo[height=4320][vcodec=vp9]+bestaudio/bestvideo[height<=4320]+bestaudio",
+            "🎬 YouTube 2160p (4K)": "251+313/bestvideo[height<=2160]+bestaudio",
+            "🎥 YouTube 1440p (QHD)": "251+271/bestvideo[height<=1440]+bestaudio",
+            "🎥 YouTube 1080p (FHD)": "251+248/bestvideo[height<=1080]+bestaudio",
+            "📱 YouTube 720p (HD)":  "251+247/bestvideo[height<=720]+bestaudio",
+            "📱 YouTube 480p (SD)":  "251+244/bestvideo[height<=480]+bestaudio",
 
-            # --- Universal presets (with /best fallback) ---
-            "🌐 Universal 4320p (8K)": "bestvideo[height<=4320][width<=7680]+bestaudio/best[height<=4320]/best",
-            "🌐 Universal 2160p (4K)": "bestvideo[height<=2160][width<=3840]+bestaudio/best[height<=2160]/best",
-            "🌐 Universal 1440p (QHD)": "bestvideo[height<=1440][width<=2560]+bestaudio/best[height<=1440]/best",
-            "🌐 Universal 1080p (FHD)": "bestvideo[height<=1080][width<=1920]+bestaudio/best[height<=1080]/best",
-            "🌐 Universal 720p (HD)":   "bestvideo[height<=720][width<=1280]+bestaudio/best[height<=720]/best",
-            "🌐 Universal 480p (SD)":   "bestvideo[height<=480][width<=854]+bestaudio/best[height<=480]/best",
+            # --- Universal presets (stricter, work across any site supported by yt-dlp) ---
+            "🌐 Universal 4320p (8K)": "bestvideo[height<=4320][width<=7680]+bestaudio/best[height<=4320]",
+            "🌐 Universal 2160p (4K)": "bestvideo[height<=2160][width<=3840]+bestaudio/best[height<=2160]",
+            "🌐 Universal 1440p (QHD)": "bestvideo[height<=1440][width<=2560]+bestaudio/best[height<=1440]",
+            "🌐 Universal 1080p (FHD)": "bestvideo[height<=1080][width<=1920]+bestaudio/best[height<=1080]",
+            "🌐 Universal 720p (HD)":   "bestvideo[height<=720][width<=1280]+bestaudio/best[height<=720]",
+            "🌐 Universal 480p (SD)":   "bestvideo[height<=480][width<=854]+bestaudio/best[height<=480]",
 
             # --- Audio / playlist presets (unchanged) ---
             "🎵 Single Audio (MP3)": "bestaudio",
@@ -99,9 +94,14 @@ class AppSettings:
 
     PROXY_URL: str = ""
     IGNORE_SSL_ERRORS: bool = False
+    # Path to a self-signed CA certificate to trust explicitly (e.g. the
+    # mycert.crt you generate yourself for a local MITM/domain-fronting proxy
+    # such as https://github.com/patterniha/MITM-DomainFronting). When set,
+    # this takes precedence over IGNORE_SSL_ERRORS: TLS validation stays on,
+    # it just also trusts this one certificate, instead of trusting nothing.
     CUSTOM_CA_CERT: str = ""
     SPONSORBLOCK_CATEGORIES: List[str] = field(default_factory=list)
-    CHAPTERS_MODE: str = "embed"
+    CHAPTERS_MODE: str = "embed"       # none|embed|split
     WRITE_SUBS: bool = False
     SUB_LANGS: str = "en"
     WRITE_AUTO_SUBS: bool = False
@@ -127,38 +127,41 @@ class AppSettings:
     CUSTOM_FFMPEG_ARGS: str = ""
     CROP_AUDIO_COVERS: bool = True
     VIDEO_FORMAT: str = ".mkv"
+    # Thumbnail embedding
     WRITE_THUMBNAIL: bool = False
     CONVERT_THUMBNAILS: bool = True
     THUMBNAIL_FORMAT: str = "png"
     EMBED_THUMBNAIL: bool = True
+    # HLS preference controls
     PREFER_HLS: bool = True
     HLS_PREFERRED_DOMAINS: List[str] = field(default_factory=list)
-
-    # ── NEW: Max retries per item before marking as Error ──
-    MAX_RETRIES_PER_ITEM: int = 3
-
-    SPOTDL: SpotDLSettings = field(default_factory=SpotDLSettings)
+    SPOTDL: SpotDLSettings = field(default_factory=SpotDLSettings)    
 
     def __post_init__(self):
+        # Prepare paths
         self.INTERNAL_DIR = (self.BASE_DIR / "_internal").resolve()
         self.CONFIG_PATH = (self.BASE_DIR / "config.json").resolve()
         self.COOKIES_PATH = (self.BASE_DIR / "cookies.txt").resolve()
         self.ARCHIVE_PATH = (self.BASE_DIR / "archive.txt").resolve()
 
+        # Ensure directories exist
         self.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
         self.INTERNAL_DIR.mkdir(parents=True, exist_ok=True)
 
+        # Touch files if missing
         if not self.COOKIES_PATH.exists():
             self.COOKIES_PATH.touch()
         if self.ENABLE_ARCHIVE and not self.ARCHIVE_PATH.exists():
             self.ARCHIVE_PATH.touch()
 
+        # Define bundled candidates
         yt_dlp_candidate = self.BASE_DIR / executable_name("yt-dlp")
         ffmpeg_candidate = self.BASE_DIR / executable_name("ffmpeg")
         ffprobe_candidate = self.BASE_DIR / executable_name("ffprobe")
         phantom_candidate = self.BASE_DIR / executable_name("phantomjs")
         deno_candidate = self.BASE_DIR / executable_name("deno")
 
+        # Resolve via ENV override, then system PATH, then bundled
         yt_env = os.getenv("YTGET_YT_DLP_PATH")
         self.YT_DLP_PATH = Path(yt_env) if yt_env and Path(yt_env).exists() \
             else which_or_path(yt_dlp_candidate, executable_name("yt-dlp"))
@@ -178,13 +181,24 @@ class AppSettings:
         deno_env = os.getenv("YTGET_DENO_PATH")
         self.DENO_PATH = Path(deno_env) if deno_env and Path(deno_env).exists() \
             else which_or_path(deno_candidate, executable_name("deno"))
-
+            
+        # Output templates
         self.OUTPUT_TEMPLATE = str((self.DOWNLOADS_DIR / "%(title)s.%(ext)s").resolve())
         self.PLAYLIST_TEMPLATE = str((self.DOWNLOADS_DIR / "%(playlist_index)s - %(title)s.%(ext)s").resolve())
 
+        # Load persisted config last
         self.load_config()
 
+    # -------- Format selection (AV1 -> VP9 map -> best) --------
+
     def get_format_for_resolution(self, height: int, audio: str = "bestaudio") -> str:
+        """
+        Build a yt-dlp format string that:
+          1) Prefers AV1 at the target height,
+          2) Falls back to VP9 mapping,
+          3) Falls back to best available at or below that height,
+          4) Finally, generic best as a last resort.
+        """
         label = self._label_for_height(height)
         vp9_map = self.RESOLUTIONS.get(label, "")
         return self._build_format_chain(height, audio, vp9_map)
@@ -192,6 +206,9 @@ class AppSettings:
     @staticmethod
     @lru_cache(maxsize=64)
     def _build_format_chain(height: int, audio: str, vp9_map: str) -> str:
+        # Cached: the UI can re-request the same (height, audio) pair many
+        # times (e.g. re-opening a dropdown), so avoid rebuilding/deduping
+        # the same string chain repeatedly.
         av1 = f"bestvideo[height={height}][vcodec=av01]+{audio}"
         best_at_or_below = f"bestvideo[height<={height}]+{audio}"
         generic_best = f"bestvideo+{audio}"
@@ -201,6 +218,9 @@ class AppSettings:
         return AppSettings._dedupe_format_chain(chain)
 
     def _label_for_height(self, height: int) -> str:
+        # NOTE: these must exactly match the keys in RESOLUTIONS, or the
+        # VP9 fallback in get_format_for_resolution() silently resolves to
+        # an empty string and is dropped from the format chain.
         return {
             4320: "🎬 YouTube 4320p (8K)",
             2160: "🎬 YouTube 2160p (4K)",
@@ -219,6 +239,8 @@ class AppSettings:
                 parts.append(seg)
                 seen.add(seg)
         return "/".join(parts)
+
+    # ---------------------- Persistence ----------------------
 
     def set_download_path(self, path: Path):
         self.DOWNLOADS_DIR = path.resolve()
@@ -267,13 +289,12 @@ class AppSettings:
             "YT_DLP_PATH": str(self.YT_DLP_PATH),
             "FFMPEG_PATH": str(self.FFMPEG_PATH),
             "FFPROBE_PATH": str(self.FFPROBE_PATH),
-            "PHANTOMJS_PATH": str(self.PHANTOMJS_PATH),
-            "DENO_PATH": str(self.DENO_PATH),
+            "PHANTOMJS_PATH": str(self.PHANTOMJS_PATH),   
+            "DENO_PATH": str(self.DENO_PATH),            
             "COOKIES_PATH": str(self.COOKIES_PATH),
             "ARCHIVE_PATH": str(self.ARCHIVE_PATH),
             "PREFER_HLS": self.PREFER_HLS,
             "HLS_PREFERRED_DOMAINS": self.HLS_PREFERRED_DOMAINS,
-            "MAX_RETRIES_PER_ITEM": self.MAX_RETRIES_PER_ITEM,
             "SPOTDL": self.SPOTDL.to_dict(),
         }
         with open(self.CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -285,6 +306,7 @@ class AppSettings:
         try:
             config = json.loads(self.CONFIG_PATH.read_text(encoding="utf-8"))
 
+            # Basic flags
             self.PROXY_URL = config.get("PROXY_URL", self.PROXY_URL)
             self.IGNORE_SSL_ERRORS = config.get("IGNORE_SSL_ERRORS", self.IGNORE_SSL_ERRORS)
             self.CUSTOM_CA_CERT = config.get("CUSTOM_CA_CERT", self.CUSTOM_CA_CERT)
@@ -317,18 +339,19 @@ class AppSettings:
             self.CUSTOM_FFMPEG_ARGS = config.get("CUSTOM_FFMPEG_ARGS", self.CUSTOM_FFMPEG_ARGS)
             self.CROP_AUDIO_COVERS = config.get("CROP_AUDIO_COVERS", self.CROP_AUDIO_COVERS)
             self.VIDEO_FORMAT = config.get("VIDEO_FORMAT", self.VIDEO_FORMAT)
+            # Thumbnail options
             self.WRITE_THUMBNAIL      = config.get("WRITE_THUMBNAIL", self.WRITE_THUMBNAIL)
             self.CONVERT_THUMBNAILS   = config.get("CONVERT_THUMBNAILS", self.CONVERT_THUMBNAILS)
             self.THUMBNAIL_FORMAT     = config.get("THUMBNAIL_FORMAT", self.THUMBNAIL_FORMAT)
             self.EMBED_THUMBNAIL      = config.get("EMBED_THUMBNAIL", self.EMBED_THUMBNAIL)
             self.PREFER_HLS = config.get("PREFER_HLS", self.PREFER_HLS)
             self.HLS_PREFERRED_DOMAINS = config.get("HLS_PREFERRED_DOMAINS", self.HLS_PREFERRED_DOMAINS)
-            self.MAX_RETRIES_PER_ITEM = config.get("MAX_RETRIES_PER_ITEM", self.MAX_RETRIES_PER_ITEM)
 
             spotdl_data = config.get("SPOTDL")
             if isinstance(spotdl_data, dict):
                 self.SPOTDL = SpotDLSettings.from_dict(spotdl_data)
 
+            # Override download dir if set
             dl_dir = config.get("DOWNLOADS_DIR")
             if dl_dir:
                 self.DOWNLOADS_DIR = Path(dl_dir).resolve()
@@ -336,12 +359,13 @@ class AppSettings:
                 self.OUTPUT_TEMPLATE = str(self.DOWNLOADS_DIR / "%(title)s.%(ext)s")
                 self.PLAYLIST_TEMPLATE = str(self.DOWNLOADS_DIR / "%(playlist_index)s - %(title)s.%(ext)s")
 
+            # Override binary paths if valid
             for key, attr in (
                 ("YT_DLP_PATH", "YT_DLP_PATH"),
                 ("FFMPEG_PATH", "FFMPEG_PATH"),
                 ("FFPROBE_PATH", "FFPROBE_PATH"),
-                ("PHANTOMJS_PATH", "PHANTOMJS_PATH"),
-                ("DENO_PATH", "DENO_PATH"),
+                ("PHANTOMJS_PATH", "PHANTOMJS_PATH"),   
+                ("DENO_PATH", "DENO_PATH"),                
                 ("COOKIES_PATH", "COOKIES_PATH"),
                 ("ARCHIVE_PATH", "ARCHIVE_PATH"),
             ):
