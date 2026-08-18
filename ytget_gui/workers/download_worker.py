@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal, QTimer
+import codecs
 import os
 import re
 import shutil
@@ -59,6 +60,17 @@ class DownloadWorker(QObject):
         self._percent_re = re.compile(r"([0-9]{1,3}(?:[.,][0-9]+)?)\s*%")
         self._download_tag = "[download]"
         self._error_sub = "error"
+
+        # yt-dlp's stdout is read in fixed-size raw byte chunks (see
+        # _read_process_output). A multi-byte UTF-8 character (accented
+        # letters, CJK titles, emoji, etc) can land right on a chunk
+        # boundary; decoding each chunk independently with
+        # bytes.decode(errors="ignore") silently drops/replaces those
+        # bytes because the trailing partial sequence looks invalid on
+        # its own. An incremental decoder keeps the undecoded tail bytes
+        # around and completes them once the rest arrives, so titles and
+        # log text no longer get corrupted mid-word.
+        self._utf8_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
         # status throttle
         self._last_status_text: Optional[str] = None
@@ -255,8 +267,15 @@ class DownloadWorker(QObject):
             self._procFinished.emit(-1)
             return
         try:
+            # 64KB reads instead of 4KB: fewer, larger cross-thread signal
+            # emissions for the same amount of output. Each _rawOutput.emit()
+            # crosses from this reader thread onto the worker's own thread
+            # via a queued Qt event; under verbose/high-throughput output
+            # (large playlists, -v) the old 4KB size meant a lot more queued
+            # events than necessary, which is a real source of GUI stutter
+            # even though the log buffer downstream is already batched.
             while True:
-                chunk = p.stdout.read(4096)
+                chunk = p.stdout.read(65536)
                 if not chunk:
                     break
                 self._rawOutput.emit(chunk)
@@ -367,7 +386,12 @@ class DownloadWorker(QObject):
         if not data:
             return
         try:
-            text = data.decode(errors="ignore")
+            text = self._utf8_decoder.decode(data)
+            if not text:
+                # Only got part of a multi-byte character; the decoder is
+                # holding the partial bytes and will emit them once the
+                # rest arrives in a later chunk.
+                return
 
             # quick error detection
             is_error = self._error_sub in text.lower()
@@ -917,7 +941,23 @@ class DownloadWorker(QObject):
             # the whole download.
             chosen_format = self._ensure_format_fallback(chosen_format)
 
-            cmd.extend(["-f", chosen_format, "--merge-output-format", preferred])
+            # --merge-output-format only takes effect when yt-dlp actually
+            # merges two separately downloaded streams (e.g. bestvideo+
+            # bestaudio). When yt-dlp instead picks a single already-muxed
+            # / progressive stream (very common for YouTube, which usually
+            # serves those as .mp4), no merge step runs and
+            # --merge-output-format is silently ignored -- the file keeps
+            # whatever container it was downloaded in, regardless of the
+            # user's VIDEO_FORMAT preference. --remux-video forces a
+            # container remux (ffmpeg stream copy, no re-encode) whenever
+            # the result isn't already in the target container, so the
+            # user's chosen format is honored in both the merge and
+            # no-merge cases.
+            cmd.extend([
+                "-f", chosen_format,
+                "--merge-output-format", preferred,
+                "--remux-video", preferred,
+            ])
             if getattr(s, "ADD_METADATA", False):
                 cmd.append("--add-metadata")
 
@@ -953,7 +993,17 @@ class DownloadWorker(QObject):
             self._add_log(f"🖼️ Will embed thumbnail as cover for: {self._short(it.get('title',''))}\n", AppStyles.INFO_COLOR)
             cmd.append("--embed-thumbnail")
             fmt = getattr(s, "THUMBNAIL_FORMAT", "png") or "png"
-            meta = f"ffmpeg:-metadata:s:t mimetype=image/{fmt} -metadata:s:t filename=cover.{fmt}"
+            # NOTE: this must be scoped to the EmbedThumbnail postprocessor
+            # specifically (not the bare "ffmpeg:" prefix). yt-dlp treats an
+            # unscoped "ffmpeg:" as a catch-all applied to *every* ffmpeg
+            # invocation for this download -- including --remux-video's
+            # VideoRemuxer step. That step runs before the thumbnail is
+            # embedded, so there's no attachment/subtitle stream yet, and
+            # handing it "-metadata:s:t ..." makes ffmpeg fail with
+            # "Stream specifier 's:t' matches no streams" (surfaces as
+            # "[VideoRemuxer] ... ERROR: Postprocessing: Conversion failed!").
+            # Scoping to "EmbedThumbnail:" keeps these args off the remux call.
+            meta = f"EmbedThumbnail:-metadata:s:t mimetype=image/{fmt} -metadata:s:t filename=cover.{fmt}"
             cmd.extend(["--postprocessor-args", meta])
 
         if getattr(s, "CUSTOM_FFMPEG_ARGS", ""):
@@ -999,22 +1049,29 @@ class DownloadWorker(QObject):
                 seen.add(p)
         return "/".join(deduped)
 
+    # Built once at class-definition time instead of being rebuilt (string
+    # join + regex compile) on every single completed download -- the
+    # pattern list is static, so re-deriving it per call was pure waste.
+    _MUSIC_VIDEO_TAG_TEXTS = (
+        "(music video)", "(official video)", "(official visualizer)", "(video oficial)",
+        "[official video]", "(drone)", "(video)", "(visualiser)", "(lyric video)", "(lyrics)",
+        "(audio)", "(official track)", "(original mix)", "(hq)", "(hd)", "(high quality)",
+        "(full song)", "(snippet)", "(reaction)", "(review)", "(trailer)", "(teaser)",
+        "(fan edit)", "(studio version)", "(youtube)", "(vevo)", "(tiktok)",
+        "(drone shot)", "(pov video)", "(official music video)", "(visualizer)",
+        "(official lyric video)",
+    )
+    _MUSIC_VIDEO_TAG_RE = re.compile(
+        r"\s*(?:" + "|".join(re.escape(t) for t in _MUSIC_VIDEO_TAG_TEXTS) + r")",
+        re.IGNORECASE,
+    )
+
     def _clean_music_video_tags(self) -> int:
         downloads_root: Path = Path(self.settings.DOWNLOADS_DIR)
         if not downloads_root.exists():
             return 0
         audio_exts = {".mp3", ".flac", ".opus"}
-        tag_texts = [
-            "(music video)", "(official video)", "(official visualizer)", "(video oficial)",
-            "[official video]", "(drone)", "(video)", "(visualiser)", "(lyric video)", "(lyrics)",
-            "(audio)", "(official track)", "(original mix)", "(hq)", "(hd)", "(high quality)",
-            "(full song)", "(snippet)", "(reaction)", "(review)", "(trailer)", "(teaser)",
-            "(fan edit)", "(studio version)", "(youtube)", "(vevo)", "(tiktok)",
-            "(drone shot)", "(pov video)", "(official music video)", "(visualizer)",
-            "(official lyric video)",
-        ]
-        escaped = "|".join(re.escape(t) for t in tag_texts)
-        combined = re.compile(r"\s*(?:" + escaped + r")", re.IGNORECASE)
+        combined = self._MUSIC_VIDEO_TAG_RE
         renamed = 0
 
         for root, _dirs, files in os.walk(downloads_root):
