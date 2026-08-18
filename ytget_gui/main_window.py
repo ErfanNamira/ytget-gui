@@ -767,6 +767,13 @@ class MainWindow(QMainWindow):
         self._pending_thumb_urls = set()
         self._thumb_jobs: Dict[str, Tuple[QThread, object]] = {}
 
+        # O(1) lookup: url -> QListWidgetItem, kept in sync with queue_list so
+        # progress/thumbnail/metadata callbacks never have to linear-scan the
+        # whole list (previously O(n) per callback, O(n^2) for a full queue
+        # of thumbnails/progress ticks -- the main source of UI stutter on
+        # larger queues).
+        self._queue_item_index: Dict[str, QListWidgetItem] = {}
+
         self.queue: List[Dict[str, Any]] = []
         self.current_download_item: Optional[Dict[str, Any]] = None
         self.is_downloading = False
@@ -786,6 +793,25 @@ class MainWindow(QMainWindow):
         self.title_queue: Optional[TitleFetchQueue] = None
 
         self._log_entries: List[Tuple[str, str, str]] = []
+
+        # Console is batched: rapid-fire log() calls (e.g. yt-dlp progress
+        # spam) queue their (text, color) pairs and get flushed to the
+        # QTextEdit in a single document edit + single ensureCursorVisible
+        # per event-loop tick, instead of ~5 separate widget operations per
+        # line. This is the single biggest fix for console-driven stutter.
+        self._console_pending: List[Tuple[str, str]] = []
+        self._console_flush_timer = QTimer(self)
+        self._console_flush_timer.setSingleShot(True)
+        self._console_flush_timer.setInterval(40)
+        self._console_flush_timer.timeout.connect(self._flush_console)
+
+        # Debounce the search box so filtering a large queue doesn't run on
+        # every single keystroke.
+        self._filter_debounce_timer = QTimer(self)
+        self._filter_debounce_timer.setSingleShot(True)
+        self._filter_debounce_timer.setInterval(150)
+        self._filter_debounce_timer.timeout.connect(self._run_pending_filter)
+        self._pending_filter_text: str = ""
 
         self.queue_file_path: Path = self.settings.BASE_DIR / "queue.json"
 
@@ -870,26 +896,63 @@ class MainWindow(QMainWindow):
             if not hasattr(self, "_log_entries") or not self.log_output:
                 return
             filt_text = self.filter_combo.currentText() if hasattr(self, "filter_combo") else "All"
+            # Full re-render (filter switch) is infrequent and user-driven,
+            # so do it synchronously in one shot rather than through the
+            # coalescing buffer -- and drop any stale buffered lines first so
+            # they don't get replayed after the clear below.
+            self._console_flush_timer.stop()
+            self._console_pending.clear()
             self.log_output.blockSignals(True)
             self.log_output.clear()
             for text, color, level in self._log_entries:
                 if filt_text != "All" and level != filt_text:
                     continue
                 self._append_to_console(text, color)
+            self._flush_console()
             self.log_output.blockSignals(False)
             self.log_output.moveCursor(QTextCursor.End)
         except Exception:
             pass
 
     def _append_to_console(self, text: str, color: str = AppStyles.INFO_COLOR):
+        # Don't touch the widget synchronously -- queue it and let the
+        # coalescing timer flush it. Under bursty logging (active downloads
+        # can emit many lines per second) this collapses dozens of
+        # append/moveCursor/ensureCursorVisible cycles into one.
+        self._console_pending.append((text, color))
+        if not self._console_flush_timer.isActive():
+            self._console_flush_timer.start()
+
+    def _flush_console(self):
         try:
-            if not self.log_output:
+            if not self.log_output or not self._console_pending:
                 return
-            self.log_output.moveCursor(QTextCursor.End)
-            self.log_output.setTextColor(QColor(color))
-            self.log_output.append(text)
-            self.log_output.setTextColor(QColor(AppStyles.INFO_COLOR))
-            self.log_output.ensureCursorVisible()
+            pending = self._console_pending
+            self._console_pending = []
+
+            sb = self.log_output.verticalScrollBar()
+            was_at_bottom = sb is None or sb.value() >= sb.maximum() - 4
+
+            cursor = self.log_output.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            self.log_output.setUpdatesEnabled(False)
+            try:
+                for text, color in pending:
+                    if cursor.position() != 0:
+                        cursor.insertBlock()
+                    fmt = cursor.charFormat()
+                    fmt.setForeground(QColor(color))
+                    cursor.setCharFormat(fmt)
+                    cursor.insertText(text)
+            finally:
+                self.log_output.setUpdatesEnabled(True)
+
+            self.log_output.setTextCursor(cursor)
+            if was_at_bottom:
+                # Only auto-scroll if the user was already at the bottom, so
+                # we don't yank the view away from someone scrolling back
+                # through history while a download is active.
+                self.log_output.ensureCursorVisible()
         except Exception:
             pass
 
@@ -1169,7 +1232,7 @@ class MainWindow(QMainWindow):
         # Wire
         self.queue_list.model().rowsMoved.connect(self._on_rows_moved)
         self.queue_list.itemSelectionChanged.connect(self._on_selection_changed)
-        self.search_box.textChanged.connect(self._apply_queue_filter)
+        self.search_box.textChanged.connect(self._on_search_text_changed)
         self.sort_combo.currentTextChanged.connect(self._apply_queue_sort)
         btn_rm.clicked.connect(self._bulk_remove_selected)
         btn_top.clicked.connect(lambda: self._bulk_move_selected(top=True))
@@ -1399,20 +1462,14 @@ class MainWindow(QMainWindow):
                     self._pending_thumb_urls.discard(url)
             except Exception:
                 pass
-            for i in range(self.queue_list.count()):
-                item = self.queue_list.item(i)
-                widget = self.queue_list.itemWidget(item)
-                if not widget:
-                    continue
-                w_url = getattr(widget, "url", None) or getattr(widget, "_full_meta_text", None)
-                if not w_url:
-                    continue
-                if w_url == url:
-                    if path:
-                        try:
-                            widget.set_thumbnail_path(path)
-                        except Exception:
-                            pass
+            lw_item = self._queue_item_index.get(url)
+            if lw_item is not None and path:
+                widget = self.queue_list.itemWidget(lw_item)
+                if widget is not None:
+                    try:
+                        widget.set_thumbnail_path(path)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -1462,6 +1519,8 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, {"url": url, "title": title or short(url, 80), "status": status})
             self.queue_list.addItem(item)
             self.queue_list.setItemWidget(item, card)
+            if url:
+                self._queue_item_index[url] = item
 
             base_name = video_id or hashlib.sha1(url.encode("utf-8")).hexdigest()
             safe = self._thumb_safe_name(base_name)
@@ -1501,16 +1560,7 @@ class MainWindow(QMainWindow):
         except Exception:
             key = url or ""
 
-        list_item = None
-        try:
-            for i in range(self.queue_list.count()):
-                it = self.queue_list.item(i)
-                data = it.data(Qt.UserRole)
-                if data and isinstance(data, dict) and data.get("url") == key:
-                    list_item = it
-                    break
-        except Exception:
-            list_item = None
+        list_item = self._queue_item_index.get(key)
 
         current_label = self.format_box.currentText()
         chosen_format = self.settings.RESOLUTIONS.get(current_label, "best")
@@ -1833,7 +1883,7 @@ class MainWindow(QMainWindow):
         # item that's actually still actionable.
         idx = next(
             (i for i, it in enumerate(self.queue)
-             if it.get("status") not in ("Completed", "Error", "Cancelled")),
+             if it.get("status") not in ("Completed", "Error")),
             None,
         )
         if idx is None:
@@ -1903,18 +1953,23 @@ class MainWindow(QMainWindow):
         except ValueError:
             return
 
+        # Progress ticks can arrive very frequently while a download is
+        # active. Skip the work entirely if the percentage hasn't actually
+        # changed (yt-dlp often repeats the same value across multiple
+        # lines), and use the O(1) url index instead of scanning every row
+        # in the list on every single tick.
+        if self.current_download_item.get("progress") == pct:
+            return
         self.current_download_item["progress"] = pct
         target_url = self.current_download_item.get("url", "")
-        for i in range(self.queue_list.count()):
-            lw_item = self.queue_list.item(i)
+        lw_item = self._queue_item_index.get(target_url)
+        if lw_item is not None:
             data = lw_item.data(Qt.UserRole) or {}
-            if data.get("url") == target_url:
-                data["progress"] = pct
-                lw_item.setData(Qt.UserRole, data)
-                w = self.queue_list.itemWidget(lw_item)
-                if isinstance(w, QueueCard):
-                    w.set_progress(pct)
-                break
+            data["progress"] = pct
+            lw_item.setData(Qt.UserRole, data)
+            w = self.queue_list.itemWidget(lw_item)
+            if isinstance(w, QueueCard):
+                w.set_progress(pct)
 
     def _on_download_finished(self, exit_code: int):
         self.is_downloading = False
@@ -2001,7 +2056,7 @@ class MainWindow(QMainWindow):
         # to the back) rather than removed, so queue length alone no longer
         # tells us how many are "done" -- count terminal statuses directly.
         total = max(1, self._initial_queue_len if self._initial_queue_len else len(self.queue))
-        done = sum(1 for it in self.queue if it.get("status") in ("Completed", "Error", "Cancelled"))
+        done = sum(1 for it in self.queue if it.get("status") in ("Completed", "Error"))
         percent = int((done / total) * 100) if total else 0
         self.global_progress.setRange(0, 100)
         self.global_progress.setValue(percent)
@@ -2166,6 +2221,15 @@ class MainWindow(QMainWindow):
         self._save_queue_permanent()
         self._refresh_queue_list()
 
+    def _on_search_text_changed(self, text: str):
+        # Debounce: don't re-filter the whole (possibly large) queue list on
+        # every keystroke, only once typing pauses briefly.
+        self._pending_filter_text = text
+        self._filter_debounce_timer.start()
+
+    def _run_pending_filter(self):
+        self._apply_queue_filter(self._pending_filter_text)
+
     def _apply_queue_filter(self, text: str):
         t = (text or "").strip().lower()
         for i in range(self.queue_list.count()):
@@ -2179,18 +2243,28 @@ class MainWindow(QMainWindow):
             lw_item.setHidden(not visible)
 
     def _refresh_queue_list(self):
-        self.queue_list.clear()
-        count = len(self.queue)
-        self.count_chip.setText(str(count))
-        self.queue_empty_state.setVisible(count == 0)
-        for it in self.queue:
-            self._add_queue_card_to_list(
-                url=it.get("url", ""),
-                title=it.get("title", "(title pending)"),
-                video_id=it.get("video_id"),
-                show_thumbnail=True,
-                status=it.get("status", "Pending"),
-            )
+        # Rebuilding N cards (each with its own drop-shadow effect) triggers
+        # a layout + repaint after *every* addItem/setItemWidget call unless
+        # updates are suppressed. For anything beyond a handful of queue
+        # items that shows up as visible stutter. Disabling updates around
+        # the whole clear+repopulate collapses it into a single repaint.
+        self.queue_list.setUpdatesEnabled(False)
+        try:
+            self.queue_list.clear()
+            self._queue_item_index.clear()
+            count = len(self.queue)
+            self.count_chip.setText(str(count))
+            self.queue_empty_state.setVisible(count == 0)
+            for it in self.queue:
+                self._add_queue_card_to_list(
+                    url=it.get("url", ""),
+                    title=it.get("title", "(title pending)"),
+                    video_id=it.get("video_id"),
+                    show_thumbnail=True,
+                    status=it.get("status", "Pending"),
+                )
+        finally:
+            self.queue_list.setUpdatesEnabled(True)
         self._apply_queue_filter(self.search_box.text())
 
     def _make_queue_card_widget(self, item: Dict[str, Any]) -> QWidget:
@@ -2646,6 +2720,11 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         try:
+            try:
+                self._console_flush_timer.stop()
+                self._filter_debounce_timer.stop()
+            except Exception:
+                pass
             try:
                 if hasattr(self, "thumb_manager") and self.thumb_manager is not None:
                     self.thumb_manager.stop(wait=True)
