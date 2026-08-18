@@ -1,13 +1,61 @@
 ## ✨ What's New
-### 🐛 Fixed
-- **Progress bar stuck at 0%** Queue progress bar no longer stuck at 0% during downloads. Progress now updates live as each download proceeds.
+# v2.7.9
 
-- **Playlist restarting from the beginning after an error** Fixed a bug where a failed download (e.g. yt-dlp exiting with an error)
-  would restart from the beginning instead of moving on. The queue only
-  advanced past an item on success, so on failure the same item — including
-  full playlists — was picked back up and re-downloaded from scratch,
-  looping repeatedly until stopped manually. The queue now always advances
-  after a download finishes, whether it succeeded or failed.
+This release focuses heavily on **performance, download reliability, and queue stability**, especially for large queues and long-running downloads.
+
+### ⚡ Performance & UI
+
+* **Much smoother download logs:** Console output is now buffered and written in batches instead of updating the UI for every individual log line. Auto-scrolling also respects your current scroll position.
+* **Faster queue updates:** Rebuilding the queue now happens in a single UI update instead of repainting after every card.
+* **Faster large queues:** Queue items can now be located instantly instead of searching through the entire list repeatedly. This makes a noticeable difference with large playlists.
+* **Less unnecessary progress work:** The UI no longer refreshes when the download percentage hasn't changed.
+* **Faster search:** Queue search now waits briefly after typing before filtering, making it much smoother.
+* **Smoother queue scrolling:** Removed several sources of lag from queue cards, including unnecessary mouse-event processing and always-active shadows. Shadows are now only enabled when hovering over a card.
+
+### 📥 More Reliable Downloads
+
+* **Fixed “Requested format is not available”:** Preferred formats now have a fallback, so yt-dlp can automatically choose another suitable format instead of failing when a specific stream isn't available.
+* **Automatic recovery from temporary download failures:** Downloads that fail because of temporary network/server problems can now automatically restart and try again.
+* **Better recovery from expired download links:** Long downloads can now recover from expired video URLs by restarting yt-dlp and obtaining a fresh link.
+* Added several additional reliability improvements for interrupted fragments, temporary server errors, connection problems, and timeouts.
+
+### 🔄 Better Queue Behavior
+
+* **Failed downloads are no longer silently removed.** After automatic retries are exhausted, failed items are moved to the end of the queue and can be retried again.
+* Failed items get a limited number of additional queue retries before being marked **Error**.
+* **Cancelled and stopped downloads remain visible** instead of disappearing from the queue.
+* The queue now correctly skips completed, cancelled, and permanently failed items when looking for the next download.
+* Overall queue progress now reflects the actual status of each item rather than relying on the queue shrinking.
+* **Clear Completed** now also removes cancelled items, while failed items remain available for review.
+
+### 📝 Download Output & Metadata
+
+* **Fixed corrupted non-ASCII text:** Characters in titles and console output could occasionally be lost when UTF-8 data arrived in pieces. Output handling now correctly preserves characters split across data chunks.
+* **Reduced UI overhead during heavy output:** Larger output chunks significantly reduce the amount of communication between the downloader and UI.
+* Removed repeated work when cleaning music-video metadata, improving efficiency during completed downloads.
+
+### 🖼️ Faster Thumbnail Loading
+
+Thumbnail loading has been substantially optimized:
+
+* YouTube thumbnails are now resolved directly when possible instead of launching yt-dlp for every thumbnail.
+* yt-dlp is only used when the direct thumbnail lookup isn't sufficient.
+* Browser cookie refreshing is no longer performed for every thumbnail request.
+* Thumbnail downloads can now run concurrently using the configured number of workers.
+* Duplicate thumbnail requests are avoided.
+* Removed unnecessary delays between thumbnail requests.
+* Thumbnail connections are reused instead of repeatedly creating new connections.
+
+The result is significantly faster and smoother thumbnail loading, particularly for large playlists.
+
+### 🏷️ Title Fetching
+
+* **Fixed a queue-breaking bug:** After the title-fetch queue was stopped once, it could become permanently stuck and reject future requests. It now correctly starts processing again.
+* Consolidated duplicated title-fetching logic into a shared component, reducing duplicated code and keeping both fetching paths consistent.
+* Improved handling of malformed text and metadata responses.
+* Added faster failure handling for stalled connections.
+* Reduced unnecessary yt-dlp warning output.
+* Improved environment/path handling.
 
 ---
 ## 🆚 Updated Dependencies
