@@ -992,19 +992,16 @@ class DownloadWorker(QObject):
         if getattr(s, "EMBED_THUMBNAIL", False) and not is_audio:
             self._add_log(f"🖼️ Will embed thumbnail as cover for: {self._short(it.get('title',''))}\n", AppStyles.INFO_COLOR)
             cmd.append("--embed-thumbnail")
-            fmt = getattr(s, "THUMBNAIL_FORMAT", "png") or "png"
-            # NOTE: this must be scoped to the EmbedThumbnail postprocessor
-            # specifically (not the bare "ffmpeg:" prefix). yt-dlp treats an
-            # unscoped "ffmpeg:" as a catch-all applied to *every* ffmpeg
-            # invocation for this download -- including --remux-video's
-            # VideoRemuxer step. That step runs before the thumbnail is
-            # embedded, so there's no attachment/subtitle stream yet, and
-            # handing it "-metadata:s:t ..." makes ffmpeg fail with
-            # "Stream specifier 's:t' matches no streams" (surfaces as
-            # "[VideoRemuxer] ... ERROR: Postprocessing: Conversion failed!").
-            # Scoping to "EmbedThumbnail:" keeps these args off the remux call.
-            meta = f"EmbedThumbnail:-metadata:s:t mimetype=image/{fmt} -metadata:s:t filename=cover.{fmt}"
-            cmd.extend(["--postprocessor-args", meta])
+            # NOTE: previously this also passed a custom
+            # "EmbedThumbnail:-metadata:s:t mimetype=... filename=..."
+            # via --postprocessor-args. EmbedThumbnailPP already sets this
+            # metadata itself, and passing it explicitly here was found to
+            # conflict with the new forced --remux-video step (VideoRemuxer
+            # would fail with "Postprocessing: Conversion failed!" even
+            # though the args were scoped to "EmbedThumbnail:"). Dropping
+            # the custom postprocessor-args avoids the collision entirely;
+            # --embed-thumbnail alone still produces correct mimetype/
+            # filename metadata on the attachment.
 
         if getattr(s, "CUSTOM_FFMPEG_ARGS", ""):
             cmd.extend(["--postprocessor-args", f"ffmpeg:{s.CUSTOM_FFMPEG_ARGS}"])
