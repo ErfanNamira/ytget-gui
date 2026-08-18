@@ -112,6 +112,15 @@ class AppSettings:
     ADD_METADATA: bool = True
     LIMIT_RATE: str = ""
     RETRIES: int = 10
+    # How many times DownloadWorker will silently re-run the *entire*
+    # yt-dlp command after a known-transient failure (expired signed URL /
+    # 403, momentarily unavailable format, dropped connection, etc) before
+    # giving up on the item. Set to 0 to disable auto-retry entirely.
+    AUTO_RETRY_COUNT: int = 3
+    # How many times the queue will move a failed item to the back of the
+    # queue (instead of dropping it) to try again later, after
+    # AUTO_RETRY_COUNT in-process retries have already been exhausted.
+    QUEUE_ERROR_RETRIES: int = 2
     ORGANIZE_BY_UPLOADER: bool = False
     FILENAME_FORMAT: str = "default"
     CUSTOM_FILENAME_TEMPLATE: str = ""
@@ -266,6 +275,8 @@ class AppSettings:
             "ADD_METADATA": self.ADD_METADATA,
             "LIMIT_RATE": self.LIMIT_RATE,
             "RETRIES": self.RETRIES,
+            "AUTO_RETRY_COUNT": self.AUTO_RETRY_COUNT,
+            "QUEUE_ERROR_RETRIES": self.QUEUE_ERROR_RETRIES,
             "ORGANIZE_BY_UPLOADER": self.ORGANIZE_BY_UPLOADER,
             "FILENAME_FORMAT": self.FILENAME_FORMAT,
             "CUSTOM_FILENAME_TEMPLATE": self.CUSTOM_FILENAME_TEMPLATE,
@@ -322,6 +333,8 @@ class AppSettings:
             self.ADD_METADATA = config.get("ADD_METADATA", self.ADD_METADATA)
             self.LIMIT_RATE = config.get("LIMIT_RATE", self.LIMIT_RATE)
             self.RETRIES = config.get("RETRIES", self.RETRIES)
+            self.AUTO_RETRY_COUNT = config.get("AUTO_RETRY_COUNT", self.AUTO_RETRY_COUNT)
+            self.QUEUE_ERROR_RETRIES = config.get("QUEUE_ERROR_RETRIES", self.QUEUE_ERROR_RETRIES)
             self.ORGANIZE_BY_UPLOADER = config.get("ORGANIZE_BY_UPLOADER", self.ORGANIZE_BY_UPLOADER)
             self.FILENAME_FORMAT = config.get("FILENAME_FORMAT", self.FILENAME_FORMAT)
             if self.FILENAME_FORMAT not in ("default", "custom", *FILENAME_FORMAT_PRESETS.keys()):
