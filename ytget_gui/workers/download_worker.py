@@ -48,139 +48,138 @@ class DownloadWorker(QObject):
         self.process: Optional[subprocess.Popen] = None
         self._reader_thread: Optional[threading.Thread] = None
         self._cancel_requested = False
-        self._skip_requested = False
         self._flat_playlist_dir: Optional[Path] = None
 
-        # ── Auto-retry state ──
-        self._format_error_detected = False
-        self._http_403_detected = False
-        self._attempt_count = 0
-        self._max_format_retries = 1  # one auto-retry
-
+        # Log buffer and timer (timer created in run so it lives in worker thread)
         self._log_buffer: List[Tuple[str, str]] = []
         self._log_timer: Optional[QTimer] = None
         self._log_flush_ms = max(100, int(log_flush_ms))
 
+        # Regexes and tokens
         self._percent_re = re.compile(r"([0-9]{1,3}(?:[.,][0-9]+)?)\s*%")
         self._download_tag = "[download]"
         self._error_sub = "error"
 
+        # status throttle
         self._last_status_text: Optional[str] = None
         self._last_status_emit = 0.0
         self._status_throttle_s = max(0.05, status_throttle_ms / 1000.0)
 
-        self._max_emit_bytes = 100 * 1024
-        self._max_entries_per_flush = 200
+        # flush emit caps
+        self._max_emit_bytes = 100 * 1024  # max bytes emitted per flush to avoid UI flood
+        self._max_entries_per_flush = 200   # safety cap on number of signals emitted per flush
 
+    # run should be invoked in a worker thread via moveToThread
     def run(self):
         try:
+            # create timer with self as parent so it lives in this object's thread
             if self._log_timer is None:
                 self._log_timer = QTimer(self)
                 self._log_timer.setInterval(self._log_flush_ms)
                 self._log_timer.timeout.connect(self._flush_logs)
                 self._log_timer.start()
 
+            # Connect once: these route data from the background reader
+            # thread back onto this worker's own thread safely.
             self._rawOutput.connect(self._on_read_bytes)
             self._procFinished.connect(self._on_finished_signal)
 
-            # Cookie auto-refresh
-            try:
+            # Try to refresh cookies if user enabled auto-refresh
+            try:                       
                 if getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
                     ok, msg = CookieManager.refresh_before_download(self.settings)
                     if ok:
+                        # Inform UI
                         self._add_log(f"🔐 Refreshed cookies: {msg}\n", AppStyles.INFO_COLOR)
+
+                        # Make settings reflect export: set COOKIES_PATH to exported file if present,
+                        # set COOKIES_LAST_IMPORTED to UTC timestamp, and persist config.
                         try:
+                            # If refresh_before_download wrote to settings.COOKIES_PATH or BASE_DIR/cookies.txt,
+                            # ensure settings.COOKIES_PATH is a Path instance pointing at the file.
                             exported_path = getattr(self.settings, "COOKIES_PATH", None)
                             if not exported_path or str(exported_path) == "":
                                 exported_path = Path(getattr(self.settings, "BASE_DIR", Path("."))) / "cookies.txt"
                             self.settings.COOKIES_PATH = Path(exported_path)
+
                             from datetime import datetime
                             ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
                             self.settings.COOKIES_LAST_IMPORTED = ts
+
                             if hasattr(self.settings, "save_config"):
                                 self.settings.save_config()
                         except Exception:
+                            # best-effort only
                             pass
                     else:
-                        self._add_log(f"⚠️ Cookies refresh: {msg}\n", AppStyles.WARNING_COLOR)
+                        self._add_log(f"⚠️ Cookies refresh: {msg}\n", AppStyles.WARNING_COLOR)                      
             except Exception:
                 pass
 
-            self._attempt_download()
+            cmd = self._build_command()
+
+            env = self._build_process_env(cmd)
+
+            # startup log and immediate flush so GUI sees it fast
+            self.log.emit(f"\nStarting Download for: {(self.item.get('title', 'Unknown'))}", AppStyles.SUCCESS_COLOR)
+            self._flush_logs_now()
+
+            program = cmd[0]
+            args = cmd[1:]
+
+            # On Windows, prevent a console window from flashing when the
+            # child process (yt-dlp / ffmpeg) starts. QProcess's
+            # setCreateProcessArgumentsModifier isn't wrapped by PySide6, so
+            # we use subprocess.Popen directly, which does support this.
+            creationflags = 0
+            startupinfo = None
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NO_WINDOW
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            try:
+                popen_kwargs: Dict[str, Any] = {}
+                if sys.platform != "win32":
+                    # yt-dlp spawns ffmpeg/aria2c as *its own* child processes.
+                    # Without this, terminate()/kill() below only signals the
+                    # yt-dlp process itself and leaves those children running
+                    # as orphans -- which is why cancelling a download (e.g.
+                    # via "Remove" on the active item) didn't actually stop
+                    # disk/network activity. start_new_session puts yt-dlp
+                    # (and everything it spawns) in its own process group so
+                    # the whole tree can be killed together in cancel().
+                    popen_kwargs["start_new_session"] = True
+                self.process = subprocess.Popen(
+                    [program, *args],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    env=env,
+                    creationflags=creationflags,
+                    startupinfo=startupinfo,
+                    bufsize=0,  # unbuffered: deliver bytes as soon as they arrive
+                    **popen_kwargs,
+                )
+            except Exception as e:
+                self.error.emit(f"Failed to start yt-dlp process: {e}")
+                self._flush_logs_now()
+                self.finished.emit(-1)
+                return
+
+            # Read process output on a background thread and forward it into
+            # the existing buffered-logging pipeline.
+            self._reader_thread = threading.Thread(
+                target=self._read_process_output, daemon=True
+            )
+            self._reader_thread.start()
         except Exception as e:
             self.error.emit(f"Error preparing download: {e}")
             self._flush_logs_now()
             self.finished.emit(-1)
 
-    def _attempt_download(self, use_fallback_format: bool = False, bypass_403: bool = False):
-        if self._reader_thread and self._reader_thread.is_alive():
-            self._reader_thread.join(timeout=5)
-        self._reader_thread = None
-        self.process = None
-
-        cmd = self._build_command(use_fallback_format=use_fallback_format, bypass_403=bypass_403)
-        env = self._build_process_env(cmd)
-
-        if use_fallback_format or bypass_403:
-            if bypass_403:
-                self._add_log("🔄 Retrying with Web player client to bypass 403 Forbidden…\n", AppStyles.WARNING_COLOR)
-            else:
-                self._add_log("🔄 Retrying with fallback format (best available)…\n", AppStyles.WARNING_COLOR)
-        else:
-            self.log.emit(f"\n🚀 Starting Download for: {self.item.get('title', 'Unknown')}", AppStyles.SUCCESS_COLOR)
-            thumb_msg = self._get_thumbnail_log_message()
-            if thumb_msg:
-                self._add_log(thumb_msg, AppStyles.INFO_COLOR)
-        self._flush_logs_now()
-
-        program = cmd[0]
-        args = cmd[1:]
-
-        creationflags = 0
-        startupinfo = None
-        if sys.platform == "win32":
-            creationflags = subprocess.CREATE_NO_WINDOW
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
-
-        try:
-            popen_kwargs: Dict[str, Any] = {}
-            if sys.platform != "win32":
-                popen_kwargs["start_new_session"] = True
-            self.process = subprocess.Popen(
-                [program, *args],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                env=env,
-                creationflags=creationflags,
-                startupinfo=startupinfo,
-                bufsize=0,
-                **popen_kwargs,
-            )
-        except Exception as e:
-            self.error.emit(f"Failed to start yt-dlp process: {e}")
-            self._flush_logs_now()
-            self.finished.emit(-1)
-            return
-
-        self._reader_thread = threading.Thread(
-            target=self._read_process_output, daemon=True
-        )
-        self._reader_thread.start()
-
-    def _get_thumbnail_log_message(self) -> Optional[str]:
-        try:
-            s = self.settings
-            it = self.item
-            if getattr(s, "EMBED_THUMBNAIL", False):
-                is_audio = self._is_audio_download(it.get("format_code", ""))
-                if not is_audio:
-                    return f"🖼️ Will embed thumbnail as cover for: {self._short(it.get('title',''))}\n"
-        except Exception:
-            pass
-        return None
-
+    # Runs on a background thread: reads the child process's merged
+    # stdout/stderr stream and hands chunks off to the existing handlers.
     def _read_process_output(self):
         p = self.process
         if p is None or p.stdout is None:
@@ -202,22 +201,32 @@ class DownloadWorker(QObject):
             self._procFinished.emit(exit_code)
 
     def _on_finished_signal(self, exit_code: int):
+        # Thin wrapper so the two-arg _on_finished (kept for readability/
+        # symmetry with the old QProcess.finished signature) can be
+        # connected to the single-arg _procFinished signal.
         self._on_finished(exit_code, None)
 
     def cancel(self):
-        """Cancel the current download (used by both Skip and Stop)."""
         self._cancel_requested = True
         p = self.process
         if p and p.poll() is None:
-            self._add_log("⏹️ Cancelling Download…\n", AppStyles.WARNING_COLOR)
+            self._add_log("⏹️ Cancelling Download...\n", AppStyles.WARNING_COLOR)
             self._flush_logs_now()
             try:
                 if sys.platform == "win32":
+                    # p.terminate() (== TerminateProcess) only kills yt-dlp
+                    # itself, not the ffmpeg/aria2c children it launched --
+                    # those kept running in the background, which is why
+                    # "removing" an in-progress item didn't actually stop
+                    # the download. taskkill /T kills the whole process tree.
                     subprocess.run(
                         ["taskkill", "/F", "/T", "/PID", str(p.pid)],
                         capture_output=True,
                     )
                 else:
+                    # start_new_session=True at launch put yt-dlp in its own
+                    # process group, so signalling the group (not just the
+                    # single pid) takes its ffmpeg/aria2c children down too.
                     pgid = os.getpgid(p.pid)
                     os.killpg(pgid, signal.SIGTERM)
                     try:
@@ -237,11 +246,7 @@ class DownloadWorker(QObject):
                     except Exception:
                         pass
 
-    def skip(self):
-        """Mark this download as skipped (not an error)."""
-        self._skip_requested = True
-        self.cancel()
-
+    # Build a minimal environment for child process, adding PhantomJS only when explicitly requested
     def _build_process_env(self, cmd: List[str]) -> Optional[Dict[str, str]]:
         try:
             env = os.environ.copy()
@@ -251,6 +256,7 @@ class DownloadWorker(QObject):
             if getattr(self.settings, "BASE_DIR", None):
                 extras.append(str(self.settings.BASE_DIR))
 
+            # Only add phantomjs parent dir if settings explicitly want it (new flag USE_PHANTOMJS)
             ph = getattr(self.settings, "PHANTOMJS_PATH", None)
             use_phantom = getattr(self.settings, "USE_PHANTOMJS", False)
             if use_phantom and ph and hasattr(ph, "exists"):
@@ -259,7 +265,8 @@ class DownloadWorker(QObject):
                         extras.append(str(ph.parent))
                 except Exception:
                     pass
-
+                    
+            # Add deno parent dir if deno binary is present
             deno = getattr(self.settings, "DENO_PATH", None)
             if deno and hasattr(deno, "exists"):
                 try:
@@ -271,6 +278,7 @@ class DownloadWorker(QObject):
             if extras:
                 cur = env.get("PATH", "")
                 parts = cur.split(os.pathsep) if cur else []
+                # insert extras at front in stable order
                 for p in reversed(extras):
                     if p and p not in parts:
                         parts.insert(0, p)
@@ -284,26 +292,23 @@ class DownloadWorker(QObject):
         except Exception:
             return None
 
+    # lightweight read handler that extracts and throttles progress info
+    # (called from the background reader thread with a raw bytes chunk)
     def _on_read_bytes(self, data: bytes):
         if not data:
             return
         try:
             text = data.decode(errors="ignore")
 
-            # ── Error detection ──
-            if "Requested format is not available" in text or \
-               "format is not available" in text.lower():
-                self._format_error_detected = True
-
-            if "403: Forbidden" in text or "HTTP Error 403" in text:
-                self._http_403_detected = True
-
+            # quick error detection
             is_error = self._error_sub in text.lower()
             color = AppStyles.ERROR_COLOR if is_error else AppStyles.TEXT_COLOR
 
+            # Append raw chunk to buffer (batching avoids signaling per chunk)
             self._add_log(text, color)
 
-            tail = text[-300:]
+            # attempt progress extraction if possible, keep it cheap
+            tail = text[-300:]  # small window where progress typically lives
             if (self._download_tag in tail) or ("%" in tail):
                 m = self._percent_re.search(tail)
                 pct_text: Optional[str] = None
@@ -318,7 +323,7 @@ class DownloadWorker(QObject):
                 up = tail.upper()
                 pos = up.rfind("ETA")
                 if pos != -1:
-                    after = tail[pos + 3:].strip()
+                    after = tail[pos + 3 :].strip()
                     token = after.split()[0] if after.split() else ""
                     if ":" in token or token.isdigit():
                         eta_text = token
@@ -334,61 +339,31 @@ class DownloadWorker(QObject):
                         except Exception:
                             pass
 
+            # If buffer is huge, trigger immediate flush but still keep it batched
             if len(self._log_buffer) > 800:
                 self._flush_logs()
         except Exception:
+            # swallow exceptions to keep worker alive
             pass
 
     def _on_finished(self, exit_code: int, _status):
-        try:
-            self._flush_logs()
-        except Exception:
-            pass
-
-        if self._cancel_requested:
-            try:
-                if self._log_timer and self._log_timer.isActive():
-                    self._log_timer.stop()
-            except Exception:
-                pass
-            if self._skip_requested:
-                self._add_log("⏭️ Download skipped by user.\n", AppStyles.INFO_COLOR)
-            else:
-                self._add_log("⏹️ Download cancelled by user.\n", AppStyles.WARNING_COLOR)
-            self._flush_logs_now()
-            self.finished.emit(-2 if self._skip_requested else -1)
-            return
-
-        is_403 = self._http_403_detected
-        is_fmt_err = self._format_error_detected
-
-        # ── Auto-retry for 403 or Format Error ──
-        if (is_403 or is_fmt_err) and self._attempt_count < self._max_format_retries and exit_code != 0:
-            self._attempt_count += 1
-            self._format_error_detected = False
-            self._http_403_detected = False
-            
-            if is_403:
-                self._add_log(
-                    "⚠️ HTTP 403 Forbidden detected. Retrying with Web player client…\n",
-                    AppStyles.WARNING_COLOR,
-                )
-                self._attempt_download(use_fallback_format=False, bypass_403=True)
-            else:
-                self._add_log(
-                    "⚠️ Requested format not available. Retrying with best available format…\n",
-                    AppStyles.WARNING_COLOR,
-                )
-                self._attempt_download(use_fallback_format=True, bypass_403=False)
-            
-            self._flush_logs_now()
-            return
-
         try:
             if self._log_timer and self._log_timer.isActive():
                 self._log_timer.stop()
         except Exception:
             pass
+
+        try:
+            # final flush
+            self._flush_logs()
+        except Exception:
+            pass
+
+        if self._cancel_requested:
+            self._add_log("⏹️ Download cancelled by user.\n", AppStyles.WARNING_COLOR)
+            self._flush_logs_now()
+            self.finished.emit(-1)
+            return
 
         if exit_code == 0:
             self._add_log("✅ Download Finished Successfully.\n", AppStyles.SUCCESS_COLOR)
@@ -426,10 +401,18 @@ class DownloadWorker(QObject):
 
     @staticmethod
     def is_youtube_music_url(url: str) -> bool:
+        """
+        Return True only for actual YouTube Music URLs (music.youtube.com),
+        not regular youtube.com/youtu.be URLs.
+        """
         u = (url or "").lower()
         return "music.youtube.com" in u
 
     def _is_hls_preferred_site(self, url: str) -> bool:
+        """
+        Return True when HLS should be preferred for this URL.
+        Controlled by settings.PREFER_HLS and settings.HLS_PREFERRED_DOMAINS.
+        """
         try:
             if not getattr(self.settings, "PREFER_HLS", False):
                 return False
@@ -440,6 +423,11 @@ class DownloadWorker(QObject):
             return False
 
     def _detect_flat_playlist(self, url: str) -> bool:
+        """
+        Peek at the playlist title the same way ytgetmusic.sh does, to detect
+        YouTube Music's auto-generated "Top songs" / "Mix" / "Radio" playlists,
+        which have no real per-track album and need special handling.
+        """
         if not url:
             return False
         try:
@@ -463,6 +451,12 @@ class DownloadWorker(QObject):
             return False
 
     def _tag_flat_playlist_tracks(self) -> int:
+        """
+        eyeD3-based track-number fix for flat playlists, matching ytgetmusic.sh.
+        yt-dlp's --parse-metadata can't reliably derive %(track_number)s from
+        %(autonumber)s at postprocessing time in this mode, so we tag the files
+        directly from their "NNN - ..." filenames after the download finishes.
+        """
         d = getattr(self, "_flat_playlist_dir", None)
         if not d or not Path(d).exists():
             return 0
@@ -489,6 +483,10 @@ class DownloadWorker(QObject):
         return tagged
 
     def _is_audio_download(self, code: Optional[str] = None) -> bool:
+        """
+        Return True if the provided format code (or the item's format_code if None)
+        corresponds to an audio-only selection.
+        """
         try:
             code = code if code is not None else self.item.get("format_code", "")
             return str(code) in ("bestaudio", "playlist_mp3", "audio_flac", "audio_opus", "playlist_opus")
@@ -505,6 +503,12 @@ class DownloadWorker(QObject):
             return (not is_playlist)
 
     def _resolve_name_template(self, default_template: str) -> str:
+        """
+        Returns the yt-dlp filename template "stub" (title portion, no extension)
+        according to the user's FILENAME_FORMAT preference. Falls back to
+        default_template (legacy behavior) when the preference is "default",
+        an unrecognized value, or "custom" without a template provided.
+        """
         s = self.settings
         fmt = getattr(s, "FILENAME_FORMAT", "default") or "default"
         if fmt == "default":
@@ -527,7 +531,7 @@ class DownloadWorker(QObject):
             name = name[:180].rstrip(" .")
         return name or "Unknown"
 
-    def _build_command(self, use_fallback_format: bool = False, bypass_403: bool = False) -> List[str]:
+    def _build_command(self) -> List[str]:
         s = self.settings
         it = self.item
 
@@ -541,47 +545,53 @@ class DownloadWorker(QObject):
             "--ffmpeg-location", str(s.FFMPEG_PATH.parent),
         ]
 
-        # ── FIX: Prevent YouTube 403 Forbidden by preferring Web client ──
-        url = it.get("url", "") or ""
-        if "youtube.com" in url or "youtu.be" in url:
-            # YouTube has heavily throttled/blocked the android & android vr
-            # clients, causing HTTP 403 Forbidden during download. Forcing
-            # the web client avoids this entirely.
-            cmd.extend(["--extractor-args", "youtube:player_client=web,android"])
-
         format_code = it.get("format_code", "")
+        # Normalize format_code so it is a valid yt-dlp format selector string.
+        # Accepts three common inputs from the UI:
+        # 1) preset label keys from AppSettings.RESOLUTIONS (map to their value)
+        # 2) numeric height tokens like "1080p" (convert to format chain)
+        # 3) already-valid format strings
+        try:
+            if isinstance(format_code, str) and format_code in getattr(s, "RESOLUTIONS", {}):
+                # User selected a preset label from the UI; map to the actual selector
+                format_code = s.RESOLUTIONS.get(format_code, format_code)
+            else:
+                # If user provided a simple height token like "1080p", convert it
+                m = re.match(r"^(\d+)p$", str(format_code).strip())
+                if m:
+                    try:
+                        height = int(m.group(1))
+                        format_code = s.get_format_for_resolution(height)
+                    except Exception:
+                        # leave format_code unchanged on error
+                        pass
+        except Exception:
+            # keep original format_code if anything goes wrong
+            pass        
 
-        if not use_fallback_format:
-            try:
-                if isinstance(format_code, str) and format_code in getattr(s, "RESOLUTIONS", {}):
-                    format_code = s.RESOLUTIONS.get(format_code, format_code)
-                else:
-                    m = re.match(r"^(\d+)p$", str(format_code).strip())
-                    if m:
-                        try:
-                            height = int(m.group(1))
-                            format_code = s.get_format_for_resolution(height)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-        is_playlist = "list=" in url or format_code in ("playlist_mp3", "playlist_opus")
+        # Determine playlist/audio flags from the normalized format_code and URL
+        is_playlist = "list=" in (it.get("url", "") or "") or format_code in ("playlist_mp3", "playlist_opus")
+        # Use the normalized format_code when deciding audio vs video
         is_audio = self._is_audio_download(format_code)
         is_flac = (isinstance(format_code, str) and format_code == "audio_flac")
         is_opus = (isinstance(format_code, str) and format_code in ("audio_opus", "playlist_opus"))
 
+        # Reset any state left over from a previous run of this worker
         self._flat_playlist_dir: Optional[Path] = None
 
+        # YouTube Music's auto-generated "Top songs" / "Mix" / "Radio" playlists have no
+        # real album for each track, so yt-dlp can't recover per-track artist/album via
+        # its normal metadata extraction. We detect this case the same way the working
+        # ytgetmusic.sh script does (peek at the playlist title) and handle it specially
+        # below instead of guessing at metadata via regex.
         is_flat_playlist = False
         if (
             is_audio
             and is_playlist
             and getattr(s, "YT_MUSIC_METADATA", False)
-            and self.is_youtube_music_url(url)
-            and not use_fallback_format
+            and self.is_youtube_music_url(it.get("url", "") or "")
         ):
-            is_flat_playlist = self._detect_flat_playlist(url)
+            is_flat_playlist = self._detect_flat_playlist(it.get("url", "") or "")
 
         if s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0:
             cmd.extend(["--cookies", str(s.COOKIES_PATH)])
@@ -592,7 +602,6 @@ class DownloadWorker(QObject):
         if getattr(s, "LIMIT_RATE", ""):
             cmd.extend(["--limit-rate", s.LIMIT_RATE])
         cmd.extend(["--retries", str(getattr(s, "RETRIES", 10))])
-        cmd.extend(["--fragment-retries", str(getattr(s, "RETRIES", 10))])
 
         if getattr(s, "DATEAFTER", ""):
             cmd.extend(["--dateafter", s.DATEAFTER])
@@ -612,6 +621,9 @@ class DownloadWorker(QObject):
         flat_album_name: Optional[str] = None
 
         if is_flat_playlist:
+            # Mirrors ytgetmusic.sh's SAFE_NAME/-o template for "Top songs"/Mix/Radio:
+            # everything goes in one folder, numbered by download order, with an
+            # explicit album tag (set below) instead of a guessed one.
             flat_album_name = self._safe_filename(it.get("title") or "Playlist") + " Playlist"
             base = Path(s.DOWNLOADS_DIR) / flat_album_name
             name_tmpl = self._resolve_name_template("%(album)s - %(title)s")
@@ -627,7 +639,7 @@ class DownloadWorker(QObject):
                 if getattr(s, "ORGANIZE_BY_UPLOADER", False):
                     base /= "%(uploader)s"
 
-            is_yt_music = self.is_youtube_music_url(url)
+            is_yt_music = self.is_youtube_music_url(it.get("url", "") or "")
             if getattr(s, "YT_MUSIC_METADATA", False) and is_yt_music and (is_audio or is_playlist):
                 default_stub = "%(artist)s - %(title)s"
             else:
@@ -655,13 +667,8 @@ class DownloadWorker(QObject):
             else:
                 audio_format = "mp3"
 
-            if use_fallback_format:
-                audio_selector = "bestaudio/best"
-            else:
-                audio_selector = "bestaudio"
-
             cmd.extend([
-                "-f", audio_selector,
+                "-f", "bestaudio",
                 "--extract-audio",
                 "--audio-format", audio_format,
                 "--embed-thumbnail",
@@ -671,67 +678,91 @@ class DownloadWorker(QObject):
             if not is_flac:
                 cmd.extend(["--audio-quality", "0"])
 
+            # NOTE: yt-dlp does not merge multiple `--postprocessor-args ffmpeg:...`
+            # flags -- a later one can overwrite an earlier one for the same
+            # postprocessor. So any ffmpeg: args below must be combined into a
+            # single call rather than issued separately.
             ffmpeg_pp_args: List[str] = []
             if is_flac:
                 ffmpeg_pp_args.extend(["-compression_level", "12", "-sample_fmt", "s16"])
             if is_playlist and getattr(s, "YT_MUSIC_METADATA", False) and is_yt_music and is_flat_playlist:
+                # No real per-track album exists for these playlists, so set one
+                # explicitly (like SAFE_NAME in ytgetmusic.sh) instead of letting
+                # yt-dlp guess. Artist/title are left untouched -- yt-dlp's own
+                # metadata extraction from YouTube Music is accurate; the old
+                # description-regex hack here is what was blanking/corrupting them.
                 ffmpeg_pp_args.extend(["-metadata", f'album="{flat_album_name}"'])
             if ffmpeg_pp_args:
                 cmd.extend(["--postprocessor-args", "ffmpeg:" + " ".join(ffmpeg_pp_args)])
 
+            # %(track_number)s is not populated by yt-dlp on its own for regular
+            # playlists -- previously it only got filled in via the YT Music
+            # metadata path below. But the user's chosen filename format (e.g.
+            # the "Track # - Title" / "Album - Track # - Title" presets, or a
+            # custom template) may reference %(track_number)s independently of
+            # that experimental toggle. If we don't derive it here too, those
+            # filenames silently fall back to "Unknown" for the track number
+            # (see GH issue: track numbers only worked when "Fetch richer
+            # metadata from YouTube Music" was also enabled). So: derive
+            # track_number from playlist_index whenever the resolved filename
+            # template needs it, regardless of YT_MUSIC_METADATA/is_yt_music.
             needs_track_number = "%(track_number)" in name_tmpl
             if is_playlist and not is_flat_playlist and (
                 needs_track_number or (getattr(s, "YT_MUSIC_METADATA", False) and is_yt_music)
             ):
+                # Track numbers only -- do NOT touch artist/title via regex.
                 cmd.extend(["--parse-metadata", "playlist_index:%(track_number)s"])
         else:
             preferred = (getattr(s, "VIDEO_FORMAT", "").lstrip(".")) or "mkv"
             if preferred not in {"mkv", "mp4", "webm"}:
                 preferred = "mkv"
 
-            if use_fallback_format:
-                chosen_format = "best"
-            else:
-                chosen_format: Optional[str] = None
+            url = it.get("url", "") or ""
+            chosen_format: Optional[str] = None
 
-                if isinstance(format_code, str) and format_code.startswith("hls-"):
-                    chosen_format = format_code
+            # If user explicitly selected an hls- format code, use it directly
+            if isinstance(format_code, str) and format_code.startswith("hls-"):
+                chosen_format = format_code
 
-                try:
-                    if not chosen_format and self._is_hls_preferred_site(url):
-                        if isinstance(format_code, str) and format_code.endswith("p"):
-                            try:
-                                height = int(format_code.rstrip("p"))
-                                chosen_format = (
-                                    f"bestvideo[protocol^=m3u8][height<={height}]+bestaudio/"
-                                    f"best[protocol^=m3u8][height<={height}]/best[protocol^=m3u8]/best"
-                                )
-                            except Exception:
-                                chosen_format = "bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/best"
-                        else:
-                            chosen_format = "bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/best"
-
-                        cmd.append("--hls-prefer-native")
-                        cmd.append("--hls-use-mpegts")
-
+            try:
+                if not chosen_format and self._is_hls_preferred_site(url):
+                    # Respect height-based codes like "1080p" while preferring HLS
+                    if isinstance(format_code, str) and format_code.endswith("p"):
                         try:
-                            host = re.sub(r"^https?://", "", url.split("/")[2]) if "/" in url else ""
-                            referer = f"https://{host}" if host else "https://example.com"
+                            height = int(format_code.rstrip("p"))
+                            chosen_format = (
+                                f"bestvideo[protocol^=m3u8][height<={height}]+bestaudio/"
+                                f"best[protocol^=m3u8][height<={height}]/best[protocol^=m3u8]/best"
+                            )
                         except Exception:
-                            referer = "https://example.com"
-                        cmd.extend(["--add-header", f"Referer: {referer}"])
-                        cmd.extend(["--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)"])
-                except Exception:
-                    chosen_format = None
+                            chosen_format = "bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/best"
+                    else:
+                        chosen_format = "bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/best"
 
-                if not chosen_format:
-                    chosen_format = format_code or "best"
+                    # Prefer ffmpeg for HLS and use mpegts container for compatibility
+                    cmd.append("--hls-prefer-native")
+                    cmd.append("--hls-use-mpegts")
+
+                    # Add common headers that some HLS endpoints require
+                    # Use site root as Referer; keep headers limited and only for HLS-preferred domains
+                    try:
+                        host = re.sub(r"^https?://", "", url.split("/")[2]) if "/" in url else ""
+                        referer = f"https://{host}" if host else "https://example.com"
+                    except Exception:
+                        referer = "https://example.com"
+                    cmd.extend(["--add-header", f"Referer: {referer}"])
+                    cmd.extend(["--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)"])
+            except Exception:
+                chosen_format = None
+
+            if not chosen_format:
+                chosen_format = format_code or "best"
 
             cmd.extend(["-f", chosen_format, "--merge-output-format", preferred])
             if getattr(s, "ADD_METADATA", False):
                 cmd.append("--add-metadata")
 
-        if getattr(s, "SPONSORBLOCK_CATEGORIES", None) and not self.is_short_video(url):
+        if getattr(s, "SPONSORBLOCK_CATEGORIES", None) and not self.is_short_video(it.get("url", "")):
             try:
                 cats = ",".join(s.SPONSORBLOCK_CATEGORIES)
                 cmd.extend(["--sponsorblock-remove", cats])
@@ -760,6 +791,7 @@ class DownloadWorker(QObject):
             cmd.extend(["--convert-thumbnails", fmt])
 
         if getattr(s, "EMBED_THUMBNAIL", False) and not is_audio:
+            self._add_log(f"🖼️ Will embed thumbnail as cover for: {self._short(it.get('title',''))}\n", AppStyles.INFO_COLOR)
             cmd.append("--embed-thumbnail")
             fmt = getattr(s, "THUMBNAIL_FORMAT", "png") or "png"
             meta = f"ffmpeg:-metadata:s:t mimetype=image/{fmt} -metadata:s:t filename=cover.{fmt}"
@@ -768,6 +800,7 @@ class DownloadWorker(QObject):
         if getattr(s, "CUSTOM_FFMPEG_ARGS", ""):
             cmd.extend(["--postprocessor-args", f"ffmpeg:{s.CUSTOM_FFMPEG_ARGS}"])
 
+        # If a Deno binary is available, instruct yt-dlp to use it for JS runtimes
         try:
             deno_path = getattr(s, "DENO_PATH", None)
             if deno_path and Path(deno_path).exists():
@@ -775,10 +808,13 @@ class DownloadWorker(QObject):
         except Exception:
             pass
 
+        # SSL/CA handling (supports MITM-DomainFronting style local proxies
+        # via a trusted custom CA cert, falling back to --no-check-certificates
+        # only if no custom CA is configured)
         _verify, _ytdlp_ssl_args, self._ssl_env = ssl_utils.resolve_ssl_config(self.settings)
         cmd.extend(_ytdlp_ssl_args)
 
-        cmd.append(url)
+        cmd.append(it.get("url", ""))
 
         return [str(c) for c in cmd]
 
@@ -831,9 +867,10 @@ class DownloadWorker(QObject):
                     pass
         return renamed
 
-    # ── Logging helpers ──
+    # Minimal, efficient logging helpers
     def _add_log(self, text: str, color: str):
         try:
+            # keep buffer bounded
             if len(self._log_buffer) > 1500:
                 del self._log_buffer[:700]
             self._log_buffer.append((text, color))
@@ -841,14 +878,16 @@ class DownloadWorker(QObject):
             pass
 
     def _flush_logs(self):
+        # Called in worker thread by timer or synchronously by other methods
         if not self._log_buffer:
             return
         try:
-            buf = self._log_buffer[:]
+            buf = self._log_buffer[:]   # snapshot
             self._log_buffer.clear()
         except Exception:
             buf = []
 
+        # Coalesce consecutive entries with the same color to reduce signal count.
         def _emit_pending(color: Optional[str], parts: List[str], emitted_bytes: int, emitted_entries: int):
             if not color or not parts:
                 return emitted_bytes, emitted_entries
@@ -863,7 +902,7 @@ class DownloadWorker(QObject):
         cur_color: Optional[str] = None
         emitted_bytes = 0
         emitted_entries = 0
-        cutoff_idx: Optional[int] = None
+        cutoff_idx: Optional[int] = None  # index into buf where we stopped, if capped
 
         for i, (text, color) in enumerate(buf):
             if emitted_entries >= self._max_entries_per_flush or emitted_bytes > self._max_emit_bytes:
@@ -879,8 +918,13 @@ class DownloadWorker(QObject):
                 cur_color, cur_text_parts = color, [text]
 
         if cutoff_idx is None:
+            # Went through the whole buffer; emit whatever's left over.
             emitted_bytes, emitted_entries = _emit_pending(cur_color, cur_text_parts, emitted_bytes, emitted_entries)
         else:
+            # Hit a cap mid-buffer: emit what we'd accumulated so far (if any),
+            # then requeue everything from cutoff_idx onward, using the actual
+            # position rather than a value-based lookup (which could match an
+            # earlier, identical (text, color) pair and corrupt the buffer).
             emitted_bytes, emitted_entries = _emit_pending(cur_color, cur_text_parts, emitted_bytes, emitted_entries)
             remaining = buf[cutoff_idx:]
             if remaining:
@@ -888,6 +932,7 @@ class DownloadWorker(QObject):
 
     def _flush_logs_now(self):
         try:
+            # direct synchronous flush; keep it safe
             self._flush_logs()
         except Exception:
             pass
