@@ -1506,7 +1506,10 @@ class MainWindow(QMainWindow):
                 for item in self.queue:
                     if item.get("url") == url:
                         self._remove_item_by_id(item)
-                        break
+                        return
+                # No backing self.queue entry (title fetch still pending or
+                # failed) - just drop the orphaned card from the list.
+                self._remove_orphaned_card(url)
 
             card.set_context_actions([
                 ("Open in browser", _open_in_browser),
@@ -1815,6 +1818,39 @@ class MainWindow(QMainWindow):
     def _on_title_error(self, url: str, msg: str):
         self.log(f"Error fetching title for {url[:60]}: {msg}\n", AppStyles.ERROR_COLOR, "Error")
         self.btn_add_inline.setEnabled(True)
+        # _add_to_queue() optimistically adds a QueueCard to queue_list
+        # *before* the fetch runs, but the item only ever gets appended to
+        # self.queue on success (_on_metadata_fetched). On failure that
+        # card was left orphaned: present in queue_list/_queue_item_index
+        # but absent from self.queue, so _remove_item_by_id() (and the
+        # card's own "Remove" context action, which looks the url up in
+        # self.queue) could never find it -- the only way to get rid of it
+        # was restarting the app, which rebuilds the list from queue.json
+        # and simply never re-adds it. Clean it up here instead.
+        self._remove_orphaned_card(url)
+
+    def _remove_orphaned_card(self, url: str) -> None:
+        """Remove a queue_list card that has no backing entry in self.queue
+        (e.g. a failed title fetch)."""
+        if any(it.get("url") == url for it in self.queue):
+            # It does have a backing entry after all - not orphaned, leave
+            # normal removal (_remove_item_by_id) to handle it.
+            return
+        lw_item = self._queue_item_index.pop(url, None)
+        if lw_item is None:
+            return
+        row = self.queue_list.row(lw_item)
+        if row >= 0:
+            self.queue_list.takeItem(row)
+        try:
+            self._pending_thumb_urls.discard(url)
+        except Exception:
+            pass
+        try:
+            self.count_chip.setText(str(self.queue_list.count()))
+            self.queue_empty_state.setVisible(self.queue_list.count() == 0)
+        except Exception:
+            pass
 
     def _thumb_path_for_item(self, it: Dict[str, Any]) -> Path:
         vid = (it or {}).get("video_id") or ""
