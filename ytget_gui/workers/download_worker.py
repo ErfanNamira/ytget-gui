@@ -69,6 +69,53 @@ class DownloadWorker(QObject):
         self._max_emit_bytes = 100 * 1024  # max bytes emitted per flush to avoid UI flood
         self._max_entries_per_flush = 200   # safety cap on number of signals emitted per flush
 
+        # --- Auto-retry state ---
+        # yt-dlp exits non-zero for a wide range of reasons, some of which are
+        # purely transient (expired signed URL -> 403, a format that is
+        # momentarily unavailable, dropped connections, rate limiting, etc).
+        # A fresh yt-dlp invocation gets a fresh signed URL, which is why
+        # simply re-running the same command after a short pause usually
+        # just works. Previously any non-zero exit was treated as final, so
+        # a mid-download 403 permanently failed the item even though
+        # --retries only covers within-process HTTP retries, not "the whole
+        # video URL expired" cases. We now detect known-transient failures
+        # and silently re-run the same command a few times, with backoff,
+        # before giving up for real.
+        self._cmd: List[str] = []
+        self._env: Optional[Dict[str, str]] = None
+        self._recent_output: str = ""
+        self._internal_attempt: int = 0
+        self._max_internal_retries: int = max(0, int(getattr(self.settings, "AUTO_RETRY_COUNT", 3) or 0))
+        self._retry_backoff_base_s: float = 3.0
+
+    # A handful of failures are permanent no matter how many times we retry --
+    # retrying these just wastes time and delays the user finding out.
+    _FATAL_RE = re.compile(
+        r"(Video unavailable|This video is (?:private|unavailable)|"
+        r"has been removed by the uploader|"
+        r"account associated with this video has been terminated|"
+        r"Sign in to confirm your age|"
+        r"copyright (?:grounds|claim)|"
+        r"is not available in your country|"
+        r"This live event will begin in|"
+        r"members-only content)",
+        re.IGNORECASE,
+    )
+
+    # Known-transient failures worth silently re-running the whole command for.
+    _RETRYABLE_RE = re.compile(
+        r"(HTTP Error 403|HTTP Error 429|HTTP Error 5\d\d|"
+        r"Requested format is not available|"
+        r"Connection reset|Connection aborted|Remote end closed connection|"
+        r"Read timed out|The read operation timed out|"
+        r"Temporary failure in name resolution|Name or service not known|"
+        r"unable to download video data|"
+        r"unable to download webpage|"
+        r"Got error|urlopen error|"
+        r"Broken pipe|EOF occurred in violation of protocol)",
+        re.IGNORECASE,
+    )
+
     # run should be invoked in a worker thread via moveToThread
     def run(self):
         try:
@@ -117,54 +164,15 @@ class DownloadWorker(QObject):
                 pass
 
             cmd = self._build_command()
-
             env = self._build_process_env(cmd)
+            self._cmd = cmd
+            self._env = env
 
             # startup log and immediate flush so GUI sees it fast
             self.log.emit(f"\nStarting Download for: {(self.item.get('title', 'Unknown'))}", AppStyles.SUCCESS_COLOR)
             self._flush_logs_now()
 
-            program = cmd[0]
-            args = cmd[1:]
-
-            # On Windows, prevent a console window from flashing when the
-            # child process (yt-dlp / ffmpeg) starts. QProcess's
-            # setCreateProcessArgumentsModifier isn't wrapped by PySide6, so
-            # we use subprocess.Popen directly, which does support this.
-            creationflags = 0
-            startupinfo = None
-            if sys.platform == "win32":
-                creationflags = subprocess.CREATE_NO_WINDOW
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
-
-            try:
-                popen_kwargs: Dict[str, Any] = {}
-                if sys.platform != "win32":
-                    # yt-dlp spawns ffmpeg/aria2c as *its own* child processes.
-                    # Without this, terminate()/kill() below only signals the
-                    # yt-dlp process itself and leaves those children running
-                    # as orphans -- which is why cancelling a download (e.g.
-                    # via "Remove" on the active item) didn't actually stop
-                    # disk/network activity. start_new_session puts yt-dlp
-                    # (and everything it spawns) in its own process group so
-                    # the whole tree can be killed together in cancel().
-                    popen_kwargs["start_new_session"] = True
-                self.process = subprocess.Popen(
-                    [program, *args],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    env=env,
-                    creationflags=creationflags,
-                    startupinfo=startupinfo,
-                    bufsize=0,  # unbuffered: deliver bytes as soon as they arrive
-                    **popen_kwargs,
-                )
-            except Exception as e:
-                self.error.emit(f"Failed to start yt-dlp process: {e}")
-                self._flush_logs_now()
-                self.finished.emit(-1)
+            if not self._spawn_process(cmd, env):
                 return
 
             # Read process output on a background thread and forward it into
@@ -177,6 +185,67 @@ class DownloadWorker(QObject):
             self.error.emit(f"Error preparing download: {e}")
             self._flush_logs_now()
             self.finished.emit(-1)
+
+    def _spawn_process(self, cmd: List[str], env: Optional[Dict[str, str]]) -> bool:
+        """Launch (or re-launch, on retry) the yt-dlp subprocess. Returns
+        True on success; on failure it emits error/finished itself and
+        returns False."""
+        program = cmd[0]
+        args = cmd[1:]
+
+        # On Windows, prevent a console window from flashing when the
+        # child process (yt-dlp / ffmpeg) starts. QProcess's
+        # setCreateProcessArgumentsModifier isn't wrapped by PySide6, so
+        # we use subprocess.Popen directly, which does support this.
+        creationflags = 0
+        startupinfo = None
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NO_WINDOW
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+
+        try:
+            popen_kwargs: Dict[str, Any] = {}
+            if sys.platform != "win32":
+                # yt-dlp spawns ffmpeg/aria2c as *its own* child processes.
+                # Without this, terminate()/kill() below only signals the
+                # yt-dlp process itself and leaves those children running
+                # as orphans -- which is why cancelling a download (e.g.
+                # via "Remove" on the active item) didn't actually stop
+                # disk/network activity. start_new_session puts yt-dlp
+                # (and everything it spawns) in its own process group so
+                # the whole tree can be killed together in cancel().
+                popen_kwargs["start_new_session"] = True
+            self.process = subprocess.Popen(
+                [program, *args],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+                creationflags=creationflags,
+                startupinfo=startupinfo,
+                bufsize=0,  # unbuffered: deliver bytes as soon as they arrive
+                **popen_kwargs,
+            )
+            return True
+        except Exception as e:
+            self.error.emit(f"Failed to start yt-dlp process: {e}")
+            self._flush_logs_now()
+            self.finished.emit(-1)
+            return False
+
+    def _retry_launch(self):
+        """Re-run the same yt-dlp command after a transient failure."""
+        if self._cancel_requested:
+            self.finished.emit(-1)
+            return
+        self._recent_output = ""
+        if not self._spawn_process(self._cmd, self._env):
+            return
+        self._reader_thread = threading.Thread(
+            target=self._read_process_output, daemon=True
+        )
+        self._reader_thread.start()
 
     # Runs on a background thread: reads the child process's merged
     # stdout/stderr stream and hands chunks off to the existing handlers.
@@ -307,6 +376,12 @@ class DownloadWorker(QObject):
             # Append raw chunk to buffer (batching avoids signaling per chunk)
             self._add_log(text, color)
 
+            # Keep a small rolling window of raw output so _on_finished can
+            # sniff it for known-transient error patterns (403, format not
+            # available, dropped connections, etc) to decide whether to
+            # silently retry the whole download.
+            self._recent_output = (self._recent_output + text)[-8000:]
+
             # attempt progress extraction if possible, keep it cheap
             tail = text[-300:]  # small window where progress typically lives
             if (self._download_tag in tail) or ("%" in tail):
@@ -385,10 +460,41 @@ class DownloadWorker(QObject):
             except Exception:
                 pass
             self.finished.emit(0)
-        else:
-            self._add_log(f"❌ yt-dlp exited with code {exit_code}.\n", AppStyles.ERROR_COLOR)
+            return
+
+        # --- Non-zero exit: decide whether to silently retry ---
+        if self._should_auto_retry():
+            self._internal_attempt += 1
+            delay_s = min(30.0, self._retry_backoff_base_s * self._internal_attempt)
+            self._add_log(
+                f"⚠️ Recoverable error (exit {exit_code}); the request likely expired. "
+                f"Retrying in {delay_s:.0f}s… (attempt {self._internal_attempt}/{self._max_internal_retries})\n",
+                AppStyles.WARNING_COLOR,
+            )
             self._flush_logs_now()
-            self.finished.emit(exit_code)
+            try:
+                if self._log_timer and not self._log_timer.isActive():
+                    self._log_timer.start()
+            except Exception:
+                pass
+            QTimer.singleShot(int(delay_s * 1000), self._retry_launch)
+            return
+
+        self._add_log(f"❌ yt-dlp exited with code {exit_code}.\n", AppStyles.ERROR_COLOR)
+        self._flush_logs_now()
+        self.finished.emit(exit_code)
+
+    def _should_auto_retry(self) -> bool:
+        if self._cancel_requested:
+            return False
+        if self._internal_attempt >= self._max_internal_retries:
+            return False
+        text = self._recent_output
+        if not text:
+            return False
+        if self._FATAL_RE.search(text):
+            return False
+        return bool(self._RETRYABLE_RE.search(text))
 
     # --- Helpers ---
     def _short(self, title: str) -> str:
@@ -408,6 +514,17 @@ class DownloadWorker(QObject):
         u = (url or "").lower()
         return "music.youtube.com" in u
 
+    # YouTube (all variants) always exposes its full-resolution ladder via
+    # regular DASH (MPD) manifests, and the extra Referer/User-Agent headers
+    # this HLS-preference path adds are neither needed nor helpful there.
+    # Forcing HLS on YouTube caps quality at whatever muxed HLS format it
+    # happens to publish for that video (frequently only 1080p60, even when
+    # 1440p/4K exist as separate DASH video-only streams) -- so YouTube is
+    # excluded here unconditionally, regardless of what a user may have
+    # (likely accidentally) added to HLS_PREFERRED_DOMAINS. This setting
+    # exists for sites that genuinely only serve usable streams over HLS.
+    _HLS_EXCLUDED_DOMAINS = ("youtube.com", "youtu.be")
+
     def _is_hls_preferred_site(self, url: str) -> bool:
         """
         Return True when HLS should be preferred for this URL.
@@ -417,6 +534,8 @@ class DownloadWorker(QObject):
             if not getattr(self.settings, "PREFER_HLS", False):
                 return False
             u = (url or "").lower()
+            if any(d in u for d in self._HLS_EXCLUDED_DOMAINS):
+                return False
             domains = getattr(self.settings, "HLS_PREFERRED_DOMAINS", []) or []
             return any(d in u for d in domains)
         except Exception:
@@ -601,7 +720,17 @@ class DownloadWorker(QObject):
             cmd.extend(["--proxy", s.PROXY_URL])
         if getattr(s, "LIMIT_RATE", ""):
             cmd.extend(["--limit-rate", s.LIMIT_RATE])
-        cmd.extend(["--retries", str(getattr(s, "RETRIES", 10))])
+        retries = str(getattr(s, "RETRIES", 10))
+        cmd.extend(["--retries", retries])
+        # yt-dlp only auto-retries --retries times for the *same* signed URL;
+        # spacing those attempts out (instead of hammering immediately) gives
+        # transient 403/429/5xx responses a real chance to clear, and
+        # explicitly matching --fragment-retries avoids it silently falling
+        # back to a different default for HLS/DASH fragment downloads.
+        cmd.extend(["--fragment-retries", retries])
+        cmd.extend(["--extractor-retries", str(getattr(s, "RETRIES", 10))])
+        cmd.extend(["--retry-sleep", "linear=1::2"])
+        cmd.extend(["--file-access-retries", "3"])
 
         if getattr(s, "DATEAFTER", ""):
             cmd.extend(["--dateafter", s.DATEAFTER])
@@ -726,18 +855,38 @@ class DownloadWorker(QObject):
 
             try:
                 if not chosen_format and self._is_hls_preferred_site(url):
-                    # Respect height-based codes like "1080p" while preferring HLS
-                    if isinstance(format_code, str) and format_code.endswith("p"):
-                        try:
-                            height = int(format_code.rstrip("p"))
-                            chosen_format = (
-                                f"bestvideo[protocol^=m3u8][height<={height}]+bestaudio/"
-                                f"best[protocol^=m3u8][height<={height}]/best[protocol^=m3u8]/best"
-                            )
-                        except Exception:
-                            chosen_format = "bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/best"
+                    # IMPORTANT: by this point format_code has already been
+                    # expanded from a simple "1440p" token into the full
+                    # resolved format chain (e.g. from a RESOLUTIONS preset
+                    # or get_format_for_resolution()), so it essentially
+                    # never literally ends with "p" here -- checking for
+                    # that (as before) silently dropped the user's chosen
+                    # height entirely for HLS-preferred sites, and the
+                    # resulting *unrestricted* HLS chain would just grab
+                    # whatever muxed stream yt-dlp considered "best",
+                    # capping out well below what was actually available
+                    # (e.g. a 1440p/4K pick silently downloading 1080p60
+                    # because that's the highest *muxed* HLS format
+                    # YouTube exposes -- higher resolutions only exist as
+                    # separate video-only DASH streams). Pull the intended
+                    # height back out of the resolved chain via regex
+                    # instead, and always try a normal (non-HLS) merge at
+                    # that height before ever falling back to a
+                    # resolution-capped muxed HLS stream.
+                    height_matches = re.findall(r"height(?:<=|=)(\d+)", str(format_code))
+                    height = max((int(h) for h in height_matches), default=None)
+                    if height:
+                        chosen_format = (
+                            f"bestvideo[protocol^=m3u8][height<={height}]+bestaudio/"
+                            f"bestvideo[height<={height}]+bestaudio/"
+                            f"best[protocol^=m3u8][height<={height}]/best[protocol^=m3u8]/best"
+                        )
                     else:
-                        chosen_format = "bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/best"
+                        chosen_format = (
+                            "bestvideo[protocol^=m3u8]+bestaudio/"
+                            "bestvideo+bestaudio/"
+                            "best[protocol^=m3u8]/best"
+                        )
 
                     # Prefer ffmpeg for HLS and use mpegts container for compatibility
                     cmd.append("--hls-prefer-native")
@@ -757,6 +906,16 @@ class DownloadWorker(QObject):
 
             if not chosen_format:
                 chosen_format = format_code or "best"
+
+            # Presets picked straight from settings.RESOLUTIONS (e.g. an
+            # itag pair like "251+313") don't always carry their own
+            # "/best" fallback -- if that exact stream combo isn't offered
+            # for a given video, yt-dlp fails hard with "Requested format
+            # is not available" instead of degrading gracefully. Make sure
+            # every video format selector we hand to yt-dlp ends in a
+            # generic "best" so a missing preferred stream never hard-fails
+            # the whole download.
+            chosen_format = self._ensure_format_fallback(chosen_format)
 
             cmd.extend(["-f", chosen_format, "--merge-output-format", preferred])
             if getattr(s, "ADD_METADATA", False):
@@ -817,6 +976,28 @@ class DownloadWorker(QObject):
         cmd.append(it.get("url", ""))
 
         return [str(c) for c in cmd]
+
+    @staticmethod
+    def _ensure_format_fallback(fmt: str) -> str:
+        """Guarantee a yt-dlp format-selector string ends with a generic
+        "best" fallback so an unavailable specific stream (a particular
+        itag/codec/height combo) degrades to "whatever's available" instead
+        of hard-failing the download with "Requested format is not
+        available"."""
+        if not fmt:
+            return "best"
+        parts = [p.strip() for p in fmt.split("/") if p.strip()]
+        if not parts:
+            return "best"
+        if parts[-1] != "best":
+            parts.append("best")
+        seen = set()
+        deduped: List[str] = []
+        for p in parts:
+            if p not in seen:
+                deduped.append(p)
+                seen.add(p)
+        return "/".join(deduped)
 
     def _clean_music_video_tags(self) -> int:
         downloads_root: Path = Path(self.settings.DOWNLOADS_DIR)
