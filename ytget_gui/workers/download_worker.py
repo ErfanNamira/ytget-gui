@@ -51,14 +51,11 @@ class DownloadWorker(QObject):
         self._skip_requested = False
         self._flat_playlist_dir: Optional[Path] = None
 
-        # ── Format-error retry state ──
-        # If yt-dlp reports "Requested format is not available", we
-        # automatically retry once with `-f best` (or `bestaudio/best`
-        # for audio) so the user never sees a hard failure just because
-        # a specific codec/height combo was missing for one video.
+        # ── Auto-retry state ──
         self._format_error_detected = False
+        self._http_403_detected = False
         self._attempt_count = 0
-        self._max_format_retries = 1  # one auto-retry with fallback format
+        self._max_format_retries = 1  # one auto-retry
 
         self._log_buffer: List[Tuple[str, str]] = []
         self._log_timer: Optional[QTimer] = None
@@ -75,7 +72,6 @@ class DownloadWorker(QObject):
         self._max_emit_bytes = 100 * 1024
         self._max_entries_per_flush = 200
 
-    # ── Main entry point (called by QThread.started) ──
     def run(self):
         try:
             if self._log_timer is None:
@@ -110,32 +106,26 @@ class DownloadWorker(QObject):
             except Exception:
                 pass
 
-            # Start first attempt
             self._attempt_download()
         except Exception as e:
             self.error.emit(f"Error preparing download: {e}")
             self._flush_logs_now()
             self.finished.emit(-1)
 
-    # ── Single download attempt (supports format fallback retry) ──
-    def _attempt_download(self, use_fallback_format: bool = False):
-        """Build command, spawn process, start reader thread.
-
-        When *use_fallback_format* is True we override the format
-        selector with `best` (video) or `bestaudio/best` (audio)
-        so a format-availability issue doesn't abort the download.
-        """
-        # Join previous reader thread if still alive (safety)
+    def _attempt_download(self, use_fallback_format: bool = False, bypass_403: bool = False):
         if self._reader_thread and self._reader_thread.is_alive():
             self._reader_thread.join(timeout=5)
         self._reader_thread = None
         self.process = None
 
-        cmd = self._build_command(use_fallback_format=use_fallback_format)
+        cmd = self._build_command(use_fallback_format=use_fallback_format, bypass_403=bypass_403)
         env = self._build_process_env(cmd)
 
-        if use_fallback_format:
-            self._add_log("🔄 Retrying with fallback format (best available)…\n", AppStyles.WARNING_COLOR)
+        if use_fallback_format or bypass_403:
+            if bypass_403:
+                self._add_log("🔄 Retrying with Web player client to bypass 403 Forbidden…\n", AppStyles.WARNING_COLOR)
+            else:
+                self._add_log("🔄 Retrying with fallback format (best available)…\n", AppStyles.WARNING_COLOR)
         else:
             self.log.emit(f"\n🚀 Starting Download for: {self.item.get('title', 'Unknown')}", AppStyles.SUCCESS_COLOR)
             thumb_msg = self._get_thumbnail_log_message()
@@ -180,7 +170,6 @@ class DownloadWorker(QObject):
         self._reader_thread.start()
 
     def _get_thumbnail_log_message(self) -> Optional[str]:
-        """Return a log line about thumbnail embedding, or None."""
         try:
             s = self.settings
             it = self.item
@@ -253,7 +242,6 @@ class DownloadWorker(QObject):
         self._skip_requested = True
         self.cancel()
 
-    # ── Environment builder ──
     def _build_process_env(self, cmd: List[str]) -> Optional[Dict[str, str]]:
         try:
             env = os.environ.copy()
@@ -296,20 +284,19 @@ class DownloadWorker(QObject):
         except Exception:
             return None
 
-    # ── Output reader (runs on background thread) ──
     def _on_read_bytes(self, data: bytes):
         if not data:
             return
         try:
             text = data.decode(errors="ignore")
 
-            # ── Format error detection ──
-            # yt-dlp prints "Requested format is not available" when none
-            # of the selectors in the -f chain matched. We flag it so
-            # _on_finished can retry with `best` before giving up.
+            # ── Error detection ──
             if "Requested format is not available" in text or \
                "format is not available" in text.lower():
                 self._format_error_detected = True
+
+            if "403: Forbidden" in text or "HTTP Error 403" in text:
+                self._http_403_detected = True
 
             is_error = self._error_sub in text.lower()
             color = AppStyles.ERROR_COLOR if is_error else AppStyles.TEXT_COLOR
@@ -352,14 +339,12 @@ class DownloadWorker(QObject):
         except Exception:
             pass
 
-    # ── Process finished handler ──
     def _on_finished(self, exit_code: int, _status):
         try:
             self._flush_logs()
         except Exception:
             pass
 
-        # ── Handle cancel / skip ──
         if self._cancel_requested:
             try:
                 if self._log_timer and self._log_timer.isActive():
@@ -371,34 +356,34 @@ class DownloadWorker(QObject):
             else:
                 self._add_log("⏹️ Download cancelled by user.\n", AppStyles.WARNING_COLOR)
             self._flush_logs_now()
-            # exit_code -2 = skipped, -1 = cancelled
             self.finished.emit(-2 if self._skip_requested else -1)
             return
 
-        # ── Format-error auto-retry ──
-        # If yt-dlp reported "format not available" and we haven't
-        # exhausted our retry budget, restart with `best` as the
-        # format selector. This catches the rare case where even the
-        # /best fallback in the format string didn't help (e.g. the
-        # video has no separate audio stream and the user picked a
-        # `bestvideo+bestaudio` chain).
-        if (
-            self._format_error_detected
-            and self._attempt_count < self._max_format_retries
-            and exit_code != 0
-        ):
+        is_403 = self._http_403_detected
+        is_fmt_err = self._format_error_detected
+
+        # ── Auto-retry for 403 or Format Error ──
+        if (is_403 or is_fmt_err) and self._attempt_count < self._max_format_retries and exit_code != 0:
             self._attempt_count += 1
             self._format_error_detected = False
-            self._add_log(
-                "⚠️ Requested format not available. Retrying with best available format…\n",
-                AppStyles.WARNING_COLOR,
-            )
+            self._http_403_detected = False
+            
+            if is_403:
+                self._add_log(
+                    "⚠️ HTTP 403 Forbidden detected. Retrying with Web player client…\n",
+                    AppStyles.WARNING_COLOR,
+                )
+                self._attempt_download(use_fallback_format=False, bypass_403=True)
+            else:
+                self._add_log(
+                    "⚠️ Requested format not available. Retrying with best available format…\n",
+                    AppStyles.WARNING_COLOR,
+                )
+                self._attempt_download(use_fallback_format=True, bypass_403=False)
+            
             self._flush_logs_now()
-            # Keep the log timer running for the retry
-            self._attempt_download(use_fallback_format=True)
             return
 
-        # ── Normal completion ──
         try:
             if self._log_timer and self._log_timer.isActive():
                 self._log_timer.stop()
@@ -542,7 +527,7 @@ class DownloadWorker(QObject):
             name = name[:180].rstrip(" .")
         return name or "Unknown"
 
-    def _build_command(self, use_fallback_format: bool = False) -> List[str]:
+    def _build_command(self, use_fallback_format: bool = False, bypass_403: bool = False) -> List[str]:
         s = self.settings
         it = self.item
 
@@ -556,11 +541,16 @@ class DownloadWorker(QObject):
             "--ffmpeg-location", str(s.FFMPEG_PATH.parent),
         ]
 
+        # ── FIX: Prevent YouTube 403 Forbidden by preferring Web client ──
+        url = it.get("url", "") or ""
+        if "youtube.com" in url or "youtu.be" in url:
+            # YouTube has heavily throttled/blocked the android & android vr
+            # clients, causing HTTP 403 Forbidden during download. Forcing
+            # the web client avoids this entirely.
+            cmd.extend(["--extractor-args", "youtube:player_client=web,android"])
+
         format_code = it.get("format_code", "")
 
-        # ── Format resolution ──
-        # When use_fallback_format is True (auto-retry after format error),
-        # skip all the preset/height resolution and just use `best`.
         if not use_fallback_format:
             try:
                 if isinstance(format_code, str) and format_code in getattr(s, "RESOLUTIONS", {}):
@@ -576,7 +566,7 @@ class DownloadWorker(QObject):
             except Exception:
                 pass
 
-        is_playlist = "list=" in (it.get("url", "") or "") or format_code in ("playlist_mp3", "playlist_opus")
+        is_playlist = "list=" in url or format_code in ("playlist_mp3", "playlist_opus")
         is_audio = self._is_audio_download(format_code)
         is_flac = (isinstance(format_code, str) and format_code == "audio_flac")
         is_opus = (isinstance(format_code, str) and format_code in ("audio_opus", "playlist_opus"))
@@ -588,10 +578,10 @@ class DownloadWorker(QObject):
             is_audio
             and is_playlist
             and getattr(s, "YT_MUSIC_METADATA", False)
-            and self.is_youtube_music_url(it.get("url", "") or "")
+            and self.is_youtube_music_url(url)
             and not use_fallback_format
         ):
-            is_flat_playlist = self._detect_flat_playlist(it.get("url", "") or "")
+            is_flat_playlist = self._detect_flat_playlist(url)
 
         if s.COOKIES_PATH.exists() and s.COOKIES_PATH.stat().st_size > 0:
             cmd.extend(["--cookies", str(s.COOKIES_PATH)])
@@ -602,6 +592,7 @@ class DownloadWorker(QObject):
         if getattr(s, "LIMIT_RATE", ""):
             cmd.extend(["--limit-rate", s.LIMIT_RATE])
         cmd.extend(["--retries", str(getattr(s, "RETRIES", 10))])
+        cmd.extend(["--fragment-retries", str(getattr(s, "RETRIES", 10))])
 
         if getattr(s, "DATEAFTER", ""):
             cmd.extend(["--dateafter", s.DATEAFTER])
@@ -636,7 +627,7 @@ class DownloadWorker(QObject):
                 if getattr(s, "ORGANIZE_BY_UPLOADER", False):
                     base /= "%(uploader)s"
 
-            is_yt_music = self.is_youtube_music_url(it.get("url", "") or "")
+            is_yt_music = self.is_youtube_music_url(url)
             if getattr(s, "YT_MUSIC_METADATA", False) and is_yt_music and (is_audio or is_playlist):
                 default_stub = "%(artist)s - %(title)s"
             else:
@@ -664,7 +655,6 @@ class DownloadWorker(QObject):
             else:
                 audio_format = "mp3"
 
-            # ── Fallback format for audio retry ──
             if use_fallback_format:
                 audio_selector = "bestaudio/best"
             else:
@@ -699,9 +689,6 @@ class DownloadWorker(QObject):
             if preferred not in {"mkv", "mp4", "webm"}:
                 preferred = "mkv"
 
-            url = it.get("url", "") or ""
-
-            # ── Fallback format for video retry ──
             if use_fallback_format:
                 chosen_format = "best"
             else:
@@ -744,7 +731,7 @@ class DownloadWorker(QObject):
             if getattr(s, "ADD_METADATA", False):
                 cmd.append("--add-metadata")
 
-        if getattr(s, "SPONSORBLOCK_CATEGORIES", None) and not self.is_short_video(it.get("url", "")):
+        if getattr(s, "SPONSORBLOCK_CATEGORIES", None) and not self.is_short_video(url):
             try:
                 cats = ",".join(s.SPONSORBLOCK_CATEGORIES)
                 cmd.extend(["--sponsorblock-remove", cats])
@@ -791,7 +778,7 @@ class DownloadWorker(QObject):
         _verify, _ytdlp_ssl_args, self._ssl_env = ssl_utils.resolve_ssl_config(self.settings)
         cmd.extend(_ytdlp_ssl_args)
 
-        cmd.append(it.get("url", ""))
+        cmd.append(url)
 
         return [str(c) for c in cmd]
 
