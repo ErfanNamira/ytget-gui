@@ -1784,24 +1784,16 @@ class MainWindow(QMainWindow):
         if self.is_downloading and not self.queue_paused:
             self.log("ℹ️ Queue is already running.\n", AppStyles.INFO_COLOR, "Info")
             return
-
-        # Count items that still need downloading
-        pending = [it for it in self.queue if it.get("status") in ("Pending", "Retrying")]
-        if not pending:
-            self.log("⚠️ No pending items in queue. Add URLs or clear completed/error items.\n",
-                     AppStyles.WARNING_COLOR, "Warning")
+        if not self.queue:
+            self.log("⚠️ Queue is empty. Add items to start.\n", AppStyles.WARNING_COLOR, "Warning")
             return
-
         self.queue_paused = False
         if not self.is_downloading:
-            self._initial_queue_len = len(pending) + (
-                1 if self.current_download_item else 0
-            )
-        self.log(
-            ("▶️ Resuming" if self.is_downloading else "▶️ Starting")
-            + " queue processing...\n",
-            AppStyles.SUCCESS_COLOR, "Info"
-        )
+            self._initial_queue_len = len(self.queue)
+        self.log(("▶️ Resuming" if self.is_downloading else "▶️ Starting") + " queue processing...\n", AppStyles.SUCCESS_COLOR, "Info")
+        if self.queue and (self.current_download_item is None):
+            self.queue[0]["status"] = "Downloading"
+            self._save_queue_permanent()
         self._update_global_progress_bar()
         self._download_next()
         self._update_button_states()
@@ -1817,13 +1809,7 @@ class MainWindow(QMainWindow):
     def _skip_current(self):
         if self.is_downloading and self.download_worker:
             self.log("⏭️ Skipping current item...\n", AppStyles.INFO_COLOR, "Info")
-            # Use skip() instead of cancel() so the item is marked
-            # Pending (not Retrying/Error) and stays in its current
-            # position in the queue.
-            if hasattr(self.download_worker, 'skip'):
-                self.download_worker.skip()
-            else:
-                self.download_worker.cancel()
+            self.download_worker.cancel()
 
     def _stop_all(self):
         if not self.is_downloading and not self.queue_paused:
@@ -1841,26 +1827,14 @@ class MainWindow(QMainWindow):
             self._update_button_states()
 
     def _download_next(self):
-        if self.queue_paused or self.is_downloading:
-            return
-
-        # Find the next item to download — skip Completed and Error items
-        # so they stay visible in the queue list for the user to review.
-        next_item = None
-        for item in self.queue:
-            if item.get("status") in ("Pending", "Retrying"):
-                next_item = item
-                break
-
-        if next_item is None:
-            if not self.is_downloading:
+        if self.queue_paused or self.is_downloading or not self.queue:
+            if not self.queue and not self.is_downloading:
                 self._on_queue_finished()
             return
-
         self.is_downloading = True
-        self.current_download_item = next_item
-        next_item["status"] = "Downloading"
-        next_item["progress"] = 0
+        self.current_download_item = self.queue[0]
+        self.current_download_item["status"] = "Downloading"
+        self.current_download_item["progress"] = 0
         self._save_queue_permanent()
         self._refresh_queue_list()
         self._update_button_states()
@@ -1900,10 +1874,13 @@ class MainWindow(QMainWindow):
         self.download_thread.start()
 
     def _on_download_status(self, status: str):
-        """Parse percentage from the throttled progress text and drive
-        the per-item progress bar.  We deliberately do NOT overwrite
-        current_download_item['status'] with this string — it's a
-        progress line like "45% ETA 00:12", not a queue status label."""
+        # `status` here is actually the throttled progress text emitted by
+        # DownloadWorker (e.g. "45% ETA 00:12"), not a queue status label
+        # ("Downloading"/"Completed"/...). Overwriting current_download_item
+        # ["status"] with it used to corrupt the status chip and, because
+        # set_progress() was never called anywhere, the progress bar stayed
+        # at 0% for the whole download. Parse the percentage out and drive
+        # the progress bar with it instead, leaving "status" alone.
         if self.current_download_item is None:
             return
 
@@ -1930,62 +1907,20 @@ class MainWindow(QMainWindow):
 
     def _on_download_finished(self, exit_code: int):
         self.is_downloading = False
-        item = self.current_download_item
-
-        # ── Determine if this was a user-initiated skip ──
-        is_skipped = (
-            self.download_worker is not None
-            and getattr(self.download_worker, '_skip_requested', False)
-        )
-
-        if item is not None:
-            if exit_code == 0:
-                # ── Success: keep in queue as Completed (visible to user) ──
-                item["status"] = "Completed"
-                item["progress"] = 100
-                item["retry_count"] = 0
-
-            elif is_skipped:
-                # ── Skipped: reset to Pending so it can be downloaded later ──
-                item["status"] = "Pending"
-                item["progress"] = 0
-                self.log("⏭️ Item skipped. It remains in the queue for later.\n",
-                         AppStyles.INFO_COLOR, "Info")
-
-            elif self._stop_all_requested:
-                # ── Stop: reset to Pending so queue can resume later ──
-                item["status"] = "Pending"
-                item["progress"] = 0
-                item["retry_count"] = 0
-
-            else:
-                # ── Actual download failure: move to end of queue for retry ──
-                retries = item.get("retry_count", 0) + 1
-                max_retries = getattr(self.settings, "MAX_RETRIES_PER_ITEM", 3)
-
-                if retries <= max_retries:
-                    item["retry_count"] = retries
-                    item["status"] = "Retrying"
-                    item["progress"] = 0
-                    self.log(
-                        f"⚠️ Download failed — moving to end of queue "
-                        f"(retry {retries}/{max_retries}).\n",
-                        AppStyles.WARNING_COLOR, "Warning"
-                    )
-                    # Move to end of queue
-                    if item in self.queue:
-                        self.queue.remove(item)
-                    self.queue.append(item)
-                else:
-                    item["status"] = "Error"
-                    item["progress"] = 0
-                    self.log(
-                        f"❌ Failed after {max_retries} attempts. Marked as Error.\n",
-                        AppStyles.ERROR_COLOR, "Error"
-                    )
-
+        if self.current_download_item is not None:
+            self.current_download_item["status"] = "Completed" if exit_code == 0 else "Error"
+            self.current_download_item["progress"] = 100 if exit_code == 0 else 0
             self._save_queue_permanent()
-
+        # Always advance past the item that just finished, whether it
+        # succeeded or failed. Previously only exit_code == 0 popped the
+        # item, so a failure (e.g. yt-dlp exiting 1) left the same item at
+        # queue[0]; since it's still in self.queue, the next _download_next()
+        # call picked it right back up and re-ran the same download from
+        # scratch -- which is why a failing playlist kept restarting from
+        # the beginning instead of moving on.
+        if self.queue:
+            self.queue.pop(0)
+            self._save_queue_permanent()
         self.current_download_item = None
 
         if self._stop_all_requested:
@@ -1993,28 +1928,20 @@ class MainWindow(QMainWindow):
             self._refresh_queue_list()
             self._update_button_states()
             self._update_global_progress_bar()
-            self.log("⏹️ Stopped. Queue is paused; remaining items are untouched.\n",
-                     AppStyles.WARNING_COLOR, "Info")
+            self.log("⏹️ Stopped. Queue is paused; remaining items are untouched.\n", AppStyles.WARNING_COLOR, "Info")
             return
 
         self._refresh_queue_list()
         self._update_button_states()
         self._update_global_progress_bar()
-
-        if not self.queue_paused:
+        if not self.queue_paused and self.queue:
             self._download_next()
+        elif not self.queue:
+            self._on_queue_finished()
 
     def _update_global_progress_bar(self):
-        """Progress = (completed + errored) / total items to process."""
-        if not self.queue:
-            self.global_progress.setValue(0)
-            return
-
         total = max(1, self._initial_queue_len if self._initial_queue_len else len(self.queue))
-        done = sum(
-            1 for it in self.queue
-            if it.get("status") in ("Completed", "Error")
-        )
+        done = (self._initial_queue_len - len(self.queue)) if self._initial_queue_len else 0
         percent = int((done / total) * 100) if total else 0
         self.global_progress.setRange(0, 100)
         self.global_progress.setValue(percent)
@@ -2531,13 +2458,8 @@ class MainWindow(QMainWindow):
             act.setChecked(k == value)
 
     def _update_button_states(self):
-        has_pending = any(
-            it.get("status") in ("Pending", "Retrying") for it in self.queue
-        )
         has_items = len(self.queue) > 0
-        self.btn_start_queue.setEnabled(
-            has_pending and (self.queue_paused or not self.is_downloading)
-        )
+        self.btn_start_queue.setEnabled(has_items and (self.queue_paused or not self.is_downloading))
         self.btn_pause_queue.setEnabled(self.is_downloading and not self.queue_paused)
         self.btn_skip.setEnabled(self.is_downloading)
         self.btn_stop_all.setEnabled(self.is_downloading)
