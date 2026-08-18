@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import json
-import re
-import subprocess
-import platform
-import os
 from pathlib import Path
-from typing import Optional, List, Any
+from typing import Optional
 
 from PySide6.QtCore import QObject, Signal
 
 from ytget_gui.settings import AppSettings
-from ytget_gui.workers import cookies as CookieManager
-from ytget_gui.workers import ssl_utils
+from ytget_gui.workers import fetch_core
 
 
 class TitleFetcher(QObject):
@@ -29,8 +23,8 @@ class TitleFetcher(QObject):
     """
 
     title_fetched = Signal(str, str)                    # url, title (legacy)
-    metadata_fetched = Signal(str, str, str, str, bool) # url, title, video_id, thumb_url, is_playlist
-    error = Signal(str, str)                            # url, error message
+    metadata_fetched = Signal(str, str, str, str, bool)  # url, title, video_id, thumb_url, is_playlist
+    error = Signal(str, str)                             # url, error message
     finished = Signal()
 
     def __init__(
@@ -54,211 +48,43 @@ class TitleFetcher(QObject):
         self.cookies_from_browser = cookies_from_browser
         self.cookies_profile = cookies_profile
 
-    @staticmethod
-    def _is_spotify_url(url: str) -> bool:
-        return bool(re.search(r"https?://(open\.)?spotify\.com/", url, re.IGNORECASE))
-
-    @staticmethod
-    def _spotify_title_from_url(url: str) -> str:
-        """
-        Derive a human-readable placeholder title from a Spotify URL while
-        spotdl resolves the real metadata later.
-        Examples:
-          .../track/4uLU6hMCjMI75M1A2tKUQC  -> "Spotify Track"
-          .../album/xyz                      -> "Spotify Album"
-          .../playlist/xyz                   -> "Spotify Playlist"
-          .../artist/xyz                     -> "Spotify Artist"
-        """
-        import re as _re
-        m = _re.search(r"spotify\.com/(?:[a-z-]+/)?([a-z]+)/", url, _re.IGNORECASE)
-        kind = m.group(1).capitalize() if m else "Link"
-        return f"Spotify {kind}"
-
     def run(self):
         try:
-            # ── Spotify short-circuit ──────────────────────────────────────
-            # yt-dlp cannot handle open.spotify.com URLs and will be blocked.
-            # Emit a placeholder title so the item appears in the queue;
-            # SpotDLWorker will handle the actual download.
-            if self._is_spotify_url(self.url):
-                title = self._spotify_title_from_url(self.url)
+            if fetch_core.is_spotify_url(self.url):
+                title = fetch_core.spotify_placeholder_title(self.url)
                 self.metadata_fetched.emit(self.url, title, "", "", False)
                 self.title_fetched.emit(self.url, title)
-                self.finished.emit()
                 return
 
-            # If settings request auto-refresh from browser, attempt it (best-effort)
-            try:
-                if self.settings is not None and getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
-                    ok, msg = CookieManager.refresh_before_download(self.settings)
-                    if ok:
-                        # Ensure settings reflect exported cookies and persist a timestamp (best-effort)
-                        try:
-                            exported_path = getattr(self.settings, "COOKIES_PATH", None)
-                            if not exported_path or str(exported_path) == "":
-                                exported_path = Path(getattr(self.settings, "BASE_DIR", Path("."))) / "cookies.txt"
-                            self.settings.COOKIES_PATH = Path(exported_path)
-
-                            from datetime import datetime
-                            ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-                            self.settings.COOKIES_LAST_IMPORTED = ts
-
-                            if hasattr(self.settings, "save_config"):
-                                self.settings.save_config()
-
-                            # update local cookies_path variable used by this fetcher
-                            self.cookies_path = getattr(self.settings, "COOKIES_PATH", self.cookies_path)
-                        except Exception:
-                            # best-effort only; don't block metadata fetching
-                            self.cookies_path = getattr(self.settings, "COOKIES_PATH", self.cookies_path)
-                    else:
-                        # surface a non-fatal warning via error signal
-                        self.error.emit(self.url, f"Cookies refresh: {msg}")
-            except Exception:
-                pass
-
-            # Build yt-dlp command.
-            cmd: List[str] = [
-                str(self.yt_dlp_path),
-                "--ffmpeg-location", str(self.ffmpeg_dir),
-                "--skip-download",
-                "--print-json",
-                "--ignore-errors",
-                "--flat-playlist",
-            ]
-
-            # SSL/CA handling (supports MITM-DomainFronting style local proxies
-            # via a trusted custom CA cert, falling back to --no-check-certificates
-            # only if no custom CA is configured)
-            _verify, _ytdlp_ssl_args, _ssl_env = ssl_utils.resolve_ssl_config(self.settings)
-            cmd.extend(_ytdlp_ssl_args)
-
-            # Add URL
-            cmd.append(self.url)
-
-            # Cookies handling: prefer explicit cookies_from_browser param, else settings, else file cookies
-            cookies_from = self.cookies_from_browser or (getattr(self.settings, "COOKIES_FROM_BROWSER", "") if self.settings is not None else "")
-            if cookies_from:
-                if self.cookies_profile:
-                    cmd.extend(
-                        [
-                            "--cookies-from-browser",
-                            f"{cookies_from}:{self.cookies_profile}",
-                        ]
-                    )
-                else:
-                    cmd.extend(["--cookies-from-browser", cookies_from])
-            elif self.cookies_path and self.cookies_path.exists() and self.cookies_path.stat().st_size > 0:
-                cmd.extend(["--cookies", str(self.cookies_path)])
-
-            # Proxy
-            if self.proxy_url:
-                cmd.extend(["--proxy", self.proxy_url])
-
-            # Prepare subprocess environment so phantomjs and bundled binaries are visible immediately
-            env = os.environ.copy()
-            try:
-                if self.settings is not None:
-                    extra_paths = []
-                    extra_paths.append(str(self.settings.INTERNAL_DIR))
-                    extra_paths.append(str(self.settings.BASE_DIR))
-                    ph = getattr(self.settings, "PHANTOMJS_PATH", None)
-                    if ph and ph.exists():
-                        extra_paths.append(str(ph.parent))
-                    cur_path = env.get("PATH", "")
-                    for p in reversed(extra_paths):
-                        if p and p not in cur_path:
-                            cur_path = f"{p}{os.pathsep}{cur_path}"
-                    env["PATH"] = cur_path
-                    if os.name == "nt" and not env.get("PATHEXT"):
-                        env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
-            except Exception:
-                pass
-            try:
-                env.update(_ssl_env)
-            except Exception:
-                pass
-
-            # Hide child console on Windows, leave None elsewhere
-            startupinfo = None
-            if platform.system().lower().startswith("win"):
-                try:
-                    si = subprocess.STARTUPINFO()
-                    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    startupinfo = si
-                except Exception:
-                    startupinfo = None
-
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=120,
-                startupinfo=startupinfo,
-                encoding="utf-8",
-                env=env,
+            metadata, err, updated_cookies_path, refresh_warning = fetch_core.fetch_metadata(
+                url=self.url,
+                yt_dlp_path=self.yt_dlp_path,
+                ffmpeg_dir=self.ffmpeg_dir,
+                cookies_path=self.cookies_path,
+                proxy_url=self.proxy_url,
+                settings=self.settings,
+                cookies_from_browser=self.cookies_from_browser or "",
+                cookies_profile=self.cookies_profile or "",
             )
 
-            if proc.returncode != 0:
-                msg = (proc.stderr or "yt-dlp returned an error").strip()
-                self.error.emit(self.url, msg)
-                self.finished.emit()
+            if updated_cookies_path is not None:
+                self.cookies_path = updated_cookies_path
+            if refresh_warning:
+                self.error.emit(self.url, refresh_warning)
+
+            if err is not None:
+                self.error.emit(self.url, err)
                 return
 
-            output = (proc.stdout or "").strip()
-            if not output:
-                self.error.emit(self.url, "No metadata received from yt-dlp")
-                self.finished.emit()
-                return
-
-            # yt-dlp can emit multiple JSON lines (especially for playlists).
-            # Parse all valid JSON objects, in order.
-            infos: List[dict[str, Any]] = []
-            for line in (l for l in output.splitlines() if l.strip()):
-                try:
-                    infos.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
-            if not infos:
-                self.error.emit(self.url, "Failed to parse metadata: no valid JSON objects")
-                self.finished.emit()
-                return
-
-            # Determine playlist context if any line indicates it
-            is_playlist = any(
-                ("entries" in info) or ("playlist_index" in info) or ("playlist_title" in info)
-                for info in infos
+            self.metadata_fetched.emit(
+                self.url, metadata.title, metadata.video_id, metadata.thumb_url, metadata.is_playlist
             )
+            self.title_fetched.emit(self.url, metadata.title)
 
-            # Prefer a line that contains playlist_title to derive the queue title in playlist context
-            playlist_title = None
-            for info in infos:
-                pt = info.get("playlist_title")
-                if pt:
-                    playlist_title = pt
-                    break
-
-            # Use the first parsed object as the representative entry for id/thumbnail
-            representative = infos[0]
-            video_id = representative.get("id") or ""
-            thumb_url = representative.get("thumbnail") or ""
-
-            # Title selection: show playlist title when in playlist context; otherwise entry title
-            if is_playlist and playlist_title:
-                title = playlist_title
-            else:
-                title = representative.get("title") or "Unknown Title"
-
-            # Emit richer metadata first
-            self.metadata_fetched.emit(self.url, title, video_id, thumb_url, is_playlist)
-            # Emit legacy title signal for backward compatibility
-            self.title_fetched.emit(self.url, title)
-
-        except subprocess.TimeoutExpired:
-            self.error.emit(self.url, "Timeout while fetching metadata (120 seconds)")
         except Exception as e:
+            # Safety net - fetch_core.fetch_metadata already catches its own
+            # subprocess errors, but this guards against anything unexpected
+            # (e.g. Qt signal errors) so `finished` is always emitted.
             self.error.emit(self.url, f"Unexpected error: {e}")
         finally:
             self.finished.emit()
