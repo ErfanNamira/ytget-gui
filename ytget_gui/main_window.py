@@ -1791,9 +1791,6 @@ class MainWindow(QMainWindow):
         if not self.is_downloading:
             self._initial_queue_len = len(self.queue)
         self.log(("▶️ Resuming" if self.is_downloading else "▶️ Starting") + " queue processing...\n", AppStyles.SUCCESS_COLOR, "Info")
-        if self.queue and (self.current_download_item is None):
-            self.queue[0]["status"] = "Downloading"
-            self._save_queue_permanent()
         self._update_global_progress_bar()
         self._download_next()
         self._update_button_states()
@@ -1827,10 +1824,24 @@ class MainWindow(QMainWindow):
             self._update_button_states()
 
     def _download_next(self):
-        if self.queue_paused or self.is_downloading or not self.queue:
-            if not self.queue and not self.is_downloading:
-                self._on_queue_finished()
+        if self.queue_paused or self.is_downloading:
             return
+        # Failed/completed/cancelled items are now kept in the queue
+        # (moved to the back) instead of being deleted, so we can't just
+        # grab queue[0] blindly anymore -- that could re-download an item
+        # that already permanently failed, over and over. Find the next
+        # item that's actually still actionable.
+        idx = next(
+            (i for i, it in enumerate(self.queue)
+             if it.get("status") not in ("Completed", "Error", "Cancelled")),
+            None,
+        )
+        if idx is None:
+            self._on_queue_finished()
+            return
+        if idx != 0:
+            it = self.queue.pop(idx)
+            self.queue.insert(0, it)
         self.is_downloading = True
         self.current_download_item = self.queue[0]
         self.current_download_item["status"] = "Downloading"
@@ -1907,19 +1918,65 @@ class MainWindow(QMainWindow):
 
     def _on_download_finished(self, exit_code: int):
         self.is_downloading = False
-        if self.current_download_item is not None:
-            self.current_download_item["status"] = "Completed" if exit_code == 0 else "Error"
-            self.current_download_item["progress"] = 100 if exit_code == 0 else 0
-            self._save_queue_permanent()
-        # Always advance past the item that just finished, whether it
-        # succeeded or failed. Previously only exit_code == 0 popped the
-        # item, so a failure (e.g. yt-dlp exiting 1) left the same item at
-        # queue[0]; since it's still in self.queue, the next _download_next()
-        # call picked it right back up and re-ran the same download from
-        # scratch -- which is why a failing playlist kept restarting from
-        # the beginning instead of moving on.
-        if self.queue:
-            self.queue.pop(0)
+        cancelled = bool(self._stop_all_requested) or exit_code == -1
+        item = self.current_download_item
+
+        if item is not None:
+            # Always advance past the item that just finished, whether it
+            # succeeded or failed. Previously only exit_code == 0 popped the
+            # item, so a failure (e.g. yt-dlp exiting 1) left the same item
+            # at queue[0]; since it's still in self.queue, the next
+            # _download_next() call picked it right back up and re-ran the
+            # same download from scratch -- which is why a failing playlist
+            # kept restarting from the beginning instead of moving on.
+            if self.queue:
+                self.queue.pop(0)
+
+            if exit_code == 0:
+                item["status"] = "Completed"
+                item["progress"] = 100
+                item["queue_attempts"] = 0
+                self.queue.append(item)
+            elif cancelled:
+                # User explicitly stopped/skipped this one -- leave it
+                # sitting where it was, don't touch its retry count, and
+                # don't shove it to the back where it might auto-start again
+                # unattended.
+                item["progress"] = 0
+                if item.get("status") not in ("Completed",):
+                    item["status"] = "Cancelled"
+                self.queue.append(item)
+            else:
+                # Failed on its own (DownloadWorker already exhausted its
+                # internal auto-retries for transient errors by this point).
+                # Per user preference: never silently drop a failed item --
+                # move it to the back of the queue so it's still visible and
+                # gets another shot after the rest of the queue has had a
+                # chance to run (useful when the failure was e.g. a
+                # site-wide rate limit rather than something item-specific).
+                # Once QUEUE_ERROR_RETRIES requeues have been used up, it
+                # still goes to the back, but stays marked "Error" instead
+                # of being requeued as "Pending" again.
+                attempts = int(item.get("queue_attempts", 0)) + 1
+                item["queue_attempts"] = attempts
+                item["progress"] = 0
+                max_requeues = max(0, int(getattr(self.settings, "QUEUE_ERROR_RETRIES", 2)))
+                if attempts <= max_requeues:
+                    item["status"] = "Pending"
+                    self.log(
+                        f"↩️ '{short(item.get('title') or item.get('url',''), 60)}' failed — "
+                        f"moved to end of queue to retry later (attempt {attempts}/{max_requeues}).\n",
+                        AppStyles.WARNING_COLOR, "Warning",
+                    )
+                else:
+                    item["status"] = "Error"
+                    self.log(
+                        f"❌ '{short(item.get('title') or item.get('url',''), 60)}' failed again — "
+                        f"kept in queue (moved to end) marked as Error instead of being removed.\n",
+                        AppStyles.ERROR_COLOR, "Error",
+                    )
+                self.queue.append(item)
+
             self._save_queue_permanent()
         self.current_download_item = None
 
@@ -1940,8 +1997,11 @@ class MainWindow(QMainWindow):
             self._on_queue_finished()
 
     def _update_global_progress_bar(self):
+        # Completed/Error/Cancelled items are now kept in the queue (moved
+        # to the back) rather than removed, so queue length alone no longer
+        # tells us how many are "done" -- count terminal statuses directly.
         total = max(1, self._initial_queue_len if self._initial_queue_len else len(self.queue))
-        done = (self._initial_queue_len - len(self.queue)) if self._initial_queue_len else 0
+        done = sum(1 for it in self.queue if it.get("status") in ("Completed", "Error", "Cancelled"))
         percent = int((done / total) * 100) if total else 0
         self.global_progress.setRange(0, 100)
         self.global_progress.setValue(percent)
@@ -2309,7 +2369,7 @@ class MainWindow(QMainWindow):
         before = len(self.queue)
         keep = []
         for it in self.queue:
-            if it.get("status") == "Completed":
+            if it.get("status") in ("Completed", "Cancelled"):
                 try:
                     url = it.get("url", "")
                     if url in self._pending_thumb_urls:
