@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import json
-import re
-import subprocess
-import platform
-import os
-from typing import List, Any, Deque, Set, Optional
 from collections import deque
-from pathlib import Path
+from typing import Deque, List, Set
 
 from PySide6.QtCore import QObject, Signal, Slot
+
 from ytget_gui.settings import AppSettings
-from ytget_gui.workers import cookies as CookieManager
-from ytget_gui.workers import ssl_utils
+from ytget_gui.workers import fetch_core
 
 
 class TitleFetchQueue(QObject):
@@ -24,8 +18,8 @@ class TitleFetchQueue(QObject):
     """
 
     # Forwarded signals
-    metadata_fetched = Signal(str, str, str, str, bool)   # url, title, video_id, thumb_url, is_playlist
-    title_fetched = Signal(str, str)                      # url, title (legacy)
+    metadata_fetched = Signal(str, str, str, str, bool)  # url, title, video_id, thumb_url, is_playlist
+    title_fetched = Signal(str, str)                     # url, title (legacy)
     error = Signal(str, str)                              # url, message
 
     # Optional signals for status/UX
@@ -63,17 +57,24 @@ class TitleFetchQueue(QObject):
 
     @Slot()
     def stop(self):
-        # Soft stop: finish current item and drain nothing else
+        # Soft stop: finish current item, then drop everything still queued.
         self._stopping = True
 
     def _process_next(self):
-        # Iterative drain loop (not recursive): a recursive version here grows
-        # the call stack by one frame per queued URL and can raise
+        # Iterative drain loop (not recursive): a recursive version here
+        # grows the call stack by one frame per queued URL and can raise
         # RecursionError on large batches/playlists.
         if self._running:
             return
         self._running = True
         try:
+            # BUGFIX: previously `_stopping` was never reset once stop() was
+            # called, so every subsequent enqueue() would immediately wipe
+            # the queue forever and the worker was permanently dead for the
+            # rest of the object's life. Reset it at the start of each drain
+            # so a fresh enqueue after stop() actually restarts the queue.
+            self._stopping = False
+
             while True:
                 if self._stopping:
                     self._queue.clear()
@@ -99,171 +100,32 @@ class TitleFetchQueue(QObject):
         Inline version of TitleFetcher.run(), but without extra per-job QThread.
         Runs in this worker thread. Emits the same signals expected by MainWindow.
         """
-        # ── Spotify short-circuit ──────────────────────────────────────────
-        # yt-dlp cannot handle open.spotify.com URLs and will be blocked.
-        # Emit a placeholder title so the item appears in the queue;
-        # SpotDLWorker will handle the actual download.
-        if re.search(r"https?://(open\.)?spotify\.com/", url, re.IGNORECASE):
-            m = re.search(r"spotify\.com/(?:[a-z-]+/)?([a-z]+)/", url, re.IGNORECASE)
-            kind = m.group(1).capitalize() if m else "Link"
-            title = f"Spotify {kind}"
+        if fetch_core.is_spotify_url(url):
+            title = fetch_core.spotify_placeholder_title(url)
             self.metadata_fetched.emit(url, title, "", "", False)
             self.title_fetched.emit(url, title)
             return
 
-        yt_dlp_path: Path = self.settings.YT_DLP_PATH
-        ffmpeg_dir: Path = self.settings.FFMPEG_PATH.parent
-        cookies_path: Path = self.settings.COOKIES_PATH
-        proxy_url: str = self.settings.PROXY_URL or ""
-
-        # Attempt to refresh cookies if configured
-        try:                                      
-            if getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
-                ok, msg = CookieManager.refresh_before_download(self.settings)
-                if ok:
-                    # Ensure cookies_path variable points to exported file; update settings and persist timestamp
-                    try:
-                        exported_path = getattr(self.settings, "COOKIES_PATH", None)
-                        if not exported_path or str(exported_path) == "":
-                            exported_path = Path(getattr(self.settings, "BASE_DIR", Path("."))) / "cookies.txt"
-                        # update runtime settings
-                        self.settings.COOKIES_PATH = Path(exported_path)
-                        from datetime import datetime
-                        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-                        self.settings.COOKIES_LAST_IMPORTED = ts
-                        if hasattr(self.settings, "save_config"):
-                            self.settings.save_config()
-                        # reflect change locally for this function
-                        cookies_path = getattr(self.settings, "COOKIES_PATH", cookies_path)
-                    except Exception:
-                        cookies_path = getattr(self.settings, "COOKIES_PATH", cookies_path)
-                else:
-                    # notify but proceed
-                    self.error.emit(url, f"Cookies refresh: {msg}")                  
-        except Exception:
-            # swallow so metadata fetching still proceeds
-            pass
-
-        cmd: List[str] = [
-            str(yt_dlp_path),
-            "--ffmpeg-location", str(ffmpeg_dir),
-            "--skip-download",
-            "--print-json",
-            "--ignore-errors",
-            "--flat-playlist",
-            url,
-        ]
-
-        # Cookies: prefer --cookies-from-browser if configured, else cookie file
-        cfb = getattr(self.settings, "COOKIES_FROM_BROWSER", "") or ""
-        if cfb:
-            cmd.extend(["--cookies-from-browser", cfb])
-        elif cookies_path and cookies_path.exists() and cookies_path.stat().st_size > 0:
-            cmd.extend(["--cookies", str(cookies_path)])
-
-        # Proxy
-        if proxy_url:
-            cmd.extend(["--proxy", proxy_url])
-
-        # SSL/CA handling (supports MITM-DomainFronting style local proxies
-        # via a trusted custom CA cert, falling back to --no-check-certificates
-        # only if no custom CA is configured)
-        _verify, _ytdlp_ssl_args, _ssl_env = ssl_utils.resolve_ssl_config(self.settings)
-        cmd.extend(_ytdlp_ssl_args)
-
-        # Prepare environment for subprocess so phantomjs and bundled binaries are visible immediately
-        env = os.environ.copy()
-        try:
-            extra_paths = []
-            extra_paths.append(str(self.settings.INTERNAL_DIR))
-            extra_paths.append(str(self.settings.BASE_DIR))
-            ph = getattr(self.settings, "PHANTOMJS_PATH", None)
-            if ph and ph.exists():
-                extra_paths.append(str(ph.parent))
-            cur_path = env.get("PATH", "")
-            for p in reversed(extra_paths):
-                if p and p not in cur_path:
-                    cur_path = f"{p}{os.pathsep}{cur_path}"
-            env["PATH"] = cur_path
-            if os.name == "nt":
-                if not env.get("PATHEXT"):
-                    env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
-        except Exception:
-            pass
-        try:
-            env.update(_ssl_env)
-        except Exception:
-            pass
-
-        startupinfo = None
-        if platform.system().lower().startswith("win"):
-            try:
-                si = subprocess.STARTUPINFO()
-                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo = si
-            except Exception:
-                pass
-
-        # run subprocess and capture raw bytes
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=False,          # read raw bytes
-                check=False,
-                timeout=120,
-                startupinfo=startupinfo,
-                env=env,
-            )
-        except subprocess.TimeoutExpired:
-            self.error.emit(url, "Timeout while fetching metadata (120 seconds)")
-            return
-        except Exception as e:
-            self.error.emit(url, f"Unexpected error: {e}")
-            return
-
-        # decode safely with replacement for invalid bytes
-        stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
-        stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
-
-        if proc.returncode != 0:
-            msg = (stderr or "yt-dlp returned an error").strip()
-            self.error.emit(url, msg)
-            return
-
-        output = stdout.strip()
-        if not output:
-            self.error.emit(url, "No metadata received from yt-dlp")
-            return
-
-        infos: List[dict[str, Any]] = []
-        for line in (l for l in output.splitlines() if l.strip()):
-            try:
-                infos.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-
-        if not infos:
-            self.error.emit(url, "Failed to parse metadata: no valid JSON objects")
-            return
-
-        is_playlist = any(
-            ("entries" in info) or ("playlist_index" in info) or ("playlist_title" in info)
-            for info in infos
+        metadata, err, updated_cookies_path, refresh_warning = fetch_core.fetch_metadata(
+            url=url,
+            yt_dlp_path=self.settings.YT_DLP_PATH,
+            ffmpeg_dir=self.settings.FFMPEG_PATH.parent,
+            cookies_path=self.settings.COOKIES_PATH,
+            proxy_url=self.settings.PROXY_URL or "",
+            settings=self.settings,
+            cookies_from_browser=getattr(self.settings, "COOKIES_FROM_BROWSER", "") or "",
         )
 
-        playlist_title = None
-        for info in infos:
-            pt = info.get("playlist_title")
-            if pt:
-                playlist_title = pt
-                break
+        if updated_cookies_path is not None:
+            self.settings.COOKIES_PATH = updated_cookies_path
+        if refresh_warning:
+            self.error.emit(url, refresh_warning)
 
-        representative = infos[0]
-        video_id = representative.get("id") or ""
-        thumb_url = representative.get("thumbnail") or ""
-        title = playlist_title if (is_playlist and playlist_title) else (representative.get("title") or "Unknown Title")
+        if err is not None:
+            self.error.emit(url, err)
+            return
 
-        # Emit in the same order your MainWindow expects
-        self.metadata_fetched.emit(url, title, video_id, thumb_url, is_playlist)
-        self.title_fetched.emit(url, title)
+        self.metadata_fetched.emit(
+            url, metadata.title, metadata.video_id, metadata.thumb_url, metadata.is_playlist
+        )
+        self.title_fetched.emit(url, metadata.title)
