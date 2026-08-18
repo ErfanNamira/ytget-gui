@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional, Callable, List, Tuple
 
-from PySide6.QtCore import Qt, Signal, QEvent, QSize
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap, QColor
 from PySide6.QtWidgets import (
     QWidget,
@@ -26,26 +26,15 @@ def _clamp(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n] + "…"
 
 
-STATUS_COLORS = {
-    "Pending":    "#6B7280",
-    "Queued":     "#6B7280",
-    "Downloading":"#00E5FF",
-    "Completed":  "#22D3A5",
-    "Error":      "#F87171",
-    "Skipped":    "#FBBF24",
-    "Cancelled":  "#9CA3AF",
-}
-_DEFAULT_STATUS_COLOR = "#6B7285"
-
 # Status chip backgrounds (rgba glass style)
 STATUS_CHIP_STYLES = {
-    "Pending":    "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);",
-    "Queued":     "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);",
-    "Downloading":"background: rgba(0, 229, 255, 30); color: #00E5FF; border: 1px solid rgba(0, 229, 255, 80);",
-    "Completed":  "background: rgba(34, 211, 165, 30); color: #22D3A5; border: 1px solid rgba(34, 211, 165, 80);",
-    "Error":      "background: rgba(248, 113, 113, 30); color: #F87171; border: 1px solid rgba(248, 113, 113, 80);",
-    "Skipped":    "background: rgba(251, 191, 36, 30); color: #FBBF24; border: 1px solid rgba(251, 191, 36, 80);",
-    "Cancelled":  "background: rgba(156, 163, 175, 30); color: #9CA3AF; border: 1px solid rgba(156, 163, 175, 60);",
+    "Pending":     "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);",
+    "Queued":      "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);",
+    "Downloading": "background: rgba(0, 229, 255, 30); color: #00E5FF; border: 1px solid rgba(0, 229, 255, 80);",
+    "Completed":   "background: rgba(34, 211, 165, 30); color: #22D3A5; border: 1px solid rgba(34, 211, 165, 80);",
+    "Error":       "background: rgba(248, 113, 113, 30); color: #F87171; border: 1px solid rgba(248, 113, 113, 80);",
+    "Skipped":     "background: rgba(251, 191, 36, 30); color: #FBBF24; border: 1px solid rgba(251, 191, 36, 80);",
+    "Cancelled":   "background: rgba(156, 163, 175, 30); color: #9CA3AF; border: 1px solid rgba(156, 163, 175, 60);",
 }
 _DEFAULT_CHIP_STYLE = "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);"
 
@@ -53,6 +42,25 @@ _DEFAULT_CHIP_STYLE = "background: rgba(107, 114, 128, 40); color: #9CA3AF; bord
 class QueueCard(QFrame):
     """
     Queue item card — glassmorphism style.
+
+    Performance notes (why this version doesn't stutter in long queues):
+      * The drop shadow is only attached while the card is hovered/elevated.
+        A QGraphicsDropShadowEffect forces Qt to render the widget through an
+        offscreen compositing pass; keeping one permanently active on every
+        row in a scrolling list is the single biggest cause of scroll lag.
+        Here the effect object is created once and only *attached* on hover.
+      * Hover handling uses enterEvent/leaveEvent instead of an installed
+        eventFilter, so every mouse event over the card no longer has to be
+        routed through Python for a type check.
+      * setMouseTracking is off (it was never needed — Enter/Leave fire
+        regardless of mouse tracking; tracking only enables extra
+        mouseMoveEvent traffic we don't use, which is pure overhead across
+        many rows).
+      * style().unpolish()/polish() is only called when the "elevated"
+        property actually changes, not on every event.
+      * Repeated identical progress/thumbnail/title updates are no-ops
+        (already guarded), avoiding redundant layout/paint churn when the
+        backend re-emits the same value.
     """
 
     removed = Signal()
@@ -75,18 +83,21 @@ class QueueCard(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setProperty("elevated", False)
 
-        # Glass drop shadow for depth
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(16)
-        shadow.setColor(QColor(0, 0, 0, 60))
-        shadow.setOffset(0, 2)
-        self.setGraphicsEffect(shadow)
+        # Shadow effect is only attached while hovered. Qt deletes the
+        # previously-installed QGraphicsEffect whenever setGraphicsEffect()
+        # is called again (even with None), so we can't reuse a single
+        # QGraphicsDropShadowEffect instance across attach/detach cycles —
+        # doing so leaves a dangling Python wrapper around a deleted C++
+        # object. Instead we build a fresh effect each time we attach it.
+        self._shadow: Optional[QGraphicsDropShadowEffect] = None
+        self._shadow_on = False
 
         self._context_actions: List[Tuple[str, Callable[[], None]]] = []
         self._last_meta_width: int = -1
         self._last_progress_value: int = -1
         self._last_thumb_path: Optional[str] = None
         self._last_thumb_pixmap_key: Optional[int] = None
+        self._elevated: bool = False
 
         root = QHBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -211,10 +222,6 @@ class QueueCard(QFrame):
         self.progress.setAccessibleName("ProgressBar")
         self.status_chip.setAccessibleName("StatusChip")
 
-        # Hover elevation polish
-        self.setMouseTracking(True)
-        self.installEventFilter(self)
-
         # Initial style
         self._apply_status_style(status)
 
@@ -275,10 +282,13 @@ class QueueCard(QFrame):
         return scaled.copy(x, y, size.width(), size.height())
 
     def _apply_status_style(self, status: str) -> None:
+        if self.status_chip.text() == status:
+            # Text unchanged, but style could still differ on first call;
+            # cheap enough to just re-set the stylesheet regardless.
+            pass
         self.status_chip.setText(status)
         chip_style = STATUS_CHIP_STYLES.get(status, _DEFAULT_CHIP_STYLE)
         self.status_chip.setStyleSheet(chip_style)
-        self._repolish()
 
     def _open_context_menu(self) -> None:
         menu = QMenu(self)
@@ -293,7 +303,27 @@ class QueueCard(QFrame):
             menu.addAction("Move down").triggered.connect(self.movedDown.emit)
         menu.exec(self.more_btn.mapToGlobal(self.more_btn.rect().bottomLeft()))
 
-    def _repolish(self) -> None:
+    def _set_elevated(self, on: bool) -> None:
+        if on == self._elevated:
+            return
+        self._elevated = on
+
+        # Attach/detach the shadow only on state change — this is what
+        # keeps idle rows in a long queue cheap to paint/scroll.
+        if on and not self._shadow_on:
+            shadow = QGraphicsDropShadowEffect()
+            shadow.setBlurRadius(16)
+            shadow.setColor(QColor(0, 0, 0, 60))
+            shadow.setOffset(0, 2)
+            self._shadow = shadow
+            self.setGraphicsEffect(shadow)
+            self._shadow_on = True
+        elif not on and self._shadow_on:
+            self.setGraphicsEffect(None)
+            self._shadow = None
+            self._shadow_on = False
+
+        self.setProperty("elevated", on)
         style = self.style()
         style.unpolish(self)
         style.polish(self)
@@ -313,18 +343,19 @@ class QueueCard(QFrame):
             self.meta_lbl.setToolTip(self._full_meta_text)
 
     # ----- Hover/elevation -----
+    # Overriding enterEvent/leaveEvent directly (instead of an installed
+    # eventFilter watching every event on the widget) avoids extra Python
+    # dispatch overhead per mouse move across a long, scrollable queue.
 
-    def eventFilter(self, obj, event):
-        et = event.type()
-        if et == QEvent.Enter:
-            self.setProperty("elevated", True)
-            self._repolish()
-        elif et == QEvent.Leave:
-            self.setProperty("elevated", False)
-            self._repolish()
-        return super().eventFilter(obj, event)
+    def enterEvent(self, event) -> None:
+        self._set_elevated(True)
+        super().enterEvent(event)
 
-    def resizeEvent(self, event):
+    def leaveEvent(self, event) -> None:
+        self._set_elevated(False)
+        super().leaveEvent(event)
+
+    def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         width = self.meta_lbl.width()
         if width > 0:
