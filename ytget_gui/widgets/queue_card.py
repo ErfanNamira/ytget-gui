@@ -34,10 +34,10 @@ STATUS_COLORS = {
     "Error":      "#F87171",
     "Skipped":    "#FBBF24",
     "Cancelled":  "#9CA3AF",
+    "Retrying":   "#FBBF24",
 }
 _DEFAULT_STATUS_COLOR = "#6B7285"
 
-# Status chip backgrounds (rgba glass style)
 STATUS_CHIP_STYLES = {
     "Pending":    "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);",
     "Queued":     "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);",
@@ -46,14 +46,13 @@ STATUS_CHIP_STYLES = {
     "Error":      "background: rgba(248, 113, 113, 30); color: #F87171; border: 1px solid rgba(248, 113, 113, 80);",
     "Skipped":    "background: rgba(251, 191, 36, 30); color: #FBBF24; border: 1px solid rgba(251, 191, 36, 80);",
     "Cancelled":  "background: rgba(156, 163, 175, 30); color: #9CA3AF; border: 1px solid rgba(156, 163, 175, 60);",
+    "Retrying":   "background: rgba(251, 191, 36, 30); color: #FBBF24; border: 1px solid rgba(251, 191, 36, 80);",
 }
 _DEFAULT_CHIP_STYLE = "background: rgba(107, 114, 128, 40); color: #9CA3AF; border: 1px solid rgba(107, 114, 128, 60);"
 
 
 class QueueCard(QFrame):
-    """
-    Queue item card — glassmorphism style.
-    """
+    """Queue item card — glassmorphism style."""
 
     removed = Signal()
     movedUp = Signal()
@@ -75,7 +74,6 @@ class QueueCard(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
         self.setProperty("elevated", False)
 
-        # Glass drop shadow for depth
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(16)
         shadow.setColor(QColor(0, 0, 0, 60))
@@ -92,7 +90,6 @@ class QueueCard(QFrame):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(12)
 
-        # Drag handle
         self.handle = QLabel("⠿")
         self.handle.setObjectName("DragHandle")
         self.handle.setFixedWidth(16)
@@ -100,7 +97,6 @@ class QueueCard(QFrame):
         self.handle.setToolTip("Drag to reorder")
         root.addWidget(self.handle)
 
-        # Thumbnail
         if show_thumbnail:
             self.thumb = QLabel()
             self.thumb.setFixedSize(self.THUMB_SIZE)
@@ -111,7 +107,6 @@ class QueueCard(QFrame):
         else:
             self.thumb = None
 
-        # Center block
         center = QVBoxLayout()
         center.setSpacing(4)
 
@@ -131,7 +126,6 @@ class QueueCard(QFrame):
 
         center.addLayout(title_row)
 
-        # meta row
         meta_row = QHBoxLayout()
         meta_row.setSpacing(8)
 
@@ -168,7 +162,6 @@ class QueueCard(QFrame):
 
         root.addLayout(center, 1)
 
-        # Right side
         right = QVBoxLayout()
         right.setSpacing(6)
 
@@ -197,13 +190,11 @@ class QueueCard(QFrame):
         right.addStretch(1)
         root.addLayout(right)
 
-        # Wire signals
         self.more_btn.clicked.connect(self._open_context_menu)
         self.btn_delete.clicked.connect(self.removed.emit)
         self.btn_up.clicked.connect(self.movedUp.emit)
         self.btn_down.clicked.connect(self.movedDown.emit)
 
-        # Accessibility
         self.setAccessibleName("QueueCard")
         self.more_btn.setAccessibleName("MoreMenu")
         if self.thumb:
@@ -211,14 +202,10 @@ class QueueCard(QFrame):
         self.progress.setAccessibleName("ProgressBar")
         self.status_chip.setAccessibleName("StatusChip")
 
-        # Hover elevation polish
         self.setMouseTracking(True)
         self.installEventFilter(self)
 
-        # Initial style
         self._apply_status_style(status)
-
-    # ----- Public API -----
 
     def set_status(self, status: str) -> None:
         self._apply_status_style(status)
@@ -262,8 +249,6 @@ class QueueCard(QFrame):
         self._last_thumb_path = path
         self._last_thumb_pixmap_key = pix.cacheKey()
         self.thumb.setPixmap(self._make_thumbnail_pixmap(pix))
-
-    # ----- Internal helpers -----
 
     def _make_thumbnail_pixmap(self, pix: QPixmap) -> QPixmap:
         size = self.THUMB_SIZE
@@ -311,8 +296,6 @@ class QueueCard(QFrame):
         except Exception:
             self.meta_lbl.setText(_clamp(self._full_meta_text, 64))
             self.meta_lbl.setToolTip(self._full_meta_text)
-
-    # ----- Hover/elevation -----
 
     def eventFilter(self, obj, event):
         et = event.type()
