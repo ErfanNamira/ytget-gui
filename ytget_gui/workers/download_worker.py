@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, Signal, QTimer
 import codecs
 import os
 import re
+import shlex
 import shutil
 import signal
 import sys
@@ -538,6 +539,11 @@ class DownloadWorker(QObject):
         u = (url or "").lower()
         return "music.youtube.com" in u
 
+    @staticmethod
+    def is_youtube_url(url: str) -> bool:
+        u = (url or "").lower()
+        return any(d in u for d in ("youtube.com", "youtu.be"))
+
     # YouTube (all variants) always exposes its full-resolution ladder via
     # regular DASH (MPD) manifests, and the extra Referer/User-Agent headers
     # this HLS-preference path adds are neither needed nor helpful there.
@@ -820,8 +826,17 @@ class DownloadWorker(QObject):
             else:
                 audio_format = "mp3"
 
+            # "bestaudio" alone has no fallback: some player clients (e.g.
+            # the tv/web-music clients yt-dlp uses for music.youtube.com)
+            # don't expose a format literally satisfying "bestaudio" for
+            # every track, which previously hard-failed the whole item with
+            # "Requested format is not available". Route it through the same
+            # fallback guarantee the video branch already uses, so a missing
+            # "bestaudio" degrades to "whatever audio-only (or best overall)
+            # stream is actually available" instead of hard-failing.
+            audio_fmt_selector = self._ensure_format_fallback("bestaudio/bestaudio*")
             cmd.extend([
-                "-f", "bestaudio",
+                "-f", audio_fmt_selector,
                 "--extract-audio",
                 "--audio-format", audio_format,
                 "--embed-thumbnail",
@@ -1019,6 +1034,44 @@ class DownloadWorker(QObject):
         # only if no custom CA is configured)
         _verify, _ytdlp_ssl_args, self._ssl_env = ssl_utils.resolve_ssl_config(self.settings)
         cmd.extend(_ytdlp_ssl_args)
+
+        # User-supplied raw yt-dlp args (e.g. "--sleep-interval 5
+        # --max-sleep-interval 15"), appended last so they can override any
+        # of the flags built above if the user knows what they're doing.
+        extra_args = getattr(s, "EXTRA_YTDLP_ARGS", "") or ""
+        extra_tokens: List[str] = []
+        if extra_args.strip():
+            try:
+                extra_tokens = shlex.split(extra_args, posix=(sys.platform != "win32"))
+            except ValueError as e:
+                self._add_log(
+                    f"⚠️ Ignoring invalid Extra yt-dlp Args ({e}); check quoting.\n",
+                    AppStyles.WARNING_COLOR,
+                )
+                extra_tokens = []
+
+        # Forced YouTube player_client (yt-dlp intermittently breaks/deprecates
+        # individual clients -- e.g. tv_downgraded, the default for cookie/
+        # logged-in requests, failing for many users in mid-2026 -- faster
+        # than app releases can track, so this is user-selectable). Only
+        # applied to actual YouTube URLs, and only if the user's own Extra
+        # yt-dlp Args didn't already specify a youtube:player_client
+        # extractor-arg (yt-dlp keeps only the last --extractor-args for a
+        # given key, so we skip ours rather than silently overriding theirs).
+        player_client = (getattr(s, "YOUTUBE_PLAYER_CLIENT", "auto") or "auto").strip()
+        user_set_player_client = any(
+            "youtube" in t.lower() and "player_client" in t.lower() for t in extra_tokens
+        )
+        if (
+            player_client
+            and player_client != "auto"
+            and self.is_youtube_url(it.get("url", "") or "")
+            and not user_set_player_client
+        ):
+            cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
+
+        if extra_tokens:
+            cmd.extend(extra_tokens)
 
         cmd.append(it.get("url", ""))
 
