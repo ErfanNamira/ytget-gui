@@ -64,21 +64,30 @@ class AppSettings:
 
     RESOLUTIONS: Dict[str, str] = field(
         default_factory=lambda: {
-            # --- YouTube-optimized presets (keep existing) ---
-            "🎬 YouTube 4320p (8K)": "bestvideo[height=4320][vcodec=vp9]+bestaudio/bestvideo[height<=4320]+bestaudio",
-            "🎬 YouTube 2160p (4K)": "251+313/bestvideo[height<=2160]+bestaudio",
-            "🎥 YouTube 1440p (QHD)": "251+271/bestvideo[height<=1440]+bestaudio",
-            "🎥 YouTube 1080p (FHD)": "251+248/bestvideo[height<=1080]+bestaudio",
-            "📱 YouTube 720p (HD)":  "251+247/bestvideo[height<=720]+bestaudio",
-            "📱 YouTube 480p (SD)":  "251+244/bestvideo[height<=480]+bestaudio",
+            # --- YouTube-optimized presets ---
+            # Built via AppSettings._video_format_chain() -- see that method
+            # for why this replaced the old hard-coded itag pairs (251+271
+            # etc): those itags don't exist on every video, and the fallback
+            # they had ("bestvideo[height<=N]+bestaudio") carried no codec
+            # or protocol preference, so it could -- and did -- resolve to
+            # an HLS stream capped below the requested height.
+            "🎬 YouTube 4320p (8K)": AppSettings._video_format_chain(4320),
+            "🎬 YouTube 2160p (4K)": AppSettings._video_format_chain(2160),
+            "🎥 YouTube 1440p (QHD)": AppSettings._video_format_chain(1440),
+            "🎥 YouTube 1080p (FHD)": AppSettings._video_format_chain(1080),
+            "📱 YouTube 720p (HD)":  AppSettings._video_format_chain(720),
+            "📱 YouTube 480p (SD)":  AppSettings._video_format_chain(480),
 
             # --- Universal presets (stricter, work across any site supported by yt-dlp) ---
-            "🌐 Universal 4320p (8K)": "bestvideo[height<=4320][width<=7680]+bestaudio/best[height<=4320]",
-            "🌐 Universal 2160p (4K)": "bestvideo[height<=2160][width<=3840]+bestaudio/best[height<=2160]",
-            "🌐 Universal 1440p (QHD)": "bestvideo[height<=1440][width<=2560]+bestaudio/best[height<=1440]",
-            "🌐 Universal 1080p (FHD)": "bestvideo[height<=1080][width<=1920]+bestaudio/best[height<=1080]",
-            "🌐 Universal 720p (HD)":   "bestvideo[height<=720][width<=1280]+bestaudio/best[height<=720]",
-            "🌐 Universal 480p (SD)":   "bestvideo[height<=480][width<=854]+bestaudio/best[height<=480]",
+            # Same codec/protocol-aware chain as above, with an added width
+            # cap so oddly-cropped/anamorphic sources don't sneak past the
+            # intended resolution tier on non-YouTube sites.
+            "🌐 Universal 4320p (8K)": AppSettings._video_format_chain(4320, width=7680),
+            "🌐 Universal 2160p (4K)": AppSettings._video_format_chain(2160, width=3840),
+            "🌐 Universal 1440p (QHD)": AppSettings._video_format_chain(1440, width=2560),
+            "🌐 Universal 1080p (FHD)": AppSettings._video_format_chain(1080, width=1920),
+            "🌐 Universal 720p (HD)":   AppSettings._video_format_chain(720, width=1280),
+            "🌐 Universal 480p (SD)":   AppSettings._video_format_chain(480, width=854),
 
             # --- Audio / playlist presets (unchanged) ---
             "🎵 Single Audio (MP3)": "bestaudio",
@@ -198,46 +207,58 @@ class AppSettings:
         # Load persisted config last
         self.load_config()
 
-    # -------- Format selection (AV1 -> VP9 map -> best) --------
+    # -------- Format selection (AV1 -> VP9 -> best, HLS as last resort) --------
 
     def get_format_for_resolution(self, height: int, audio: str = "bestaudio") -> str:
         """
-        Build a yt-dlp format string that:
-          1) Prefers AV1 at the target height,
-          2) Falls back to VP9 mapping,
-          3) Falls back to best available at or below that height,
-          4) Finally, generic best as a last resort.
+        Build a yt-dlp format string for an arbitrary height, using the
+        exact same chain as the RESOLUTIONS presets (see
+        _video_format_chain for the ordering and the reasoning behind it).
         """
-        label = self._label_for_height(height)
-        vp9_map = self.RESOLUTIONS.get(label, "")
-        return self._build_format_chain(height, audio, vp9_map)
+        return self._video_format_chain(height, audio=audio)
 
     @staticmethod
     @lru_cache(maxsize=64)
-    def _build_format_chain(height: int, audio: str, vp9_map: str) -> str:
-        # Cached: the UI can re-request the same (height, audio) pair many
-        # times (e.g. re-opening a dropdown), so avoid rebuilding/deduping
-        # the same string chain repeatedly.
-        av1 = f"bestvideo[height={height}][vcodec=av01]+{audio}"
-        best_at_or_below = f"bestvideo[height<={height}]+{audio}"
+    def _video_format_chain(
+        height: int, width: int | None = None, audio: str = "bestaudio"
+    ) -> str:
+        """
+        Build a yt-dlp format-selector chain, in this order:
+
+          1) AV1 video at or below the target height, DASH/HTTP only.
+          2) VP9 video (matches both legacy "vp9" and "vp09.xx" codec
+             strings) at or below the target height, DASH/HTTP only.
+          3) Best video at or below the target height, still excluding HLS.
+          4) Best video at or below the target height, HLS now allowed --
+             this only fires when nothing better exists under the cap
+             (e.g. the DASH ladder for that video/session is incomplete).
+          5) Generic bestvideo+bestaudio with no height cap, in case even
+             the height filter can't be satisfied (missing/odd metadata).
+          6) "best" -- absolute last resort, whatever yt-dlp can get.
+
+        Every tier before (4) uses "[protocol!*=m3u8]" so a same-or-lower
+        DASH/HTTP stream is always tried before an HLS one is ever
+        considered. Codec filters use "^=" (starts-with) or "~=" (regex)
+        rather than "=" (exact match) because yt-dlp reports codecs like
+        "av01.0.05M.08" or "vp09.00.50.08", not the bare "av01"/"vp9" an
+        exact-match filter would require -- with "=", these tiers silently
+        never match anything and are effectively dead code.
+
+        Cached because the UI can re-request the same (height, width,
+        audio) combination many times (e.g. re-opening a dropdown).
+        """
+        no_hls = "[protocol!*=m3u8]"
+        width_filter = f"[width<={width}]" if width else ""
+
+        av1 = f"bestvideo[height<={height}]{width_filter}[vcodec^=av01]{no_hls}+{audio}"
+        vp9 = f"bestvideo[height<={height}]{width_filter}[vcodec~='^vp0?9']{no_hls}+{audio}"
+        best_no_hls = f"bestvideo[height<={height}]{width_filter}{no_hls}+{audio}"
+        best_any_proto = f"bestvideo[height<={height}]{width_filter}+{audio}"
         generic_best = f"bestvideo+{audio}"
         ultimate = "best"
 
-        chain = "/".join([av1, vp9_map, best_at_or_below, generic_best, ultimate])
+        chain = "/".join([av1, vp9, best_no_hls, best_any_proto, generic_best, ultimate])
         return AppSettings._dedupe_format_chain(chain)
-
-    def _label_for_height(self, height: int) -> str:
-        # NOTE: these must exactly match the keys in RESOLUTIONS, or the
-        # VP9 fallback in get_format_for_resolution() silently resolves to
-        # an empty string and is dropped from the format chain.
-        return {
-            4320: "🎬 YouTube 4320p (8K)",
-            2160: "🎬 YouTube 2160p (4K)",
-            1440: "🎥 YouTube 1440p (QHD)",
-            1080: "🎥 YouTube 1080p (FHD)",
-            720:  "📱 YouTube 720p (HD)",
-            480:  "📱 YouTube 480p (SD)",
-        }.get(height, f"🎬 YouTube {height}p")
 
     @staticmethod
     def _dedupe_format_chain(chain: str) -> str:
