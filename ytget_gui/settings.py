@@ -19,6 +19,20 @@ from ytget_gui.utils.paths import (
 
 from ytget_gui.spotdl_settings import SpotDLSettings
 
+YOUTUBE_PLAYER_CLIENTS: Dict[str, str] = {
+    "Auto (yt-dlp default)": "auto",
+    "default,web_embedded (cookies-safe fallback)": "default,web_embedded",
+    "default": "default",
+    "web": "web",
+    "web_embedded": "web_embedded",
+    "web_safari": "web_safari",
+    "tv": "tv",
+    "tv_embedded": "tv_embedded",
+    "mweb": "mweb",
+    "ios": "ios",
+    "android": "android",
+}
+
 FILENAME_FORMAT_PRESETS: Dict[str, str] = {
     "title_only": "%(title)s",
     "artist_title": "%(artist)s - %(title)s",
@@ -143,6 +157,17 @@ class AppSettings:
     CLIP_START: str = ""
     CLIP_END: str = ""
     CUSTOM_FFMPEG_ARGS: str = ""
+    # Raw extra yt-dlp CLI args, e.g. "--sleep-interval 5 --max-sleep-interval 15".
+    # Parsed with shlex and appended verbatim to every yt-dlp invocation, after
+    # all built-in flags so the user can override defaults if they want to.
+    EXTRA_YTDLP_ARGS: str = ""
+    # Which yt-dlp "player_client" extractor-arg to force for YouTube URLs.
+    # "" / "auto" leaves it up to yt-dlp's own default. yt-dlp periodically
+    # has to deprecate/patch individual clients (e.g. tv_downgraded, the
+    # default client for logged-in/cookie requests, breaking for many users
+    # in mid-2026) faster than app releases can keep up, so this is exposed
+    # as a preference instead of hard-coded.
+    YOUTUBE_PLAYER_CLIENT: str = "auto"
     CROP_AUDIO_COVERS: bool = True
     VIDEO_FORMAT: str = ".mkv"
     # Thumbnail embedding
@@ -311,6 +336,8 @@ class AppSettings:
             "CLIP_START": self.CLIP_START,
             "CLIP_END": self.CLIP_END,
             "CUSTOM_FFMPEG_ARGS": self.CUSTOM_FFMPEG_ARGS,
+            "EXTRA_YTDLP_ARGS": self.EXTRA_YTDLP_ARGS,
+            "YOUTUBE_PLAYER_CLIENT": self.YOUTUBE_PLAYER_CLIENT,
             "CROP_AUDIO_COVERS": self.CROP_AUDIO_COVERS,
             "VIDEO_FORMAT": self.VIDEO_FORMAT,
             "WRITE_THUMBNAIL": self.WRITE_THUMBNAIL,
@@ -371,6 +398,10 @@ class AppSettings:
             self.CLIP_START = config.get("CLIP_START", self.CLIP_START)
             self.CLIP_END = config.get("CLIP_END", self.CLIP_END)
             self.CUSTOM_FFMPEG_ARGS = config.get("CUSTOM_FFMPEG_ARGS", self.CUSTOM_FFMPEG_ARGS)
+            self.EXTRA_YTDLP_ARGS = config.get("EXTRA_YTDLP_ARGS", self.EXTRA_YTDLP_ARGS)
+            self.YOUTUBE_PLAYER_CLIENT = config.get("YOUTUBE_PLAYER_CLIENT", self.YOUTUBE_PLAYER_CLIENT)
+            if self.YOUTUBE_PLAYER_CLIENT not in YOUTUBE_PLAYER_CLIENTS.values():
+                self.YOUTUBE_PLAYER_CLIENT = "auto"
             self.CROP_AUDIO_COVERS = config.get("CROP_AUDIO_COVERS", self.CROP_AUDIO_COVERS)
             self.VIDEO_FORMAT = config.get("VIDEO_FORMAT", self.VIDEO_FORMAT)
             # Thumbnail options
