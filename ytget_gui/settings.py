@@ -160,7 +160,7 @@ class AppSettings:
     # Raw extra yt-dlp CLI args, e.g. "--sleep-interval 5 --max-sleep-interval 15".
     # Parsed with shlex and appended verbatim to every yt-dlp invocation, after
     # all built-in flags so the user can override defaults if they want to.
-    EXTRA_YTDLP_ARGS: str = ""
+    EXTRA_YTDLP_ARGS: str = "--sleep-interval 15 --max-sleep-interval 20"
     # Which yt-dlp "player_client" extractor-arg to force for YouTube URLs.
     # "" / "auto" leaves it up to yt-dlp's own default. yt-dlp periodically
     # has to deprecate/patch individual clients (e.g. tv_downgraded, the
