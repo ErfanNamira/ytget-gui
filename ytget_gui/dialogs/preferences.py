@@ -11,7 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import QDate
 
 from ytget_gui.styles import AppStyles
-from ytget_gui.settings import AppSettings, FILENAME_FORMAT_PRESETS
+from ytget_gui.settings import AppSettings, FILENAME_FORMAT_PRESETS, YOUTUBE_PLAYER_CLIENTS
 from ytget_gui.dialogs.advanced import UISwitch
 from ytget_gui.workers import cookies as CookieManager
 from ytget_gui.dialogs.spotdl_preferences_tab import SpotDLPreferencesTab
@@ -769,6 +769,25 @@ class PreferencesDialog(QtWidgets.QDialog):
         )
         self.custom_ffmpeg.setAccessibleName("Custom FFmpeg arguments")
         fl.addWidget(self._form_row("Custom FFmpeg args", self.custom_ffmpeg))
+
+        self.extra_ytdlp_args = self._line_edit(
+            placeholder="--sleep-interval 5 --max-sleep-interval 15",
+            tip="Extra raw yt-dlp CLI args, appended to every download (optional)",
+        )
+        self.extra_ytdlp_args.setAccessibleName("Extra yt-dlp arguments")
+        fl.addWidget(self._form_row("Extra yt-dlp Args", self.extra_ytdlp_args))
+
+        self.youtube_player_client_combo = QtWidgets.QComboBox()
+        self.youtube_player_client_combo.setObjectName("combo")
+        self.youtube_player_client_combo.addItems(list(YOUTUBE_PLAYER_CLIENTS.keys()))
+        self.youtube_player_client_combo.setAccessibleName("YouTube player client")
+        fl.addWidget(
+            self._form_row(
+                "YouTube Player Client",
+                self.youtube_player_client_combo,
+                "Force a specific yt-dlp extraction client if the default one is broken for you",
+            )
+        )
 
         # ─────────── Thumbnail toggles ───────────
         self.write_thumbnail = UISwitch("")
@@ -1634,6 +1653,8 @@ class PreferencesDialog(QtWidgets.QDialog):
             self.add_metadata,
             self.crop_covers,
             self.custom_ffmpeg,
+            self.extra_ytdlp_args,
+            self.youtube_player_client_combo,
             self.video_format_combo,
             self.write_thumbnail,
             self.convert_thumbnails,
@@ -1832,6 +1853,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.add_metadata.setChecked(bool(getattr(self.settings, "ADD_METADATA", False)))
         self.crop_covers.setChecked(bool(getattr(self.settings, "CROP_AUDIO_COVERS", False)))
         self.custom_ffmpeg.setText(getattr(self.settings, "CUSTOM_FFMPEG_ARGS", "") or "")
+        self.extra_ytdlp_args.setText(getattr(self.settings, "EXTRA_YTDLP_ARGS", "") or "")
         vf = getattr(self.settings, "VIDEO_FORMAT", ".mkv") or ".mkv"
         if vf not in (".mkv", ".mp4", ".webm"):
             vf = ".mkv"
@@ -1843,6 +1865,13 @@ class PreferencesDialog(QtWidgets.QDialog):
         # ─────────────────────────────────────────
        
         self.video_format_combo.setCurrentText(vf)
+
+        cur_client = getattr(self.settings, "YOUTUBE_PLAYER_CLIENT", "auto") or "auto"
+        client_label = next(
+            (lbl for lbl, val in YOUTUBE_PLAYER_CLIENTS.items() if val == cur_client),
+            "Auto (yt-dlp default)",
+        )
+        self.youtube_player_client_combo.setCurrentText(client_label)
 
         # Output
         self.organize_uploader.setChecked(bool(getattr(self.settings, "ORGANIZE_BY_UPLOADER", False)))
@@ -1904,6 +1933,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.add_metadata.setChecked(bool(data.get("ADD_METADATA", False)))
         self.crop_covers.setChecked(bool(data.get("CROP_AUDIO_COVERS", False)))
         self.custom_ffmpeg.setText(data.get("CUSTOM_FFMPEG_ARGS", ""))
+        self.extra_ytdlp_args.setText(data.get("EXTRA_YTDLP_ARGS", ""))
         vf = data.get("VIDEO_FORMAT", ".mkv") or ".mkv"
         if vf not in (".mkv", ".mp4", ".webm"):
             vf = ".mkv"
@@ -1914,6 +1944,13 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.embed_thumbnail.setChecked(bool(data.get("EMBED_THUMBNAIL", True)))
 
         self.video_format_combo.setCurrentText(vf)
+
+        cur_client = data.get("YOUTUBE_PLAYER_CLIENT", "auto") or "auto"
+        client_label = next(
+            (lbl for lbl, val in YOUTUBE_PLAYER_CLIENTS.items() if val == cur_client),
+            "Auto (yt-dlp default)",
+        )
+        self.youtube_player_client_combo.setCurrentText(client_label)
 
         # Output
         self.organize_uploader.setChecked(bool(data.get("ORGANIZE_BY_UPLOADER", False)))
@@ -1962,6 +1999,10 @@ class PreferencesDialog(QtWidgets.QDialog):
             "ADD_METADATA": self.add_metadata.isChecked(),
             "CROP_AUDIO_COVERS": self.crop_covers.isChecked(),
             "CUSTOM_FFMPEG_ARGS": self.custom_ffmpeg.text().strip(),
+            "EXTRA_YTDLP_ARGS": self.extra_ytdlp_args.text().strip(),
+            "YOUTUBE_PLAYER_CLIENT": YOUTUBE_PLAYER_CLIENTS.get(
+                self.youtube_player_client_combo.currentText(), "auto"
+            ),
             # ─────────── Thumbnail flags ───────────
             "WRITE_THUMBNAIL":    self.write_thumbnail.isChecked(),
             "CONVERT_THUMBNAILS": self.convert_thumbnails.isChecked(),
@@ -2065,6 +2106,7 @@ class PreferencesDialog(QtWidgets.QDialog):
             getattr(self, "playlist_items", None),
             getattr(self, "date_after", None),
             getattr(self, "custom_ffmpeg", None),
+            getattr(self, "extra_ytdlp_args", None),
             getattr(self, "archive_path_input", None),
             getattr(self, "custom_filename_input", None),
         ):
