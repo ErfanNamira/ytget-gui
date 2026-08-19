@@ -17,7 +17,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ytget_gui.settings import AppSettings
 from ytget_gui.workers import cookies as CookieManager
@@ -186,25 +186,56 @@ def get_startupinfo():
 
 # ── Subprocess execution ─────────────────────────────────────────────────
 
-def run_yt_dlp(cmd: List[str], env: Dict[str, str], timeout: int = DEFAULT_TIMEOUT_SECS) -> Tuple[int, str, str]:
+def run_yt_dlp(
+    cmd: List[str],
+    env: Dict[str, str],
+    timeout: int = DEFAULT_TIMEOUT_SECS,
+    on_process_started: Optional[Callable[[subprocess.Popen], None]] = None,
+) -> Tuple[int, str, str]:
     """
     Runs yt-dlp and returns (returncode, stdout_text, stderr_text).
     Always reads raw bytes and decodes with 'replace' so odd terminal
     encodings (esp. on Windows) never raise UnicodeDecodeError.
 
+    Unlike a plain subprocess.run(), this uses Popen so the live process
+    object can be handed back to the caller *before* we block on it (via
+    on_process_started). That's what lets an external stop()/cancel() call
+    actually kill the process instead of only being able to wait out the
+    full timeout - subprocess.run() blocks with no handle exposed at all,
+    which previously meant a stuck/slow fetch could not be interrupted and
+    would keep a "stopped" queue (and app shutdown) hanging for up to
+    `timeout` seconds.
+
     Raises subprocess.TimeoutExpired on timeout - caller handles it.
+    Raises FetchCancelled if on_process_started's caller kills the process
+    out from under us before it exits naturally.
     """
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
-        capture_output=True,
-        text=False,
-        check=False,
-        timeout=timeout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         startupinfo=get_startupinfo(),
         env=env,
     )
-    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
-    stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+
+    if on_process_started is not None:
+        try:
+            on_process_started(proc)
+        except Exception:
+            pass
+
+    try:
+        stdout_b, stderr_b = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
+        raise
+
+    stdout = (stdout_b or b"").decode("utf-8", errors="replace")
+    stderr = (stderr_b or b"").decode("utf-8", errors="replace")
     return proc.returncode, stdout, stderr
 
 
@@ -255,6 +286,7 @@ def fetch_metadata(
     cookies_from_browser: str = "",
     cookies_profile: str = "",
     timeout: int = DEFAULT_TIMEOUT_SECS,
+    on_process_started: Optional[Callable[[subprocess.Popen], None]] = None,
 ) -> Tuple[Optional[Metadata], Optional[str], Optional[Path], Optional[str]]:
     """
     One-stop synchronous fetch. Returns:
@@ -262,6 +294,12 @@ def fetch_metadata(
 
     A cookie-refresh warning is non-fatal - metadata fetching still proceeds
     and may succeed even if `cookie_refresh_warning` is set.
+
+    `on_process_started`, if given, is called with the live subprocess.Popen
+    as soon as it launches (before we block on it) so a caller running this
+    on a background thread can stash the handle and kill() it from another
+    thread to cancel a stuck/slow fetch on demand, instead of only being
+    able to wait out the full `timeout`.
 
     Does NOT touch Qt signals - callers emit based on the returned tuple.
     Spotify URLs are NOT handled here; check is_spotify_url() first.
@@ -277,13 +315,15 @@ def fetch_metadata(
     env = build_env(settings)
 
     try:
-        returncode, stdout, stderr = run_yt_dlp(cmd, env, timeout=timeout)
+        returncode, stdout, stderr = run_yt_dlp(cmd, env, timeout=timeout, on_process_started=on_process_started)
     except subprocess.TimeoutExpired:
         return None, f"Timeout while fetching metadata ({timeout} seconds)", cookies_path, refresh_warning
     except Exception as e:
         return None, f"Unexpected error: {e}", cookies_path, refresh_warning
 
     if returncode != 0:
+        if returncode is not None and returncode < 0:
+            return None, "Cancelled", cookies_path, refresh_warning
         return None, (stderr or "yt-dlp returned an error").strip(), cookies_path, refresh_warning
 
     try:
