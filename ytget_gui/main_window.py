@@ -739,7 +739,7 @@ QToolTip {
 }
 """
 
-MAX_LOG_LINES = 200
+MAX_LOG_LINES = 1000
 
 
 class MainWindow(QMainWindow):
