@@ -13,7 +13,9 @@ import json
 import os
 import platform
 import re
+import shlex
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -198,6 +200,23 @@ def build_command(
 
     if proxy_url:
         cmd.extend(["--proxy", proxy_url])
+
+    # User-supplied raw yt-dlp args (e.g. "--extractor-args
+    # youtubetab:skip=authcheck"), appended last so they can override any
+    # of the flags built above if the user knows what they're doing. Same
+    # setting/field as download_worker.py's command builder (settings.
+    # EXTRA_YTDLP_ARGS / Preferences "Extra yt-dlp Args"), so one place to
+    # configure it covers both downloads and title/metadata fetches.
+    extra_args = (getattr(settings, "EXTRA_YTDLP_ARGS", "") or "") if settings is not None else ""
+    if extra_args.strip():
+        try:
+            extra_tokens = shlex.split(extra_args, posix=(sys.platform != "win32"))
+        except ValueError:
+            # Invalid quoting - ignore rather than raise, consistent with
+            # download_worker.py's handling of the same field.
+            extra_tokens = []
+        if extra_tokens:
+            cmd.extend(extra_tokens)
 
     return cmd
 
