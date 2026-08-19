@@ -746,6 +746,7 @@ class MainWindow(QMainWindow):
     # ── Signals ──────────────────────────────────────────────────
     enqueue_title = Signal(str)
     enqueue_titles = Signal(list)
+    cancel_title = Signal(str)
     post_queue_action_signal = Signal(str)
 
     # ════════════════════════════════════════════════════════════════════════
@@ -773,6 +774,15 @@ class MainWindow(QMainWindow):
         # of thumbnails/progress ticks -- the main source of UI stutter on
         # larger queues).
         self._queue_item_index: Dict[str, QListWidgetItem] = {}
+
+        # Explicit membership set for "URL has a title-fetch in flight (or
+        # still queued to fetch)". _refresh_queue_list() needs this to tell
+        # a genuinely-still-fetching card apart from a card that just got
+        # removed from self.queue a moment ago - both look identical if you
+        # only check "is this URL missing from self.queue right now",
+        # which is what caused a freshly-removed item to get silently
+        # treated as an orphan and re-added on the very next refresh.
+        self._pending_title_urls: set = set()
 
         self.queue: List[Dict[str, Any]] = []
         self.current_download_item: Optional[Dict[str, Any]] = None
@@ -1431,6 +1441,7 @@ class MainWindow(QMainWindow):
         self.title_queue.moveToThread(self.title_queue_thread)
         self.enqueue_title.connect(self.title_queue.enqueue, Qt.QueuedConnection)
         self.enqueue_titles.connect(self.title_queue.enqueue_many, Qt.QueuedConnection)
+        self.cancel_title.connect(self.title_queue.cancel, Qt.QueuedConnection)
         self.title_queue.metadata_fetched.connect(self._on_metadata_fetched, Qt.QueuedConnection)
         self.title_queue.error.connect(self._on_title_error)
         self.title_queue.started_one.connect(self._on_title_started)
@@ -1503,19 +1514,38 @@ class MainWindow(QMainWindow):
                 QGuiApplication.clipboard().setText(url)
 
             def _remove_item():
-                for item in self.queue:
-                    if item.get("url") == url:
-                        self._remove_item_by_id(item)
-                        return
-                # No backing self.queue entry (title fetch still pending or
-                # failed) - just drop the orphaned card from the list.
-                self._remove_orphaned_card(url)
+                # Deferred to the next event-loop tick: this closure runs
+                # synchronously inside a click handler that belongs to a
+                # child widget of `card` itself (the ✕ button, or a QMenu
+                # action opened from the ⋯ button). The actual removal
+                # rebuilds queue_list via _refresh_queue_list()/
+                # _remove_orphaned_card(), which deletes `card` (and the
+                # button currently mid-click) immediately. Destroying a
+                # widget while it's still processing its own signal is
+                # undefined territory in Qt - in practice it silently
+                # swallows the first click's effect, so it took two clicks
+                # to actually remove anything. Letting the click handler
+                # return first, then doing the removal, fixes that.
+                def _do_remove():
+                    for item in self.queue:
+                        if item.get("url") == url:
+                            self._remove_item_by_id(item)
+                            return
+                    # No backing self.queue entry (title fetch still pending
+                    # or failed) - just drop the orphaned card from the list.
+                    self._remove_orphaned_card(url)
+                QTimer.singleShot(0, _do_remove)
 
             card.set_context_actions([
                 ("Open in browser", _open_in_browser),
                 ("Copy URL", _copy_url),
                 ("Remove", _remove_item),
             ])
+            # The card's own ✕ button (btn_delete) only emits the `removed`
+            # signal - it was never connected to anything, so clicking it
+            # did nothing even after being made visible. Wire it to the
+            # same removal logic used by the context menu's "Remove".
+            card.removed.connect(_remove_item)
 
             item = QListWidgetItem()
             item.setSizeHint(card.sizeHint())
@@ -1563,6 +1593,7 @@ class MainWindow(QMainWindow):
         except Exception:
             key = url or ""
 
+        self._pending_title_urls.discard(key)
         list_item = self._queue_item_index.get(key)
 
         current_label = self.format_box.currentText()
@@ -1761,6 +1792,7 @@ class MainWindow(QMainWindow):
         if valid:
             for u in valid:
                 self.log(f"🧾 Queued for fetch: {u[:60]}...\n", AppStyles.INFO_COLOR, "Info")
+            self._pending_title_urls.update(valid)
             if self.title_queue:
                 self.enqueue_titles.emit(valid)
             event.acceptProposedAction()
@@ -1788,6 +1820,7 @@ class MainWindow(QMainWindow):
         self.url_input.clear()
         self.btn_add_inline.setEnabled(False)
         self._add_queue_card_to_list(url=url, title=short(url, 80), show_thumbnail=True)
+        self._pending_title_urls.add(url)
         if self.title_queue:
             self.enqueue_title.emit(url)
 
@@ -1818,6 +1851,7 @@ class MainWindow(QMainWindow):
     def _on_title_error(self, url: str, msg: str):
         self.log(f"Error fetching title for {url[:60]}: {msg}\n", AppStyles.ERROR_COLOR, "Error")
         self.btn_add_inline.setEnabled(True)
+        self._pending_title_urls.discard(url)
         # _add_to_queue() optimistically adds a QueueCard to queue_list
         # *before* the fetch runs, but the item only ever gets appended to
         # self.queue on success (_on_metadata_fetched). On failure that
@@ -1831,11 +1865,20 @@ class MainWindow(QMainWindow):
 
     def _remove_orphaned_card(self, url: str) -> None:
         """Remove a queue_list card that has no backing entry in self.queue
-        (e.g. a failed title fetch)."""
+        (e.g. a failed title fetch, or one still in flight)."""
         if any(it.get("url") == url for it in self.queue):
             # It does have a backing entry after all - not orphaned, leave
             # normal removal (_remove_item_by_id) to handle it.
             return
+        # The card may still be actively fetching (or queued to fetch) in
+        # the backend - tell it to drop/abort that URL too. Without this,
+        # removing the card here was purely cosmetic: the fetch kept
+        # running in the background and, on success, silently re-added the
+        # card to the queue since _on_metadata_fetched re-adds whenever it
+        # doesn't find an existing list item for the URL.
+        if self.title_queue:
+            self.cancel_title.emit(url)
+        self._pending_title_urls.discard(url)
         lw_item = self._queue_item_index.pop(url, None)
         if lw_item is None:
             return
@@ -2286,11 +2329,29 @@ class MainWindow(QMainWindow):
         # the whole clear+repopulate collapses it into a single repaint.
         self.queue_list.setUpdatesEnabled(False)
         try:
+            # Only cards whose URL is a genuinely still-in-flight title
+            # fetch (tracked explicitly in _pending_title_urls) get carried
+            # over. Previously this inferred "orphan" purely from "URL is
+            # missing from self.queue right now" - which is also true for
+            # an item the user *just* removed a moment ago (it's popped
+            # from self.queue before this runs), so a normal removal was
+            # misclassified as an in-flight fetch and the card got silently
+            # re-added on the very next refresh, requiring a second click
+            # to actually get rid of it.
+            backed_urls = {it.get("url", "") for it in self.queue}
+            orphans: List[Tuple[str, str, str]] = []  # (url, title, status)
+            for i in range(self.queue_list.count()):
+                lw_item = self.queue_list.item(i)
+                data = lw_item.data(Qt.UserRole) or {}
+                url = data.get("url", "") if isinstance(data, dict) else ""
+                if url and url not in backed_urls and url in self._pending_title_urls:
+                    orphans.append((url, data.get("title") or short(url, 80), data.get("status") or "Pending"))
+
             self.queue_list.clear()
             self._queue_item_index.clear()
             count = len(self.queue)
-            self.count_chip.setText(str(count))
-            self.queue_empty_state.setVisible(count == 0)
+            self.count_chip.setText(str(count + len(orphans)))
+            self.queue_empty_state.setVisible(count == 0 and not orphans)
             for it in self.queue:
                 self._add_queue_card_to_list(
                     url=it.get("url", ""),
@@ -2299,6 +2360,8 @@ class MainWindow(QMainWindow):
                     show_thumbnail=True,
                     status=it.get("status", "Pending"),
                 )
+            for url, title, status in orphans:
+                self._add_queue_card_to_list(url=url, title=title, show_thumbnail=True, status=status)
         finally:
             self.queue_list.setUpdatesEnabled(True)
         self._apply_queue_filter(self.search_box.text())
@@ -2401,54 +2464,90 @@ class MainWindow(QMainWindow):
         self._refresh_queue_list()
 
     def _bulk_remove_selected(self):
-        self._sync_queue_from_visual()
-        rows = sorted({i.row() for i in self.queue_list.selectedIndexes()}, reverse=True)
-        rows = [r for r in rows if 0 <= r < len(self.queue)]
-        if not rows:
-            return
-        if self.is_downloading and rows and 0 in rows and self.download_worker:
-            self.download_worker.cancel()
+        rows = sorted({i.row() for i in self.queue_list.selectedIndexes()})
+        urls: List[str] = []
         for r in rows:
-            if 0 <= r < len(self.queue):
-                it = self.queue[r]
-                try:
-                    url = it.get("url", "")
-                    if url in self._pending_thumb_urls:
-                        self._pending_thumb_urls.discard(url)
-                    video_id = it.get("video_id")
-                    if video_id:
-                        safe_name = self._thumb_safe_name(video_id)
-                        for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"):
-                            p = self.thumb_cache_dir / f"{safe_name}{ext}"
-                            try:
-                                if p.exists():
-                                    p.unlink()
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-                self.queue.pop(r)
+            lw_item = self.queue_list.item(r)
+            if not lw_item:
+                continue
+            data = lw_item.data(Qt.UserRole) or {}
+            url = data.get("url", "") if isinstance(data, dict) else ""
+            if url:
+                urls.append(url)
+        if not urls:
+            return
+
+        for url in urls:
+            # Selected rows can include cards whose title fetch is still in
+            # flight (no self.queue entry yet). Bulk-remove previously only
+            # ever acted on self.queue by row index, so mixing a still-
+            # fetching row into a multi-select either silently dropped that
+            # row or, worse, misaligned indices against the rest of the
+            # selection since queue_list rows and self.queue rows aren't
+            # 1:1 while a fetch is pending. Keying off URL fixes both.
+            it = next((q for q in self.queue if q.get("url") == url), None)
+            if it is None:
+                self.cancel_title.emit(url)
+                self._remove_orphaned_card(url)
+                continue
+
+            if self.is_downloading and self.current_download_item is it and self.download_worker:
+                self.download_worker.cancel()
+            try:
+                if url in self._pending_thumb_urls:
+                    self._pending_thumb_urls.discard(url)
+                video_id = it.get("video_id")
+                if video_id:
+                    safe_name = self._thumb_safe_name(video_id)
+                    for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"):
+                        p = self.thumb_cache_dir / f"{safe_name}{ext}"
+                        try:
+                            if p.exists():
+                                p.unlink()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            self.queue.remove(it)
+
         self._save_queue_permanent()
         self._refresh_queue_list()
         self._update_button_states()
         self._update_global_progress_bar()
 
     def _bulk_move_selected(self, top: bool = False, bottom: bool = False):
-        self._sync_queue_from_visual()
         rows = sorted({i.row() for i in self.queue_list.selectedIndexes()})
-        rows = [r for r in rows if 0 <= r < len(self.queue)]
-        if not rows:
+        urls: List[str] = []
+        for r in rows:
+            lw_item = self.queue_list.item(r)
+            if not lw_item:
+                continue
+            data = lw_item.data(Qt.UserRole) or {}
+            url = data.get("url", "") if isinstance(data, dict) else ""
+            if url:
+                urls.append(url)
+        if not urls:
             return
-        if self.is_downloading and 0 in rows:
-            rows = [r for r in rows if r != 0]
-            if not rows:
+
+        url_set = set(urls)
+        # Cards still fetching their title have no position in self.queue
+        # to move yet - skip them rather than corrupting the reorder of the
+        # rest of the selection (the old row-index approach couldn't tell
+        # these apart from real queue rows at all).
+        items = [q for q in self.queue if q.get("url") in url_set]
+        if not items:
+            return
+        item_ids = {id(it) for it in items}
+        if self.is_downloading and self.queue and id(self.queue[0]) in item_ids:
+            items = [it for it in items if it is not self.queue[0]]
+            item_ids = {id(it) for it in items}
+            if not items:
                 return
-        items = [self.queue[r] for r in rows]
-        for r in reversed(rows):
-            self.queue.pop(r)
+
+        self.queue = [q for q in self.queue if id(q) not in item_ids]
         if top:
             if self.is_downloading and self.queue:
-                for i, it in enumerate(items):
+                for it in items:
                     it["progress"] = 0
                     if it.get("status") not in ("Completed", "Error"):
                         it["status"] = "Pending"
@@ -2763,7 +2862,15 @@ class MainWindow(QMainWindow):
                 pass
             try:
                 if hasattr(self, "thumb_manager") and self.thumb_manager is not None:
-                    self.thumb_manager.stop(wait=True)
+                    # wait=False here: this call requests cancellation of
+                    # every in-flight thumb fetch (and gives them a brief
+                    # internal grace period - see ThumbManager.stop()), but
+                    # doesn't itself block. We do the actual bounded waiting
+                    # for it, and for title_queue_thread, together below so
+                    # the two budgets don't stack (previously each could add
+                    # up to ~2s of frozen window, back-to-back, for a total
+                    # of ~4s+ when both had something stuck).
+                    self.thumb_manager.stop(wait=False)
             except Exception:
                 pass
             try:
@@ -2795,13 +2902,19 @@ class MainWindow(QMainWindow):
                     self.title_queue.stop()
                 if self.title_queue_thread:
                     self.title_queue_thread.quit()
-                    self.title_queue_thread.wait(2000)
+                    # Bounded to 500ms: stop() above already kills any
+                    # in-flight yt-dlp subprocess and unsticks a stuck
+                    # cookie refresh, so the thread should already be
+                    # exiting its run loop by the time we get here - this
+                    # is just letting Qt tear it down cleanly, not waiting
+                    # out any actual work.
+                    self.title_queue_thread.wait(500)
             except Exception:
                 pass
             try:
                 if self.cover_thread and self.cover_thread.isRunning():
                     self.cover_thread.quit()
-                    self.cover_thread.wait(2000)
+                    self.cover_thread.wait(500)
             except Exception:
                 pass
         except Exception:
