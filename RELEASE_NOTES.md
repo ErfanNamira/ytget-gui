@@ -1,61 +1,65 @@
 ## ✨ What's New
 # v2.7.9
 
-This release focuses heavily on **performance, download reliability, and queue stability**, especially for large queues and long-running downloads.
+> ⚠️ **Recommended after updating:** Go to **Preferences → YouTube Player Client** and set it to **`default,web_embedded`**, then click **Save**.
+> yt-dlp's default `tv_downgraded` client is currently broken for many users upstream. This switches to a known-working, cookies-safe fallback without waiting for another yt-dlp update.
+> 
+> ⚠️ **Some formats are still limited or temporarily unavailable on YouTube itself.** These cannot be fixed by the app alone. If a specific format continues to fail, we may need to wait for an **yt-dlp update** to adapt to changes on YouTube.
 
-### ⚡ Performance & UI
+## 🚀 More Reliable Downloads
 
-* **Much smoother download logs:** Console output is now buffered and written in batches instead of updating the UI for every individual log line. Auto-scrolling also respects your current scroll position.
-* **Faster queue updates:** Rebuilding the queue now happens in a single UI update instead of repainting after every card.
-* **Faster large queues:** Queue items can now be located instantly instead of searching through the entire list repeatedly. This makes a noticeable difference with large playlists.
-* **Less unnecessary progress work:** The UI no longer refreshes when the download percentage hasn't changed.
-* **Faster search:** Queue search now waits briefly after typing before filtering, making it much smoother.
-* **Smoother queue scrolling:** Removed several sources of lag from queue cards, including unnecessary mouse-event processing and always-active shadows. Shadows are now only enabled when hovering over a card.
+* Fixed **“Requested format is not available”** errors for audio and video downloads by adding a fallback when the preferred format isn't available.
+* Added automatic recovery for temporary **403, 429, 5xx, timeout, and connection errors**. Failed downloads can now retry automatically instead of stopping immediately.
+* Failed items are now **moved to the end of the queue** and retried before being marked as an error.
+* Stopped and skipped downloads remain visible in the queue instead of disappearing.
+* Added additional yt-dlp retry and connection options to make long downloads more reliable.
 
-### 📥 More Reliable Downloads
 
-* **Fixed “Requested format is not available”:** Preferred formats now have a fallback, so yt-dlp can automatically choose another suitable format instead of failing when a specific stream isn't available.
-* **Automatic recovery from temporary download failures:** Downloads that fail because of temporary network/server problems can now automatically restart and try again.
-* **Better recovery from expired download links:** Long downloads can now recover from expired video URLs by restarting yt-dlp and obtaining a fresh link.
-* Added several additional reliability improvements for interrupted fragments, temporary server errors, connection problems, and timeouts.
 
-### 🔄 Better Queue Behavior
+## ⚡ Major Performance Improvements
 
-* **Failed downloads are no longer silently removed.** After automatic retries are exhausted, failed items are moved to the end of the queue and can be retried again.
-* Failed items get a limited number of additional queue retries before being marked **Error**.
-* **Cancelled and stopped downloads remain visible** instead of disappearing from the queue.
-* The queue now correctly skips completed, cancelled, and permanently failed items when looking for the next download.
-* Overall queue progress now reflects the actual status of each item rather than relying on the queue shrinking.
-* **Clear Completed** now also removes cancelled items, while failed items remain available for review.
+* Greatly reduced console/UI stuttering during downloads by batching log output instead of updating the interface for every line.
+* The console now only auto-scrolls when you're already at the bottom, so scrolling up no longer gets interrupted.
+* Queue updates are now much faster, especially with large queues.
+* Replaced repeated searches through the entire queue with direct lookups, making progress and thumbnail updates significantly faster for large playlists.
+* Duplicate progress updates are now ignored when the percentage hasn't changed.
+* Search is now debounced, reducing unnecessary work while typing.
+* Reduced queue-card scrolling lag by optimizing hover effects, mouse events, and widget repaints.
+* Thumbnail loading is substantially faster, especially for large playlists.
 
-### 📝 Download Output & Metadata
+## 🖼️ Faster Thumbnail Loading
 
-* **Fixed corrupted non-ASCII text:** Characters in titles and console output could occasionally be lost when UTF-8 data arrived in pieces. Output handling now correctly preserves characters split across data chunks.
-* **Reduced UI overhead during heavy output:** Larger output chunks significantly reduce the amount of communication between the downloader and UI.
-* Removed repeated work when cleaning music-video metadata, improving efficiency during completed downloads.
+* YouTube thumbnails are now resolved directly from the video URL whenever possible instead of launching yt-dlp for every thumbnail.
+* Thumbnail downloads can now run concurrently.
+* Duplicate thumbnail requests are automatically avoided.
+* Browser cookie refreshes are throttled instead of happening for every thumbnail.
+* Reused HTTP connections to reduce overhead.
+* yt-dlp is only used as a fallback when a thumbnail cannot be resolved directly.
 
-### 🖼️ Faster Thumbnail Loading
+## 📝 Title & Metadata Improvements
 
-Thumbnail loading has been substantially optimized:
+* Fixed an issue where the title-fetching queue could permanently stop processing after being stopped once.
+* Consolidated duplicated metadata-fetching code to make it more reliable and consistent.
+* Improved handling of non-ASCII characters and malformed output.
+* Reduced unnecessary yt-dlp warnings and socket hangs during metadata fetching.
+* Improved environment/PATH handling.
 
-* YouTube thumbnails are now resolved directly when possible instead of launching yt-dlp for every thumbnail.
-* yt-dlp is only used when the direct thumbnail lookup isn't sufficient.
-* Browser cookie refreshing is no longer performed for every thumbnail request.
-* Thumbnail downloads can now run concurrently using the configured number of workers.
-* Duplicate thumbnail requests are avoided.
-* Removed unnecessary delays between thumbnail requests.
-* Thumbnail connections are reused instead of repeatedly creating new connections.
+## 🔤 Fixed Garbled Characters
 
-The result is significantly faster and smoother thumbnail loading, particularly for large playlists.
+* Fixed non-ASCII characters occasionally being corrupted or disappearing from download output.
+* UTF-8 output is now handled correctly even when a character is split across two output chunks.
 
-### 🏷️ Title Fetching
+## 📦 New
 
-* **Fixed a queue-breaking bug:** After the title-fetch queue was stopped once, it could become permanently stuck and reject future requests. It now correctly starts processing again.
-* Consolidated duplicated title-fetching logic into a shared component, reducing duplicated code and keeping both fetching paths consistent.
-* Improved handling of malformed text and metadata responses.
-* Added faster failure handling for stalled connections.
-* Reduced unnecessary yt-dlp warning output.
-* Improved environment/path handling.
+* **Extra yt-dlp Args** — enter additional yt-dlp arguments such as `--sleep-interval 5 --max-sleep-interval 15` and have them applied to downloads.
+* **YouTube Player Client** — choose which yt-dlp YouTube extraction client to use, giving you a way to work around upstream YouTube changes.
+
+## 🧹 Queue Improvements
+
+* Failed items remain visible so you can review what went wrong.
+* The queue progress indicator now correctly tracks completed, cancelled, and failed items.
+* The queue continues processing even when an item at the front has permanently failed.
+
 
 ---
 ## 🆚 Updated Dependencies
