@@ -54,7 +54,10 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 ---
 
 ## ☄️ How to Install
-
+> ⚠️ **Recommended after Installing:** Go to **Preferences → YouTube Player Client** and set it to **`default,web_embedded`**, then click **Save**.
+> yt-dlp's default `tv_downgraded` client is currently broken for many users upstream. This switches to a known-working, cookies-safe fallback without waiting for another yt-dlp update.
+> 
+> ⚠️ **Some formats are still limited or temporarily unavailable on YouTube itself.** These cannot be fixed by the app alone. If a specific format continues to fail, we may need to wait for an **yt-dlp update** to adapt to changes on YouTube.
 ### 🪟 Windows
 1. [Download the latest `YTGet-Windows.zip` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-windows.zip)  
 2. Extract the contents.  
