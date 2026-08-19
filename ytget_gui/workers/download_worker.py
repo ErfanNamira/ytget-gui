@@ -887,13 +887,25 @@ class DownloadWorker(QObject):
 
             url = it.get("url", "") or ""
             chosen_format: Optional[str] = None
+            # True whenever we end up forcing native HLS + mpegts download
+            # below. ffmpeg's mkv muxer unreliably stream-copies raw
+            # HLS-origin .ts files (it can end up keeping only an embedded
+            # thumbnail/ID3 image stream and dropping the real audio/video --
+            # this is what caused "video remux and conversion fail ... mkv
+            # only contains cover"). Rather than run that fragile second
+            # remux pass, we skip --remux-video/--merge-output-format for
+            # these downloads entirely and keep the natural output
+            # container (mp4) -- see use of this flag further below.
+            is_native_hls_download = False
 
             # If user explicitly selected an hls- format code, use it directly
             if isinstance(format_code, str) and format_code.startswith("hls-"):
                 chosen_format = format_code
+                is_native_hls_download = True
 
             try:
                 if not chosen_format and self._is_hls_preferred_site(url):
+                    is_native_hls_download = True
                     # IMPORTANT: by this point format_code has already been
                     # expanded from a simple "1440p" token into the full
                     # resolved format chain (e.g. from a RESOLUTIONS preset
@@ -968,11 +980,28 @@ class DownloadWorker(QObject):
             # the result isn't already in the target container, so the
             # user's chosen format is honored in both the merge and
             # no-merge cases.
-            cmd.extend([
-                "-f", chosen_format,
-                "--merge-output-format", preferred,
-                "--remux-video", preferred,
-            ])
+            cmd.extend(["-f", chosen_format])
+            if is_native_hls_download:
+                # Skip the forced container remux for native-HLS/mpegts
+                # downloads -- ffmpeg's mkv stream-copy from a raw HLS .ts
+                # is unreliable (can drop real audio/video and keep only an
+                # embedded cover/thumbnail stream). Let the file stay as the
+                # mp4 that yt-dlp naturally produces for these instead.
+                if preferred != "mp4":
+                    try:
+                        self._add_log(
+                            "ℹ️ HLS source detected -- keeping .mp4 output instead of "
+                            f"remuxing to .{preferred} (avoids a known ffmpeg mkv-from-HLS "
+                            "stream-copy bug that can drop audio/video and leave only cover art).\n",
+                            AppStyles.INFO_COLOR,
+                        )
+                    except Exception:
+                        pass
+            else:
+                cmd.extend([
+                    "--merge-output-format", preferred,
+                    "--remux-video", preferred,
+                ])
             if getattr(s, "ADD_METADATA", False):
                 cmd.append("--add-metadata")
 
