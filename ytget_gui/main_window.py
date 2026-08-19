@@ -1539,6 +1539,7 @@ class MainWindow(QMainWindow):
             card.set_context_actions([
                 ("Open in browser", _open_in_browser),
                 ("Copy URL", _copy_url),
+                ("Remove", _remove_item),
             ])
             # The card's own ✕ button (btn_delete) only emits the `removed`
             # signal - it was never connected to anything, so clicking it
