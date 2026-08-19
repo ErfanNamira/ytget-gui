@@ -14,6 +14,7 @@ import os
 import platform
 import re
 import subprocess
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -94,6 +95,68 @@ def maybe_refresh_cookies(settings: Optional[AppSettings], cookies_path: Optiona
         # Refresh itself succeeded; persisting the timestamp/path did not.
         # Fall back to whatever settings currently reports.
         return getattr(settings, "COOKIES_PATH", cookies_path), None
+
+
+def _run_cookie_refresh_thread(settings, cookies_path, holder: Dict[str, Any]) -> None:
+    try:
+        holder["result"] = maybe_refresh_cookies(settings, cookies_path)
+    except Exception as e:
+        holder["error"] = e
+
+
+def maybe_refresh_cookies_interruptible(
+    settings: Optional[AppSettings],
+    cookies_path: Optional[Path],
+    cancel_event: Optional[threading.Event] = None,
+    poll_interval: float = 0.2,
+) -> Tuple[Optional[Path], Optional[str], bool]:
+    """
+    Same contract as maybe_refresh_cookies(), but runs it on a daemon thread
+    and polls `cancel_event` instead of blocking on it directly.
+
+    browser_cookie3 talks to OS-level cookie stores / keychains in-process
+    (sqlite reads, DPAPI/Keychain decryption, etc.) - there's no
+    subprocess.Popen to kill the way run_yt_dlp() can be, so this can't
+    forcibly terminate a stuck native call. What it CAN do is stop *waiting*
+    on it the instant cancel_event is set, so a caller's stop()/cancel()
+    returns promptly instead of blocking for however long that native call
+    takes. The thread is a daemon: it can't keep the process alive, and if
+    it's abandoned it just finishes (or doesn't) quietly in the background;
+    its result, if it shows up late, is simply discarded here.
+
+    Returns (cookies_path, warning_or_None, was_cancelled).
+    """
+    # Skip the thread machinery entirely if refresh wouldn't even run -
+    # mirrors maybe_refresh_cookies()'s own early-outs.
+    if (
+        settings is None
+        or not getattr(settings, "COOKIES_AUTO_REFRESH", False)
+        or not getattr(settings, "COOKIES_FROM_BROWSER", "")
+    ):
+        return cookies_path, None, False
+
+    holder: Dict[str, Any] = {}
+    t = threading.Thread(
+        target=_run_cookie_refresh_thread,
+        args=(settings, cookies_path, holder),
+        daemon=True,
+        name="cookie-refresh",
+    )
+    t.start()
+
+    while t.is_alive():
+        if cancel_event is not None and cancel_event.is_set():
+            return cookies_path, None, True
+        t.join(timeout=poll_interval)
+
+    if "error" in holder:
+        return cookies_path, f"Cookies refresh: {holder['error']}", False
+
+    result = holder.get("result")
+    if result is None:
+        return cookies_path, None, False
+    updated_path, warning = result
+    return updated_path, warning, False
 
 
 # ── Command / environment ────────────────────────────────────────────────
@@ -287,6 +350,7 @@ def fetch_metadata(
     cookies_profile: str = "",
     timeout: int = DEFAULT_TIMEOUT_SECS,
     on_process_started: Optional[Callable[[subprocess.Popen], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Tuple[Optional[Metadata], Optional[str], Optional[Path], Optional[str]]:
     """
     One-stop synchronous fetch. Returns:
@@ -301,12 +365,23 @@ def fetch_metadata(
     thread to cancel a stuck/slow fetch on demand, instead of only being
     able to wait out the full `timeout`.
 
+    `cancel_event`, if given, is polled while waiting on the (non-subprocess,
+    potentially blocking) cookie-refresh step, so a caller can unblock that
+    wait on demand too - see maybe_refresh_cookies_interruptible(). If it's
+    set before the yt-dlp process even launches, we skip straight to
+    returning a "Cancelled" result instead of paying for the fetch.
+
     Does NOT touch Qt signals - callers emit based on the returned tuple.
     Spotify URLs are NOT handled here; check is_spotify_url() first.
     """
-    updated_cookies_path, refresh_warning = maybe_refresh_cookies(settings, cookies_path)
+    updated_cookies_path, refresh_warning, refresh_cancelled = maybe_refresh_cookies_interruptible(
+        settings, cookies_path, cancel_event=cancel_event,
+    )
     if updated_cookies_path is not None:
         cookies_path = updated_cookies_path
+
+    if refresh_cancelled or (cancel_event is not None and cancel_event.is_set()):
+        return None, "Cancelled", cookies_path, refresh_warning
 
     cmd = build_command(
         url, yt_dlp_path, ffmpeg_dir, cookies_path, proxy_url, settings,
