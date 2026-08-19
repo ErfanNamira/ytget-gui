@@ -214,6 +214,13 @@ class QueueCard(QFrame):
         right.addStretch(1)
         root.addLayout(right)
 
+        # Right-click anywhere on the card opens the same menu as the ⋯
+        # button. This matters once the window gets narrow enough that the
+        # up/down/delete buttons get squeezed out — right-click still works
+        # no matter how tight the layout gets.
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._open_context_menu_at)
+
         # Wire signals
         self.more_btn.clicked.connect(self._open_context_menu)
         self.btn_delete.clicked.connect(self.removed.emit)
@@ -296,7 +303,7 @@ class QueueCard(QFrame):
         chip_style = STATUS_CHIP_STYLES.get(status, _DEFAULT_CHIP_STYLE)
         self.status_chip.setStyleSheet(chip_style)
 
-    def _open_context_menu(self) -> None:
+    def _build_context_menu(self) -> QMenu:
         menu = QMenu(self)
         if self._context_actions:
             for label, fn in self._context_actions:
@@ -307,7 +314,17 @@ class QueueCard(QFrame):
             menu.addAction("Remove").triggered.connect(self.removed.emit)
             menu.addAction("Move up").triggered.connect(self.movedUp.emit)
             menu.addAction("Move down").triggered.connect(self.movedDown.emit)
+        return menu
+
+    def _open_context_menu(self) -> None:
+        menu = self._build_context_menu()
         menu.exec(self.more_btn.mapToGlobal(self.more_btn.rect().bottomLeft()))
+
+    def _open_context_menu_at(self, pos) -> None:
+        # pos is in QueueCard's own coordinates (customContextMenuRequested
+        # local pos), covers both right-click and the platform "menu" key.
+        menu = self._build_context_menu()
+        menu.exec(self.mapToGlobal(pos))
 
     def _set_elevated(self, on: bool) -> None:
         if on == self._elevated:
