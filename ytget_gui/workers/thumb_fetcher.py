@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait as futures_wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
@@ -121,6 +121,7 @@ class ThumbFetcher(QObject):
         settings: AppSettings,
         timeout: int = 20,
         parent: Optional[QObject] = None,
+        cancel_event: Optional[threading.Event] = None,
     ):
         super().__init__(parent)
         self.url = url
@@ -133,6 +134,41 @@ class ThumbFetcher(QObject):
             pass
 
         self._target_path: Optional[Path] = None
+
+        # Lets ThumbManager.stop() abort this specific fetch from another
+        # thread: request_cancel() sets the event (checked at natural
+        # checkpoints below - between probe candidates, before each slow
+        # step) and kills whatever yt-dlp subprocess is currently running,
+        # if any. requests-based calls can't be force-aborted mid-flight
+        # this way, but they're already timeout-bounded.
+        self._cancel_event = cancel_event if cancel_event is not None else threading.Event()
+        self._proc_lock = threading.Lock()
+        self._current_proc: Optional[subprocess.Popen] = None
+
+    def request_cancel(self) -> None:
+        """Ask this fetch to stop ASAP. Safe to call from any thread."""
+        self._cancel_event.set()
+        with self._proc_lock:
+            proc = self._current_proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def _register_proc(self, proc: subprocess.Popen) -> None:
+        with self._proc_lock:
+            self._current_proc = proc
+        if self._cancel_event.is_set():
+            # request_cancel() may have run in the tiny window before this
+            # fired and found nothing to kill yet.
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def _cancelled(self) -> bool:
+        return self._cancel_event.is_set()
 
     # ------------------------------------------------------------------
     # Small helpers to cut down on repetitive try/except boilerplate.
@@ -155,8 +191,16 @@ class ThumbFetcher(QObject):
         self._safe_emit(self.started, self.url)
 
         try:
+            if self._cancelled():
+                self._finish("")
+                return
+
             if getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
                 self._maybe_refresh_cookies()
+
+            if self._cancelled():
+                self._finish("")
+                return
 
             video_id = self._extract_video_id_from_url(self.url)
 
@@ -165,6 +209,10 @@ class ThumbFetcher(QObject):
             # entirely for the common case of a normal watch URL.
             thumb_url: Optional[str] = self._probe_ytimg_thumbnail(video_id) if video_id else None
             is_playlist = False
+
+            if self._cancelled():
+                self._finish("")
+                return
 
             if not thumb_url:
                 # Slow path: ask yt-dlp for metadata. Needed for playlist
@@ -175,6 +223,10 @@ class ThumbFetcher(QObject):
                 thumb_url = extracted_url
                 if not thumb_url and video_id:
                     thumb_url = self._probe_ytimg_thumbnail(video_id) or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+            if self._cancelled():
+                self._finish("")
+                return
 
             if not thumb_url:
                 self._log("No thumbnail URL discovered")
@@ -207,6 +259,9 @@ class ThumbFetcher(QObject):
 
             # Try requests first (fast, pooled connection).
             saved = None
+            if self._cancelled():
+                self._finish("")
+                return
             try:
                 saved = self._download_with_requests(thumb_url, target)
             except Exception as e:
@@ -214,6 +269,10 @@ class ThumbFetcher(QObject):
 
             if saved:
                 self._finish(str(saved))
+                return
+
+            if self._cancelled():
+                self._finish("")
                 return
 
             # Fallback to yt-dlp's own thumbnail writer.
@@ -284,11 +343,17 @@ class ThumbFetcher(QObject):
             proxies = {"http": proxy, "https": proxy}
 
         probe_timeout = min(self.timeout, 6) or 6
+        # (connect_timeout, read_timeout): bound the connect phase tightly
+        # so an unreachable host (network down, DNS failing, etc.) fails
+        # fast instead of eating the full read timeout on every candidate.
+        probe_timeout_tuple = (3, probe_timeout)
 
         for name in _YTIMG_CANDIDATES:
+            if self._cancelled():
+                return None
             candidate = f"https://i.ytimg.com/vi/{video_id}/{name}.jpg"
             try:
-                r = _SESSION.head(candidate, timeout=probe_timeout, allow_redirects=True, proxies=proxies, verify=verify)
+                r = _SESSION.head(candidate, timeout=probe_timeout_tuple, allow_redirects=True, proxies=proxies, verify=verify)
             except Exception:
                 continue
             if r.status_code != 200:
@@ -424,28 +489,42 @@ class ThumbFetcher(QObject):
             startupinfo = self._win_startupinfo()
 
             try:
-                proc = subprocess.run(
+                popen = subprocess.Popen(
                     cmd,
-                    capture_output=True,
-                    text=False,
-                    check=False,
-                    timeout=30,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     startupinfo=startupinfo,
                     env=env,
                 )
             except FileNotFoundError:
                 return None, self._extract_video_id_from_url(self.url), False
-            except subprocess.TimeoutExpired:
-                self._log("yt-dlp metadata extraction timed out")
-                return None, None, False
             except Exception as e:
                 self._log(f"yt-dlp metadata extraction error: {e}")
                 return None, self._extract_video_id_from_url(self.url), False
 
-            stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
-            stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
+            self._register_proc(popen)
+            try:
+                stdout_b, stderr_b = popen.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                popen.kill()
+                try:
+                    popen.communicate(timeout=5)
+                except Exception:
+                    pass
+                self._log("yt-dlp metadata extraction timed out")
+                return None, None, False
+            finally:
+                with self._proc_lock:
+                    self._current_proc = None
 
-            if proc.returncode != 0 and not stdout:
+            if self._cancelled():
+                return None, self._extract_video_id_from_url(self.url), False
+
+            proc_returncode = popen.returncode
+            stdout = (stdout_b or b"").decode("utf-8", errors="replace")
+            stderr = (stderr_b or b"").decode("utf-8", errors="replace")
+
+            if proc_returncode != 0 and not stdout:
                 self._log(f"yt-dlp failed to extract metadata: {stderr.strip()}")
                 return None, self._extract_video_id_from_url(self.url), False
 
@@ -593,7 +672,7 @@ class ThumbFetcher(QObject):
                 thumb_url,
                 headers=headers,
                 stream=True,
-                timeout=self.timeout,
+                timeout=(5, self.timeout),
                 proxies=proxies,
                 allow_redirects=True,
                 verify=requests_verify,
@@ -611,6 +690,13 @@ class ThumbFetcher(QObject):
                 try:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=str(target.parent)) as tf:
                         for chunk in r.iter_content(chunk_size=65536):
+                            if self._cancelled():
+                                tf.close()
+                                try:
+                                    Path(tf.name).unlink()
+                                except Exception:
+                                    pass
+                                return None
                             if chunk:
                                 tf.write(chunk)
                         tmp_path = Path(tf.name)
@@ -683,27 +769,40 @@ class ThumbFetcher(QObject):
             startupinfo = self._win_startupinfo()
 
             try:
-                proc = subprocess.run(
+                popen = subprocess.Popen(
                     cmd,
-                    capture_output=True,
-                    text=False,
-                    check=False,
-                    timeout=60,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     startupinfo=startupinfo,
                     env=env,
                 )
             except FileNotFoundError:
                 return None
-            except subprocess.TimeoutExpired:
-                self._log("yt-dlp thumbnail write timed out")
-                return None
             except Exception as e:
                 self._log(f"yt-dlp thumbnail write error: {e}")
                 return None
 
-            if proc.returncode != 0:
-                stderr = (proc.stderr or b"").decode("utf-8", errors="replace")
-                self._log(f"yt-dlp returned code {proc.returncode}: {stderr.strip()}")
+            self._register_proc(popen)
+            try:
+                _stdout_b, stderr_b = popen.communicate(timeout=60)
+            except subprocess.TimeoutExpired:
+                popen.kill()
+                try:
+                    popen.communicate(timeout=5)
+                except Exception:
+                    pass
+                self._log("yt-dlp thumbnail write timed out")
+                return None
+            finally:
+                with self._proc_lock:
+                    self._current_proc = None
+
+            if self._cancelled():
+                return None
+
+            if popen.returncode != 0:
+                stderr = (stderr_b or b"").decode("utf-8", errors="replace")
+                self._log(f"yt-dlp returned code {popen.returncode}: {stderr.strip()}")
 
             candidates = list(Path(out_dir).glob(base + ".*"))
             ordered: List[Path] = []
@@ -762,6 +861,14 @@ class ThumbManager(QObject):
         self._lock = threading.Lock()
         self._pending: set = set()
         self._stopped = False
+        # Tracks in-flight fetches so stop() can ask each one to cancel
+        # (kills its yt-dlp subprocess, if any) instead of just blocking
+        # until whatever happened to be running finishes on its own -
+        # which, with the network down, could mean waiting out a full
+        # 30-60s subprocess timeout (or several, sequentially) with the
+        # GUI thread frozen the whole time.
+        self._active: dict = {}
+        self._futures: dict = {}
 
     def enqueue(self, url: str, force: bool = False) -> None:
         """Queue a thumbnail fetch.
@@ -778,7 +885,9 @@ class ThumbManager(QObject):
                 return
             self._pending.add(url)
         try:
-            self._executor.submit(self._run_one, url)
+            future = self._executor.submit(self._run_one, url)
+            with self._lock:
+                self._futures[url] = future
         except RuntimeError:
             # Executor already shut down; drop silently.
             with self._lock:
@@ -786,15 +895,53 @@ class ThumbManager(QObject):
 
     def stop(self, wait: bool = True) -> None:
         self._stopped = True
+        with self._lock:
+            active_fetchers = list(self._active.values())
+            in_flight_futures = list(self._futures.values())
+            self._pending.clear()
+
+        # Ask every in-flight fetch to stop at its next checkpoint and kill
+        # its yt-dlp subprocess if one is currently running. requests-based
+        # calls (thumbnail HEAD probes / downloads) can't be force-aborted
+        # mid-flight from here, but they're all individually timeout-bounded
+        # (see ThumbFetcher), so this - plus the bounded wait below - is
+        # enough to guarantee stop() itself never blocks the caller (e.g.
+        # MainWindow.closeEvent, running on the GUI thread) for long. It
+        # previously called executor.shutdown(wait=True, cancel_futures=False),
+        # which just sat there until whatever happened to be running
+        # finished on its own - with the network unreachable, that could be
+        # a full subprocess timeout (or several, one after another),
+        # freezing the window for a minute or more.
+        for fetcher in active_fetchers:
+            try:
+                fetcher.request_cancel()
+            except Exception:
+                pass
+
+        if wait and in_flight_futures:
+            # Best-effort grace period only - requests-based calls (HEAD
+            # probes, thumbnail GET) can't be force-aborted mid-socket-call
+            # from here, so this can't guarantee they've stopped, only give
+            # them a brief window to notice _cancelled() and the subprocess
+            # kill above before we move on regardless. Keep this short:
+            # callers (e.g. MainWindow.closeEvent) may also be bounding
+            # other shutdown work with its own budget, and these add up.
+            try:
+                futures_wait(in_flight_futures, timeout=0.3)
+            except Exception:
+                pass
+
         try:
-            self._executor.shutdown(wait=wait, cancel_futures=not wait)
+            self._executor.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             # cancel_futures was added in Python 3.9; degrade gracefully.
-            self._executor.shutdown(wait=wait)
+            self._executor.shutdown(wait=False)
 
     def _run_one(self, url: str) -> None:
+        fetcher = ThumbFetcher(url, self.cache_dir, self.settings)
+        with self._lock:
+            self._active[url] = fetcher
         try:
-            fetcher = ThumbFetcher(url, self.cache_dir, self.settings)
             fetcher.started.connect(self.started.emit)
             fetcher.finished.connect(self.finished.emit)
             fetcher.error.connect(self.error.emit)
@@ -813,3 +960,5 @@ class ThumbManager(QObject):
         finally:
             with self._lock:
                 self._pending.discard(url)
+                self._active.pop(url, None)
+                self._futures.pop(url, None)
