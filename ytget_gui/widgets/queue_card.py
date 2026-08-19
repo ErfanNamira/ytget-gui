@@ -198,7 +198,13 @@ class QueueCard(QFrame):
         self.btn_down.setObjectName("IconBtn")
         self.btn_delete = QPushButton("✕")
         self.btn_delete.setObjectName("IconBtn")
-        for b in (self.btn_up, self.btn_down, self.btn_delete):
+        self.btn_delete.setToolTip("Remove from queue")
+        self.btn_delete.setCursor(Qt.PointingHandCursor)
+        # btn_up/btn_down are legacy reordering controls superseded by the
+        # drag handle - keep those hidden. btn_delete was being hidden too,
+        # which left no working "click to remove" affordance on the card
+        # itself (only the ⋯ context menu's "Remove" action worked).
+        for b in (self.btn_up, self.btn_down):
             b.setVisible(False)
         compat.addWidget(self.btn_up)
         compat.addWidget(self.btn_down)
