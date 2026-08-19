@@ -2577,7 +2577,7 @@ class MainWindow(QMainWindow):
         before = len(self.queue)
         keep = []
         for it in self.queue:
-            if it.get("status") in ("Completed", "Cancelled"):
+            if it.get("status") == "Completed":
                 try:
                     url = it.get("url", "")
                     if url in self._pending_thumb_urls:
