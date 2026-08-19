@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
+import threading
 from collections import deque
-from typing import Deque, List, Set
+from typing import Deque, List, Optional, Set
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -35,6 +37,17 @@ class TitleFetchQueue(QObject):
         self._running = False
         self._stopping = False
 
+        # Guards _current_proc, which is written from this object's own
+        # thread (when a fetch launches) and read/killed from whichever
+        # thread calls stop() (normally the GUI thread). Without this,
+        # stop() could previously only set a flag that was checked *between*
+        # queued items - an in-flight yt-dlp call (up to
+        # fetch_core.DEFAULT_TIMEOUT_SECS = 120s) could not be interrupted,
+        # which is why stopping the queue or closing the app while a title
+        # was mid-fetch would hang until that call finished/timed out.
+        self._proc_lock = threading.Lock()
+        self._current_proc: Optional[subprocess.Popen] = None
+
     @Slot(str)
     def enqueue(self, url: str):
         if not url or url in self._pending:
@@ -57,8 +70,18 @@ class TitleFetchQueue(QObject):
 
     @Slot()
     def stop(self):
-        # Soft stop: finish current item, then drop everything still queued.
+        # Drop everything still queued, and kill whatever fetch is currently
+        # in flight (if any) so we don't sit blocked inside subprocess
+        # I/O for up to fetch_core.DEFAULT_TIMEOUT_SECS before honoring
+        # the stop. Safe to call from any thread.
         self._stopping = True
+        with self._proc_lock:
+            proc = self._current_proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     def _process_next(self):
         # Iterative drain loop (not recursive): a recursive version here
@@ -95,6 +118,19 @@ class TitleFetchQueue(QObject):
             self._running = False
             self.idle.emit()
 
+    def _register_current_proc(self, proc: subprocess.Popen) -> None:
+        """Called by fetch_core the instant the yt-dlp subprocess launches,
+        so stop() (running on another thread) has something to kill."""
+        with self._proc_lock:
+            self._current_proc = proc
+        if self._stopping:
+            # stop() may have run in the tiny window before this callback
+            # fired and found nothing to kill yet - handle that race here.
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
     def _fetch_one(self, url: str):
         """
         Inline version of TitleFetcher.run(), but without extra per-job QThread.
@@ -106,15 +142,20 @@ class TitleFetchQueue(QObject):
             self.title_fetched.emit(url, title)
             return
 
-        metadata, err, updated_cookies_path, refresh_warning = fetch_core.fetch_metadata(
-            url=url,
-            yt_dlp_path=self.settings.YT_DLP_PATH,
-            ffmpeg_dir=self.settings.FFMPEG_PATH.parent,
-            cookies_path=self.settings.COOKIES_PATH,
-            proxy_url=self.settings.PROXY_URL or "",
-            settings=self.settings,
-            cookies_from_browser=getattr(self.settings, "COOKIES_FROM_BROWSER", "") or "",
-        )
+        try:
+            metadata, err, updated_cookies_path, refresh_warning = fetch_core.fetch_metadata(
+                url=url,
+                yt_dlp_path=self.settings.YT_DLP_PATH,
+                ffmpeg_dir=self.settings.FFMPEG_PATH.parent,
+                cookies_path=self.settings.COOKIES_PATH,
+                proxy_url=self.settings.PROXY_URL or "",
+                settings=self.settings,
+                cookies_from_browser=getattr(self.settings, "COOKIES_FROM_BROWSER", "") or "",
+                on_process_started=self._register_current_proc,
+            )
+        finally:
+            with self._proc_lock:
+                self._current_proc = None
 
         if updated_cookies_path is not None:
             self.settings.COOKIES_PATH = updated_cookies_path
