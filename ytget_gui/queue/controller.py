@@ -179,6 +179,8 @@ class QueueController(QObject):
         item.progress = 0
         item.stage = ""
         item.last_error = ""
+        item.output_path = ""
+        item.output_count = 0
 
         self._running = True
         self.item_changed.emit(item.url)
@@ -195,6 +197,7 @@ class QueueController(QObject):
         worker.error.connect(self._on_worker_error, Qt.QueuedConnection)
         worker.progress.connect(self._on_worker_progress, Qt.QueuedConnection)
         worker.stage.connect(self._on_worker_stage, Qt.QueuedConnection)
+        worker.output.connect(self._on_worker_output, Qt.QueuedConnection)
         worker.finished.connect(self._on_worker_finished, Qt.QueuedConnection)
         worker.finished.connect(thread.quit, Qt.QueuedConnection)
 
@@ -242,6 +245,14 @@ class QueueController(QObject):
         # The previous revision wrote this into the item's *status* field, which
         # corrupted the status chip and left the progress bar pinned at 0%.
         item.stage = text
+        self.item_changed.emit(item.url)
+
+    def _on_worker_output(self, path: str, count: int) -> None:
+        item = self._current
+        if item is None or not path:
+            return
+        item.output_path = path
+        item.output_count = count
         self.item_changed.emit(item.url)
 
     def _on_worker_error(self, message: str) -> None:
@@ -406,6 +417,16 @@ class QueueController(QObject):
             self.model.move_many([self._current.url], to_top=True, after=0)
         self.queue_changed.emit()
         self.model.save()
+
+    def forget_output(self, url: str) -> None:
+        """Drop a recorded output path whose file no longer exists."""
+        item = self.model.get(url)
+        if item is None or not item.output_path:
+            return
+        item.output_path = ""
+        item.output_count = 0
+        self.model.save()
+        self.item_changed.emit(url)
 
     # ------------------------------------------------------------------
     # Helpers
