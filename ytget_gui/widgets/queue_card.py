@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -100,6 +100,7 @@ class QueueCard(QFrame):
         self._active = False
 
         self._context_actions: List[Tuple[str, Callable[[], None]]] = []
+        self._menu: Optional[QMenu] = None
         self._last_status: Optional[Status] = None
         self._last_percent = -1
         self._last_title = ""
@@ -327,21 +328,37 @@ class QueueCard(QFrame):
 
     def _build_menu(self) -> QMenu:
         menu = QMenu(self)
-        if self._context_actions:
-            for label, callback in self._context_actions:
-                menu.addAction(label).triggered.connect(callback)
-        else:
-            menu.addAction("Remove").triggered.connect(
-                lambda: self.removed.emit(self.url)
+        # Without this, every invocation leaves a QMenu parented to the card.
+        menu.setAttribute(Qt.WA_DeleteOnClose)
+
+        actions = self._context_actions or [
+            ("Remove", lambda: self.removed.emit(self.url))
+        ]
+        for label, callback in actions:
+            # Deferred to the next event-loop turn. These callbacks can rebuild
+            # the queue list, which destroys this card -- and therefore this
+            # menu, whose handler is still on the stack. Letting the emission
+            # unwind first is what makes Remove work on the first click.
+            menu.addAction(label).triggered.connect(
+                lambda _checked=False, fn=callback: QTimer.singleShot(0, fn)
             )
         return menu
 
-    def _open_menu_at_button(self) -> None:
+    def _show_menu(self, global_pos) -> None:
         menu = self._build_menu()
-        menu.exec(self.more_btn.mapToGlobal(self.more_btn.rect().bottomLeft()))
+        # popup() rather than exec(): exec() opens a nested event loop and grabs
+        # the mouse, but a right-button context-menu request arrives on press,
+        # while the list view still holds its own grab. The release then lands on
+        # the menu as a click-through and dismisses it before any action fires.
+        # popup() is non-blocking and leaves grab handling to Qt.
+        self._menu = menu  # keep alive; WA_DeleteOnClose handles teardown
+        menu.popup(global_pos)
+
+    def _open_menu_at_button(self) -> None:
+        self._show_menu(self.more_btn.mapToGlobal(self.more_btn.rect().bottomLeft()))
 
     def _open_menu_at_point(self, pos) -> None:
-        self._build_menu().exec(self.mapToGlobal(pos))
+        self._show_menu(self.mapToGlobal(pos))
 
     # ------------------------------------------------------------------
     # Hover / state styling
