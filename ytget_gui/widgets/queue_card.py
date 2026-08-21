@@ -79,6 +79,8 @@ def _format_duration(seconds: Optional[float]) -> str:
 class QueueCard(QFrame):
     removed = Signal(str)
     retry_requested = Signal(str)
+    open_requested = Signal(str)
+    reveal_requested = Signal(str)
 
     THUMB_SIZE = QSize(120, 68)
 
@@ -108,6 +110,8 @@ class QueueCard(QFrame):
         self._meta_text = ""
         self._meta_width = -1
         self._thumb_path: Optional[str] = None
+        self._playable = False
+        self._missing = False
 
         self._build_ui()
         self.update_from(item)
@@ -199,6 +203,17 @@ class QueueCard(QFrame):
         self.btn_delete.setAccessibleName("Remove from queue")
         right.addWidget(self.btn_delete, 0, Qt.AlignRight)
 
+        self.play_btn = QPushButton("\u25b6")
+        self.play_btn.setObjectName("IconBtn")
+        self.play_btn.setFixedSize(28, 22)
+        self.play_btn.setCursor(Qt.PointingHandCursor)
+        self.play_btn.setToolTip("Play the downloaded file")
+        self.play_btn.setAccessibleName("Play downloaded file")
+        self.play_btn.setVisible(False)
+        right.addWidget(self.play_btn, 0, Qt.AlignRight)
+
+        self.play_btn.clicked.connect(lambda: self.open_requested.emit(self.url))
+
         right.addStretch(1)
         root.addLayout(right)
 
@@ -224,6 +239,7 @@ class QueueCard(QFrame):
         self._set_progress(item.progress)
         self._set_meta(self._compose_meta(item))
         self._set_active(item.status is Status.DOWNLOADING)
+        self._set_playable(item.has_output, item.output_missing)
         if item.thumb_path:
             self.set_thumbnail_path(item.thumb_path)
 
@@ -231,6 +247,24 @@ class QueueCard(QFrame):
         self, actions: Sequence[Tuple[str, Callable[[], None]]]
     ) -> None:
         self._context_actions = list(actions)
+
+    def _set_playable(self, playable: bool, missing: bool) -> None:
+        if playable == self._playable and missing == self._missing:
+            return
+        self._playable = playable
+        self._missing = missing
+        self.play_btn.setVisible(playable or missing)
+        self.play_btn.setEnabled(playable)
+        self.play_btn.setToolTip(
+            "Play the downloaded file"
+            if playable
+            else "The file is no longer at its original location"
+        )
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if self._playable:
+            self.open_requested.emit(self.url)
+        super().mouseDoubleClickEvent(event)
 
     def set_thumbnail_path(self, path: str) -> None:
         if not path or path == self._thumb_path:
@@ -288,6 +322,8 @@ class QueueCard(QFrame):
             parts.append(item.uploader)
         if item.last_error and item.status is Status.ERROR:
             parts.append(clamp(item.last_error, 70))
+        if item.output_missing:
+            parts.append("file moved or deleted")
         if not parts:
             parts.append(item.url)
         return "  \u00b7  ".join(parts)
