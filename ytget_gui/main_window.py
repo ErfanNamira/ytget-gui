@@ -193,9 +193,9 @@ class MainWindow(QMainWindow):
         dot.setContentsMargins(5, 0, 5, 0)
         version = QLabel(f"v{_version.__version__}")
         version.setObjectName("VersionChip")
-        brand_layout.addWidget(name)
-        brand_layout.addWidget(dot)
-        brand_layout.addWidget(version)
+        brand_layout.addWidget(name, 0, Qt.AlignVCenter)
+        brand_layout.addWidget(dot, 0, Qt.AlignVCenter)
+        brand_layout.addWidget(version, 0, Qt.AlignVCenter)
         layout.addWidget(brand)
 
         separator = QFrame()
@@ -307,8 +307,8 @@ class MainWindow(QMainWindow):
         self.sort_box.setAccessibleName("Sort queue")
         self.sort_box.currentTextChanged.connect(self.controller.sort_by)
 
-        header_layout.addWidget(label)
-        header_layout.addWidget(self.count_badge)
+        header_layout.addWidget(label, 0, Qt.AlignVCenter)
+        header_layout.addWidget(self.count_badge, 0, Qt.AlignVCenter)
         header_layout.addStretch(1)
         header_layout.addWidget(self.search_box, 2)
         header_layout.addWidget(self.sort_box)
