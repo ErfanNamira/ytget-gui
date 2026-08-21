@@ -400,7 +400,7 @@ class UpdateInstaller(QThread):
             suffix=destination.suffix, dir=str(destination.parent)
         )
         os.close(handle)
-        temp_path = Path(temp_name)
+        temp_path: Optional[Path] = Path(temp_name)
 
         try:
             if not self._download(self.url, temp_path):
@@ -415,7 +415,7 @@ class UpdateInstaller(QThread):
                 # Windows refuses to replace a running executable; shutil.move
                 # via a copy is the usual fallback.
                 shutil.move(str(temp_path), str(destination))
-            temp_path = Path("")
+            temp_path = None
             self._log("Done.")
             self.succeeded.emit(self.key)
         except OSError as exc:
@@ -424,7 +424,7 @@ class UpdateInstaller(QThread):
                 f"{exc}. If the file is in use, close any running download first.",
             )
         finally:
-            if temp_path and temp_path.exists():
+            if temp_path is not None and temp_path.exists():
                 temp_path.unlink(missing_ok=True)
 
     def _install_deno(self) -> None:
