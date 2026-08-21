@@ -1,42 +1,33 @@
 # File: ytget_gui/spotdl_settings.py
-
-"""
-SpotDL-specific settings, persisted inside the main config.json
-under the key "SPOTDL".
-"""
+"""SpotDL settings, persisted inside config.json under the "SPOTDL" key."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List
+from dataclasses import asdict, dataclass, field, fields
+from typing import Any, Dict, List
 
+SPOTDL_FORMATS: tuple[str, ...] = ("mp3", "flac", "ogg", "opus", "m4a", "wav")
 
-# ---------------------------------------------------------------------------
-# Supported choices (kept in sync with spotdl CLI)
-# ---------------------------------------------------------------------------
-SPOTDL_FORMATS = ["mp3", "flac", "ogg", "opus", "m4a", "wav"]
+SPOTDL_LYRICS_PROVIDERS: tuple[str, ...] = ("synced", "musixmatch", "genius", "azlyrics")
 
-SPOTDL_LYRICS_PROVIDERS = ["synced", "musixmatch", "genius", "azlyrics"]
-
-SPOTDL_AUDIO_PROVIDERS = [
-    "youtube",
+SPOTDL_AUDIO_PROVIDERS: tuple[str, ...] = (
     "youtube-music",
+    "youtube",
     "soundcloud",
     "bandcamp",
     "piped",
-]
+)
 
-SPOTDL_BITRATES = [
+SPOTDL_BITRATES: tuple[str, ...] = (
     "auto", "disable",
     "8k", "16k", "24k", "32k", "40k", "48k",
     "64k", "80k", "96k", "112k", "128k",
     "160k", "192k", "224k", "256k", "320k",
-]
+)
 
-SPOTDL_OVERWRITE_MODES = ["skip", "metadata", "force"]
+SPOTDL_OVERWRITE_MODES: tuple[str, ...] = ("skip", "metadata", "force")
 
-# Common output template tokens (shown as hints in the UI)
-SPOTDL_OUTPUT_TOKENS = (
+SPOTDL_OUTPUT_TOKENS: tuple[str, ...] = (
     "{title}", "{artists}", "{artist}", "{album}", "{album-artist}",
     "{genre}", "{disc-number}", "{disc-count}", "{duration}",
     "{year}", "{original-date}", "{track-number}", "{tracks-count}",
@@ -44,90 +35,124 @@ SPOTDL_OUTPUT_TOKENS = (
     "{list-position}", "{list-length}", "{output-ext}",
 )
 
-# ---------------------------------------------------------------------------
-# Default output template (mirrors the user's usual command)
-# ---------------------------------------------------------------------------
 DEFAULT_OUTPUT_TEMPLATE = "{artists} - {title} - {year}.{output-ext}"
+
+DEFAULT_AUDIO_PROVIDERS: tuple[str, ...] = ("youtube-music", "youtube")
+
+MAX_THREADS = 32
 
 
 @dataclass
 class SpotDLSettings:
-    # ── Core ────────────────────────────────────────────────────────────────
+    # Core
     SPOTDL_FORMAT: str = "opus"
     SPOTDL_THREADS: int = 12
     SPOTDL_OUTPUT: str = DEFAULT_OUTPUT_TEMPLATE
 
-    # ── Lyrics ──────────────────────────────────────────────────────────────
+    # Lyrics
     SPOTDL_LYRICS: List[str] = field(default_factory=lambda: ["synced"])
     SPOTDL_GENERATE_LRC: bool = True
 
-    # ── Audio source ────────────────────────────────────────────────────────
-    # youtube-music first (fastest, best metadata match), youtube as a
-    # fallback so a single provider hiccup (bot-check, region lock, missing
-    # format) doesn't silently drop a track. A single-provider default is
-    # slightly faster but has no safety net — this is the better trade-off.
+    # Audio source. youtube-music first (fastest, best metadata match) with
+    # youtube as a safety net so one provider hiccup (bot-check, region lock,
+    # missing format) does not silently drop a track.
     SPOTDL_AUDIO_PROVIDERS: List[str] = field(
-        default_factory=lambda: ["youtube-music", "youtube"]
+        default_factory=lambda: list(DEFAULT_AUDIO_PROVIDERS)
     )
 
-    # ── Quality ─────────────────────────────────────────────────────────────
+    # Quality
     SPOTDL_BITRATE: str = "auto"
 
-    # ── yt-dlp passthrough ──────────────────────────────────────────────────
+    # Passthrough
     SPOTDL_YT_DLP_ARGS: str = "--sleep-interval 1 --max-sleep-interval 2"
-
-    # ── Extra ffmpeg args ────────────────────────────────────────────────────
     SPOTDL_FFMPEG_ARGS: str = ""
 
-    # ── Behaviour ───────────────────────────────────────────────────────────
-    SPOTDL_OVERWRITE: str = "skip"          # skip | metadata | force
+    # Behaviour
+    SPOTDL_OVERWRITE: str = "skip"
     SPOTDL_PLAYLIST_NUMBERING: bool = False
     SPOTDL_SKIP_EXPLICIT: bool = False
     SPOTDL_SPONSOR_BLOCK: bool = False
     SPOTDL_ADD_UNAVAILABLE: bool = False
 
-    # ── Proxy (re-uses main proxy or can override) ───────────────────────────
+    # Proxy
     SPOTDL_USE_MAIN_PROXY: bool = True
     SPOTDL_PROXY: str = ""
 
-    # ────────────────────────────────────────────────────────────────────────
-    #  Serialisation helpers
-    # ────────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Serialisation. Driven by dataclass introspection rather than a
+    # hand-maintained to_dict() -- the old version listed every key twice,
+    # so adding a field without touching to_dict() made it silently
+    # non-persistent and simultaneously invisible to from_dict().
+    # ------------------------------------------------------------------
 
-    def to_dict(self) -> dict:
-        return {
-            "SPOTDL_FORMAT": self.SPOTDL_FORMAT,
-            "SPOTDL_THREADS": self.SPOTDL_THREADS,
-            "SPOTDL_OUTPUT": self.SPOTDL_OUTPUT,
-            "SPOTDL_LYRICS": self.SPOTDL_LYRICS,
-            "SPOTDL_GENERATE_LRC": self.SPOTDL_GENERATE_LRC,
-            "SPOTDL_AUDIO_PROVIDERS": self.SPOTDL_AUDIO_PROVIDERS,
-            "SPOTDL_BITRATE": self.SPOTDL_BITRATE,
-            "SPOTDL_YT_DLP_ARGS": self.SPOTDL_YT_DLP_ARGS,
-            "SPOTDL_FFMPEG_ARGS": self.SPOTDL_FFMPEG_ARGS,
-            "SPOTDL_OVERWRITE": self.SPOTDL_OVERWRITE,
-            "SPOTDL_PLAYLIST_NUMBERING": self.SPOTDL_PLAYLIST_NUMBERING,
-            "SPOTDL_SKIP_EXPLICIT": self.SPOTDL_SKIP_EXPLICIT,
-            "SPOTDL_SPONSOR_BLOCK": self.SPOTDL_SPONSOR_BLOCK,
-            "SPOTDL_ADD_UNAVAILABLE": self.SPOTDL_ADD_UNAVAILABLE,
-            "SPOTDL_USE_MAIN_PROXY": self.SPOTDL_USE_MAIN_PROXY,
-            "SPOTDL_PROXY": self.SPOTDL_PROXY,
-        }
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "SpotDLSettings":
+    def from_dict(cls, data: Dict[str, Any] | None) -> "SpotDLSettings":
         obj = cls()
-        for key, default in obj.to_dict().items():
-            val = d.get(key, default)
-            # type-coerce lists that might have been stored as something else
-            if isinstance(default, list) and not isinstance(val, list):
-                val = [val] if val else []
-            elif isinstance(default, bool) and not isinstance(val, bool):
-                val = bool(val)
-            elif isinstance(default, int) and not isinstance(val, int):
-                try:
-                    val = int(val)
-                except Exception:
-                    val = default
-            setattr(obj, key, val)
+        if not isinstance(data, dict):
+            return obj
+
+        for f in fields(cls):
+            if f.name not in data:
+                continue
+            current = getattr(obj, f.name)
+            setattr(obj, f.name, _coerce(data[f.name], current))
+
+        obj.normalise()
         return obj
+
+    def normalise(self) -> None:
+        """Clamp/validate every field to a value the spotdl CLI accepts.
+
+        Config files are user-editable and survive downgrades, so a stale or
+        hand-edited value must never reach the command line.
+        """
+        if self.SPOTDL_FORMAT not in SPOTDL_FORMATS:
+            self.SPOTDL_FORMAT = "opus"
+
+        self.SPOTDL_THREADS = max(1, min(MAX_THREADS, int(self.SPOTDL_THREADS or 1)))
+
+        if not (self.SPOTDL_OUTPUT or "").strip():
+            self.SPOTDL_OUTPUT = DEFAULT_OUTPUT_TEMPLATE
+
+        self.SPOTDL_LYRICS = [p for p in self.SPOTDL_LYRICS if p in SPOTDL_LYRICS_PROVIDERS]
+
+        providers = [p for p in self.SPOTDL_AUDIO_PROVIDERS if p in SPOTDL_AUDIO_PROVIDERS]
+        self.SPOTDL_AUDIO_PROVIDERS = providers or list(DEFAULT_AUDIO_PROVIDERS)
+
+        if self.SPOTDL_BITRATE not in SPOTDL_BITRATES:
+            self.SPOTDL_BITRATE = "auto"
+
+        if self.SPOTDL_OVERWRITE not in SPOTDL_OVERWRITE_MODES:
+            self.SPOTDL_OVERWRITE = "skip"
+
+    def uses_default_providers(self) -> bool:
+        return tuple(self.SPOTDL_AUDIO_PROVIDERS) == DEFAULT_AUDIO_PROVIDERS
+
+
+def _coerce(value: Any, current: Any) -> Any:
+    """Best-effort coercion of a persisted value to the field's type."""
+    if isinstance(current, bool):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+
+    if isinstance(current, int):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return current
+
+    if isinstance(current, list):
+        if isinstance(value, list):
+            return [str(v) for v in value]
+        return [str(value)] if value else []
+
+    if isinstance(current, str):
+        return "" if value is None else str(value)
+
+    return value
