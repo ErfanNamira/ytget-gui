@@ -3,6 +3,9 @@ PySide6
 requests
 mutagen
 Pillow
+pillow-avif-plugin
 packaging
 browser_cookie3
 spotdl
+urllib3
+pyinstaller
