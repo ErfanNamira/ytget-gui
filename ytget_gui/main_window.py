@@ -48,6 +48,7 @@ from ytget_gui.queue.model import QueueItem, QueueModel, Status
 from ytget_gui.settings import AppSettings
 from ytget_gui.styles import AppStyles, Palette
 from ytget_gui.theme import main_window_qss
+from ytget_gui.utils import opener
 from ytget_gui.utils.text import short
 from ytget_gui.utils.validators import is_supported_url
 from ytget_gui.widgets.queue_card import QueueCard
@@ -880,14 +881,24 @@ class MainWindow(QMainWindow):
     def _append_card(self, item: QueueItem) -> None:
         card = QueueCard(item)
         card.removed.connect(self._remove_url)
-        card.set_context_actions(
-            [
-                ("Open in browser", lambda u=item.url: webbrowser.open(u)),
-                ("Copy URL", lambda u=item.url: QGuiApplication.clipboard().setText(u)),
-                ("Retry", lambda u=item.url: self._retry_url(u)),
-                ("Remove", lambda u=item.url: self._remove_url(u)),
+        card.open_requested.connect(self._open_output)
+        card.reveal_requested.connect(self._reveal_output)
+
+        actions = [
+            ("Open in browser", lambda u=item.url: webbrowser.open(u)),
+            ("Copy URL", lambda u=item.url: QGuiApplication.clipboard().setText(u)),
+        ]
+        if item.output_path:
+            actions += [
+                ("Play file", lambda u=item.url: self._open_output(u)),
+                ("Show in folder", lambda u=item.url: self._reveal_output(u)),
+                ("Copy file path", lambda u=item.url: self._copy_output_path(u)),
             ]
-        )
+        actions += [
+            ("Retry", lambda u=item.url: self._retry_url(u)),
+            ("Remove", lambda u=item.url: self._remove_url(u)),
+        ]
+        card.set_context_actions(actions)
 
         list_item = QListWidgetItem()
         list_item.setSizeHint(card.sizeHint())
@@ -1137,6 +1148,62 @@ class MainWindow(QMainWindow):
             webbrowser.open(directory.as_uri())
         except OSError as exc:
             self.log(f"Could not open {directory}: {exc}", AppStyles.ERROR_COLOR, "Error")
+
+    def _open_output(self, url: str) -> None:
+        item = self.model.get(url)
+        if item is None or not item.output_path:
+            return
+
+        if item.has_output:
+            if opener.open_path(item.output_path):
+                return
+            self.log(
+                f"No application is registered to open {Path(item.output_path).name}.",
+                AppStyles.WARNING_COLOR,
+                "Warning",
+            )
+            self._reveal_output(url)
+            return
+
+        self._handle_missing_output(item)
+
+    def _reveal_output(self, url: str) -> None:
+        item = self.model.get(url)
+        if item is None or not item.output_path:
+            return
+        if item.has_output:
+            if not opener.reveal_path(item.output_path):
+                self.log(
+                    "Could not open a file manager.",
+                    AppStyles.WARNING_COLOR,
+                    "Warning",
+                )
+            return
+        self._handle_missing_output(item)
+
+    def _handle_missing_output(self, item: QueueItem) -> None:
+        """The recorded file is gone. Open the nearest surviving folder and
+        forget the path, so the card stops offering to play it."""
+        missing = item.output_path
+        folder = opener.containing_folder(missing) or (
+            self.settings.DOWNLOADS_DIR
+            if self.settings.DOWNLOADS_DIR.is_dir()
+            else None
+        )
+        self.log(
+            f"{Path(missing).name} is no longer at {Path(missing).parent} "
+            "\u2014 it was moved or deleted.",
+            AppStyles.WARNING_COLOR,
+            "Warning",
+        )
+        self.controller.forget_output(item.url)
+        if folder is not None:
+            opener.open_path(folder)
+
+    def _copy_output_path(self, url: str) -> None:
+        item = self.model.get(url)
+        if item is not None and item.output_path:
+            QGuiApplication.clipboard().setText(item.output_path)
 
     def _set_post_action(self, value: str) -> None:
         if value not in _POST_ACTIONS:
