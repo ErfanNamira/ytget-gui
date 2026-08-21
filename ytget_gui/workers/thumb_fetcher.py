@@ -1,20 +1,22 @@
 # File: ytget_gui/workers/thumb_fetcher.py
+"""Thumbnail fetching and caching.
+
+Two paths: guess the ytimg CDN URL and confirm with a pooled HEAD request
+(no subprocess, milliseconds), falling back to yt-dlp metadata extraction only
+when that fails.
+"""
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
-import platform
+import logging
 import re
 import subprocess
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, wait as futures_wait
-from datetime import datetime, timezone
+from concurrent.futures import Future, ThreadPoolExecutor, wait as futures_wait
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -23,25 +25,53 @@ from requests.exceptions import RequestException
 
 try:
     from urllib3.util.retry import Retry
-except ImportError:  # pragma: no cover - very old urllib3
-    Retry = None  # type: ignore
+except ImportError:  # pragma: no cover
+    Retry = None  # type: ignore[assignment]
 
 from PySide6.QtCore import QObject, Signal
 
 from ytget_gui.settings import AppSettings
-from ytget_gui.workers import cookies as CookieManager
-from ytget_gui.workers import ssl_utils
+from ytget_gui.utils.text import cache_key, url_digest
+from ytget_gui.workers import cookies as cookie_manager
+from ytget_gui.workers import proc, ssl_utils
+
+log = logging.getLogger(__name__)
+
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+)
+
+# Best-first. maxres/sd do not exist for every video, hence the probe.
+_YTIMG_CANDIDATES: Tuple[str, ...] = (
+    "maxresdefault", "sddefault", "hqdefault", "mqdefault", "default",
+)
+
+# YouTube serves its grey "no thumbnail" placeholder with HTTP 200, so a 200 is
+# not proof the resolution exists -- these exact byte lengths identify it.
+_PLACEHOLDER_SIZES = frozenset({1097, 1120, 2088})
+
+_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")
+
+_COOKIE_REFRESH_INTERVAL = 300.0
+_cookie_lock = threading.Lock()
+_last_cookie_refresh = 0.0
 
 
-# --------------------------------------------------------------------------
-# Shared, connection-pooled HTTP session. Safe to use from multiple threads:
-# the underlying urllib3 connection pools are thread-safe, and we never
-# mutate session-level state (headers, cookies, etc.) after construction.
-# --------------------------------------------------------------------------
 def _build_session() -> requests.Session:
+    """Shared connection-pooled session.
+
+    Thread-safe: urllib3's pools are, and nothing mutates session state after
+    construction.
+    """
     session = requests.Session()
+    session.headers.update({"User-Agent": _USER_AGENT})
     if Retry is not None:
-        retry = Retry(total=2, backoff_factor=0.3, status_forcelist=(500, 502, 503, 504))
+        retry = Retry(
+            total=2, backoff_factor=0.3,
+            status_forcelist=(500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "HEAD"}),
+        )
         adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=retry)
     else:
         adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20)
@@ -52,62 +82,51 @@ def _build_session() -> requests.Session:
 
 _SESSION = _build_session()
 
-# Resolutions to try, best first, when guessing a thumbnail URL directly.
-_YTIMG_CANDIDATES: Tuple[str, ...] = ("maxresdefault", "sddefault", "hqdefault", "mqdefault", "default")
 
-# Known byte sizes of YouTube's generic grey "no thumbnail" placeholder
-# image, which is served with HTTP 200 even when a resolution doesn't
-# actually exist for a given video.
-_PLACEHOLDER_BYTE_SIZES = {1120, 2088}
-
-# Cookie export (browser -> cookies.txt) is comparatively expensive and does
-# not need to happen more than once every few minutes.
-_COOKIE_REFRESH_MIN_INTERVAL = 300.0  # seconds
-_cookie_refresh_lock = threading.Lock()
-_last_cookie_refresh_ts = 0.0
-
-
-def _safe_name(s: str) -> str:
-    s = (s or "").strip()
-    if not s:
-        return "unknown"
-    s = re.sub(r"[^A-Za-z0-9._-]", "_", s)
-    if len(s) > 120:
-        h = hashlib.sha1(s.encode("utf-8")).hexdigest()[:10]
-        s = s[:100] + "_" + h
-    return s
-
-
-def _ext_from_url_or_ct(url: str, content_type: Optional[str]) -> str:
-    url = url or ""
-    m = re.search(r"\.([a-zA-Z0-9]{2,6})(?:[?#]|$)", url)
-    if m:
-        ext = m.group(1).lower()
+def _extension_for(url: str, content_type: Optional[str]) -> str:
+    match = re.search(r"\.([a-zA-Z0-9]{2,6})(?:[?#]|$)", url or "")
+    if match:
+        ext = match.group(1).lower()
         if ext in {"jpg", "jpeg", "png", "webp", "gif", "bmp", "avif"}:
-            return "." + ("jpg" if ext == "jpeg" else ext)
-    if content_type:
-        ct = content_type.lower()
-        if "jpeg" in ct:
-            return ".jpg"
-        if "png" in ct:
-            return ".png"
-        if "webp" in ct:
-            return ".webp"
-        if "gif" in ct:
-            return ".gif"
-        if "avif" in ct:
-            return ".avif"
+            return ".jpg" if ext == "jpeg" else f".{ext}"
+    ct = (content_type or "").lower()
+    for needle, ext in (
+        ("jpeg", ".jpg"), ("png", ".png"), ("webp", ".webp"),
+        ("gif", ".gif"), ("avif", ".avif"),
+    ):
+        if needle in ct:
+            return ext
     return ".jpg"
 
 
-class ThumbFetcher(QObject):
-    """
-    Fetch a thumbnail for a given URL and cache it.
+def extract_video_id(url: str) -> Optional[str]:
+    try:
+        parsed = urlparse(url or "")
+    except ValueError:
+        return None
+    query = parse_qs(parsed.query)
+    if query.get("v"):
+        return query["v"][0]
+    match = re.search(
+        r"(?:youtu\.be/|youtube\.com/(?:embed/|v/|shorts/|live/))([A-Za-z0-9_-]{6,})",
+        url or "",
+    )
+    return match.group(1) if match else None
 
-    Signals:
-      - started(url)
-      - finished(url, path)  -> path is empty string on failure
-      - error(url, message)
+
+def canonical_watch_url(url: str) -> str:
+    """Strip playlist/index parameters so metadata extraction targets one video."""
+    video_id = extract_video_id(url)
+    if video_id and "youtu" in (url or ""):
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return url or ""
+
+
+class ThumbFetcher(QObject):
+    """Fetch and cache one thumbnail.
+
+    finished(url, path) reports an empty path on failure so callers can always
+    clear their pending state on a single signal.
     """
 
     started = Signal(str)
@@ -120,764 +139,426 @@ class ThumbFetcher(QObject):
         cache_dir: Path,
         settings: AppSettings,
         timeout: int = 20,
-        parent: Optional[QObject] = None,
         cancel_event: Optional[threading.Event] = None,
-    ):
+        parent: Optional[QObject] = None,
+    ) -> None:
         super().__init__(parent)
         self.url = url
         self.cache_dir = Path(cache_dir)
         self.settings = settings
         self.timeout = int(timeout)
-        try:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
 
-        self._target_path: Optional[Path] = None
-
-        # Lets ThumbManager.stop() abort this specific fetch from another
-        # thread: request_cancel() sets the event (checked at natural
-        # checkpoints below - between probe candidates, before each slow
-        # step) and kills whatever yt-dlp subprocess is currently running,
-        # if any. requests-based calls can't be force-aborted mid-flight
-        # this way, but they're already timeout-bounded.
-        self._cancel_event = cancel_event if cancel_event is not None else threading.Event()
+        self._cancel = cancel_event or threading.Event()
         self._proc_lock = threading.Lock()
-        self._current_proc: Optional[subprocess.Popen] = None
+        self._process: Optional[subprocess.Popen] = None
+
+    # ------------------------------------------------------------------
+    # Cancellation
+    # ------------------------------------------------------------------
 
     def request_cancel(self) -> None:
-        """Ask this fetch to stop ASAP. Safe to call from any thread."""
-        self._cancel_event.set()
-        with self._proc_lock:
-            proc = self._current_proc
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        """Stop as soon as possible. Safe from any thread.
 
-    def _register_proc(self, proc: subprocess.Popen) -> None:
+        Kills the current yt-dlp subprocess if one is running. requests calls
+        cannot be aborted mid-socket, but each is timeout-bounded.
+        """
+        self._cancel.set()
         with self._proc_lock:
-            self._current_proc = proc
-        if self._cancel_event.is_set():
-            # request_cancel() may have run in the tiny window before this
-            # fired and found nothing to kill yet.
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            process = self._process
+        proc.terminate_tree(process)
 
     def _cancelled(self) -> bool:
-        return self._cancel_event.is_set()
+        return self._cancel.is_set()
 
-    # ------------------------------------------------------------------
-    # Small helpers to cut down on repetitive try/except boilerplate.
-    # ------------------------------------------------------------------
-    def _safe_emit(self, signal: Signal, *args) -> None:
-        try:
-            signal.emit(*args)
-        except Exception:
-            pass
+    def _register_proc(self, process: subprocess.Popen) -> None:
+        with self._proc_lock:
+            self._process = process
+        if self._cancelled():
+            proc.terminate_tree(process)
+
+    def _clear_proc(self) -> None:
+        with self._proc_lock:
+            self._process = None
 
     def _log(self, message: str) -> None:
         if getattr(self.settings, "LOG_THUMBNAILS", False):
-            self._safe_emit(self.error, self.url, message)
+            self.error.emit(self.url, message)
+        else:
+            log.debug("thumb %s: %s", self.url, message)
 
-    def _finish(self, path: str) -> None:
-        self._safe_emit(self.finished, self.url, path)
+    # ------------------------------------------------------------------
+    # Main flow
+    # ------------------------------------------------------------------
 
-    # Public synchronous run method (intended to be called from a worker thread)
-    def run(self):
-        self._safe_emit(self.started, self.url)
-
+    def run(self) -> None:
+        self.started.emit(self.url)
         try:
-            if self._cancelled():
-                self._finish("")
-                return
+            self.finished.emit(self.url, self._fetch() or "")
+        except Exception as exc:  # noqa: BLE001 - a pool worker must not die
+            log.exception("Thumbnail fetch crashed")
+            self._log(f"Unexpected error: {exc}")
+            self.finished.emit(self.url, "")
 
-            if getattr(self.settings, "COOKIES_AUTO_REFRESH", False) and getattr(self.settings, "COOKIES_FROM_BROWSER", ""):
-                self._maybe_refresh_cookies()
+    def _fetch(self) -> Optional[str]:
+        if self._cancelled():
+            return None
 
-            if self._cancelled():
-                self._finish("")
-                return
+        self._maybe_refresh_cookies()
+        if self._cancelled():
+            return None
 
-            video_id = self._extract_video_id_from_url(self.url)
+        video_id = extract_video_id(self.url)
+        thumb_url = self._probe_ytimg(video_id) if video_id else None
 
-            # Fast path: guess the CDN URL directly and confirm it with a
-            # pooled HEAD request. This skips the yt-dlp subprocess
-            # entirely for the common case of a normal watch URL.
-            thumb_url: Optional[str] = self._probe_ytimg_thumbnail(video_id) if video_id else None
-            is_playlist = False
+        if not thumb_url and not self._cancelled():
+            extracted_url, extracted_id = self._extract_via_ytdlp()
+            video_id = video_id or extracted_id
+            thumb_url = extracted_url or (
+                self._probe_ytimg(video_id) if video_id else None
+            )
+            if not thumb_url and video_id:
+                thumb_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
-            if self._cancelled():
-                self._finish("")
-                return
+        if self._cancelled():
+            return None
+        if not thumb_url:
+            self._log("No thumbnail URL discovered")
+            return None
 
-            if not thumb_url:
-                # Slow path: ask yt-dlp for metadata. Needed for playlist
-                # entries, non-standard URLs, or when the fast probe above
-                # found nothing.
-                extracted_url, extracted_id, is_playlist = self._extract_thumbnail_url()
-                video_id = video_id or extracted_id
-                thumb_url = extracted_url
-                if not thumb_url and video_id:
-                    thumb_url = self._probe_ytimg_thumbnail(video_id) or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+        stem = cache_key(video_id or url_digest(self.url))
+        target = self.cache_dir / f"{stem}{_extension_for(thumb_url, None)}"
 
-            if self._cancelled():
-                self._finish("")
-                return
+        cached = self._existing_cache_entry(stem)
+        if cached is not None:
+            return str(cached)
 
-            if not thumb_url:
-                self._log("No thumbnail URL discovered")
-                self._finish("")
-                return
+        saved = self._download_via_requests(thumb_url, target)
+        if saved is None and not self._cancelled():
+            saved = self._download_via_ytdlp(target)
 
-            base_name = video_id or hashlib.sha1(self.url.encode("utf-8")).hexdigest()
-            safe = _safe_name(base_name)
-            ext_guess = ".jpg"
-            m = re.search(r"\.([a-zA-Z0-9]{2,6})(?:[?#]|$)", thumb_url)
-            if m:
-                ext_guess = "." + m.group(1).lower()
-            target = self.cache_dir / f"{safe}{ext_guess}"
-            self._target_path = target
-
-            # If the file already exists and is non-empty, reuse it
-            # (converting avif -> jpg if needed).
-            try:
-                if target.exists() and target.stat().st_size > 0:
-                    if target.suffix.lower() == ".avif":
-                        converted = self._convert_avif_to_jpg(target)
-                        if converted:
-                            self._finish(str(converted))
-                            return
-                    else:
-                        self._finish(str(target))
-                        return
-            except Exception:
-                pass
-
-            # Try requests first (fast, pooled connection).
-            saved = None
-            if self._cancelled():
-                self._finish("")
-                return
-            try:
-                saved = self._download_with_requests(thumb_url, target)
-            except Exception as e:
-                self._log(f"requests download exception: {e}")
-
-            if saved:
-                self._finish(str(saved))
-                return
-
-            if self._cancelled():
-                self._finish("")
-                return
-
-            # Fallback to yt-dlp's own thumbnail writer.
-            try:
-                saved = self._download_with_ytdlp(thumb_url, target)
-            except Exception as e:
-                self._log(f"yt-dlp fallback exception: {e}")
-
-            if saved:
-                self._finish(str(saved))
-                return
-
+        if saved is None:
             self._log("Failed to download thumbnail")
-            self._finish("")
-        except Exception as e:
-            self._log(f"Unexpected error: {e}")
-            self._finish("")
+            return None
+        return str(saved)
+
+    def _existing_cache_entry(self, stem: str) -> Optional[Path]:
+        for ext in _IMAGE_EXTENSIONS:
+            candidate = self.cache_dir / f"{stem}{ext}"
+            try:
+                if not (candidate.is_file() and candidate.stat().st_size > 0):
+                    continue
+            except OSError:
+                continue
+            if ext == ".avif":
+                converted = self._convert_avif(candidate)
+                return converted
+            return candidate
+        return None
 
     # ------------------------------------------------------------------
     # Cookie refresh (throttled process-wide)
     # ------------------------------------------------------------------
+
     def _maybe_refresh_cookies(self) -> None:
-        global _last_cookie_refresh_ts
+        s = self.settings
+        if not (
+            getattr(s, "COOKIES_AUTO_REFRESH", False)
+            and getattr(s, "COOKIES_FROM_BROWSER", "")
+        ):
+            return
+
+        # Exporting a browser cookie jar takes seconds and hits the OS keychain.
+        # Doing it per thumbnail made a 20-item queue unusable.
+        global _last_cookie_refresh
         now = time.monotonic()
-        with _cookie_refresh_lock:
-            if now - _last_cookie_refresh_ts < _COOKIE_REFRESH_MIN_INTERVAL:
+        with _cookie_lock:
+            if now - _last_cookie_refresh < _COOKIE_REFRESH_INTERVAL:
                 return
-            _last_cookie_refresh_ts = now
+            _last_cookie_refresh = now
 
         try:
-            ok, msg = CookieManager.refresh_before_download(self.settings)
-        except Exception as e:
-            self._log(f"Cookies refresh exception: {e}")
+            ok, message = cookie_manager.refresh_before_download(s)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"Cookie refresh error: {exc}")
             return
-
-        if not ok:
-            self._log(f"Cookies refresh failed: {msg}")
-            return
-
-        try:
-            exported_path = getattr(self.settings, "COOKIES_PATH", None)
-            if not exported_path or str(exported_path) == "":
-                exported_path = Path(getattr(self.settings, "BASE_DIR", Path("."))) / "cookies.txt"
-            self.settings.COOKIES_PATH = Path(exported_path)
-            self.settings.COOKIES_LAST_IMPORTED = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-            if hasattr(self.settings, "save_config"):
-                try:
-                    self.settings.save_config()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        if ok:
+            cookie_manager.record_refresh(s)
+        else:
+            self._log(f"Cookie refresh failed: {message}")
 
     # ------------------------------------------------------------------
-    # Fast-path thumbnail resolution (no subprocess)
+    # Fast path
     # ------------------------------------------------------------------
-    def _probe_ytimg_thumbnail(self, video_id: Optional[str]) -> Optional[str]:
+
+    def _request_kwargs(self) -> Dict[str, object]:
+        verify, _args, _env = ssl_utils.resolve_ssl_config(self.settings)
+        ssl_utils.maybe_suppress_insecure_warning(verify)
+        kwargs: Dict[str, object] = {"verify": verify}
+        proxy = (getattr(self.settings, "PROXY_URL", "") or "").strip()
+        if proxy:
+            kwargs["proxies"] = {"http": proxy, "https": proxy}
+        return kwargs
+
+    def _probe_ytimg(self, video_id: Optional[str]) -> Optional[str]:
         if not video_id:
             return None
-        try:
-            verify, _args, _env = ssl_utils.resolve_ssl_config(self.settings)
-        except Exception:
-            verify = True
-
-        proxies = None
-        proxy = getattr(self.settings, "PROXY_URL", "") or ""
-        if proxy:
-            proxies = {"http": proxy, "https": proxy}
-
-        probe_timeout = min(self.timeout, 6) or 6
-        # (connect_timeout, read_timeout): bound the connect phase tightly
-        # so an unreachable host (network down, DNS failing, etc.) fails
-        # fast instead of eating the full read timeout on every candidate.
-        probe_timeout_tuple = (3, probe_timeout)
+        kwargs = self._request_kwargs()
+        # (connect, read): a tight connect bound means an unreachable network
+        # fails fast instead of burning the full read timeout per candidate.
+        timeout = (3, min(self.timeout, 6) or 6)
 
         for name in _YTIMG_CANDIDATES:
             if self._cancelled():
                 return None
             candidate = f"https://i.ytimg.com/vi/{video_id}/{name}.jpg"
             try:
-                r = _SESSION.head(candidate, timeout=probe_timeout_tuple, allow_redirects=True, proxies=proxies, verify=verify)
-            except Exception:
+                response = _SESSION.head(
+                    candidate, timeout=timeout, allow_redirects=True, **kwargs
+                )
+            except RequestException:
                 continue
-            if r.status_code != 200:
+            if response.status_code != 200:
                 continue
-            length = r.headers.get("Content-Length")
+            length = response.headers.get("Content-Length")
             if length:
                 try:
-                    if int(length) in _PLACEHOLDER_BYTE_SIZES:
+                    if int(length) in _PLACEHOLDER_SIZES:
                         continue
                 except ValueError:
                     pass
             return candidate
         return None
 
-    def _canonical_watch_url(self, url: str) -> str:
-        try:
-            if not url:
-                return url or ""
-            parsed = urlparse(url)
-            qs = parse_qs(parsed.query)
-            if "v" in qs and qs["v"]:
-                vid = qs["v"][0]
-                return f"https://www.youtube.com/watch?v={vid}"
-        except Exception:
-            pass
-        return url or ""
-
-    def _extract_video_id_from_url(self, url: str) -> Optional[str]:
-        try:
-            if not url:
-                return None
-            parsed = urlparse(url)
-            qs = parse_qs(parsed.query)
-            if "v" in qs and qs["v"]:
-                return qs["v"][0]
-            m = re.search(r"(?:youtu\.be/|youtube\.com/(?:embed/|v/|shorts/))([A-Za-z0-9_-]{6,})", url)
-            if m:
-                return m.group(1)
-            m2 = re.search(r"[?&]v=([A-Za-z0-9_-]{6,})", url)
-            if m2:
-                return m2.group(1)
-        except Exception:
-            pass
-        return None
-
     # ------------------------------------------------------------------
-    # Slow path: yt-dlp subprocess helpers
+    # Slow path
     # ------------------------------------------------------------------
-    def _ytdlp_common_args(self) -> List[str]:
+
+    def _ytdlp_auth_args(self) -> List[str]:
+        s = self.settings
         args: List[str] = []
-        cookies_from = getattr(self.settings, "COOKIES_FROM_BROWSER", "") or ""
-        if cookies_from:
-            profile = getattr(self.settings, "COOKIES_PROFILE", None)
-            args.extend(["--cookies-from-browser", f"{cookies_from}:{profile}" if profile else cookies_from])
-        else:
-            cookies_path = getattr(self.settings, "COOKIES_PATH", None)
-            if cookies_path and Path(cookies_path).exists():
-                args.extend(["--cookies", str(cookies_path)])
-
-        proxy = getattr(self.settings, "PROXY_URL", "") or ""
+        browser = getattr(s, "COOKIES_FROM_BROWSER", "") or ""
+        if browser:
+            args += ["--cookies-from-browser", browser]
+        elif is_usable_file_safe(s.COOKIES_PATH):
+            args += ["--cookies", str(s.COOKIES_PATH)]
+        proxy = (getattr(s, "PROXY_URL", "") or "").strip()
         if proxy:
-            args.extend(["--proxy", proxy])
-
-        try:
-            ffmpeg_dir = str(self.settings.FFMPEG_PATH.parent)
-            args.extend(["--ffmpeg-location", ffmpeg_dir])
-        except Exception:
-            pass
+            args += ["--proxy", proxy]
+        ffmpeg = Path(getattr(s, "FFMPEG_PATH", ""))
+        if ffmpeg.is_file():
+            args += ["--ffmpeg-location", str(ffmpeg.parent)]
         return args
 
-    def _build_subprocess_env(self, ssl_env: dict) -> dict:
-        env = os.environ.copy()
-        try:
-            extra_paths = [str(self.settings.INTERNAL_DIR), str(self.settings.BASE_DIR)]
-            ph = getattr(self.settings, "PHANTOMJS_PATH", None)
-            if ph and getattr(ph, "exists", None) and ph.exists():
-                extra_paths.append(str(ph.parent))
-            cur_path = env.get("PATH", "")
-            for p in reversed(extra_paths):
-                if p and p not in cur_path:
-                    cur_path = f"{p}{os.pathsep}{cur_path}"
-            env["PATH"] = cur_path
-            if os.name == "nt" and not env.get("PATHEXT"):
-                env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
-        except Exception:
-            pass
-        try:
-            env.update(ssl_env)
-        except Exception:
-            pass
-        return env
-
-    @staticmethod
-    def _win_startupinfo():
-        if platform.system().lower().startswith("win"):
-            try:
-                si = subprocess.STARTUPINFO()
-                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                return si
-            except Exception:
-                return None
-        return None
-
-    def _extract_thumbnail_url(self) -> Tuple[Optional[str], Optional[str], bool]:
-        try:
-            url_for_metadata = self._canonical_watch_url(self.url)
-
-            ytdlp_path = getattr(self.settings, "YT_DLP_PATH", None)
-            if not ytdlp_path:
-                return None, self._extract_video_id_from_url(self.url), False
-            try:
-                ytdlp_path = Path(ytdlp_path)
-                if not ytdlp_path.exists():
-                    return None, self._extract_video_id_from_url(self.url), False
-            except Exception:
-                return None, self._extract_video_id_from_url(self.url), False
-
-            cmd: List[str] = [
-                str(ytdlp_path),
-                "--no-warnings",
-                "--skip-download",
-                "--print-json",
-                "--ignore-errors",
-                "--flat-playlist",
-            ]
-
-            _verify, ytdlp_ssl_args, ssl_env = ssl_utils.resolve_ssl_config(self.settings)
-            cmd.extend(ytdlp_ssl_args)
-            cmd.append(url_for_metadata)
-            cmd.extend(self._ytdlp_common_args())
-
-            env = self._build_subprocess_env(ssl_env)
-            startupinfo = self._win_startupinfo()
-
-            try:
-                popen = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    startupinfo=startupinfo,
-                    env=env,
-                )
-            except FileNotFoundError:
-                return None, self._extract_video_id_from_url(self.url), False
-            except Exception as e:
-                self._log(f"yt-dlp metadata extraction error: {e}")
-                return None, self._extract_video_id_from_url(self.url), False
-
-            self._register_proc(popen)
-            try:
-                stdout_b, stderr_b = popen.communicate(timeout=30)
-            except subprocess.TimeoutExpired:
-                popen.kill()
-                try:
-                    popen.communicate(timeout=5)
-                except Exception:
-                    pass
-                self._log("yt-dlp metadata extraction timed out")
-                return None, None, False
-            finally:
-                with self._proc_lock:
-                    self._current_proc = None
-
-            if self._cancelled():
-                return None, self._extract_video_id_from_url(self.url), False
-
-            proc_returncode = popen.returncode
-            stdout = (stdout_b or b"").decode("utf-8", errors="replace")
-            stderr = (stderr_b or b"").decode("utf-8", errors="replace")
-
-            if proc_returncode != 0 and not stdout:
-                self._log(f"yt-dlp failed to extract metadata: {stderr.strip()}")
-                return None, self._extract_video_id_from_url(self.url), False
-
-            output = stdout.strip()
-            if not output:
-                return None, self._extract_video_id_from_url(self.url), False
-
-            thumbnail: Optional[str] = None
-            video_id: Optional[str] = None
-            is_playlist = False
-
-            def pick_best_from_thumbnails(thumbs: List[Any]) -> Optional[str]:
-                if not thumbs:
-                    return None
-                try:
-                    best = max(
-                        (t for t in thumbs if isinstance(t, dict)),
-                        key=lambda t: (t.get("preference", 0), t.get("width", 0), t.get("height", 0)),
-                    )
-                    return best.get("url") or None
-                except Exception:
-                    for t in reversed(thumbs):
-                        if isinstance(t, dict) and t.get("url"):
-                            return t.get("url")
-                    return None
-
-            for line in (l for l in output.splitlines() if l.strip()):
-                try:
-                    info = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                if "entries" in info or "playlist_index" in info or "playlist_title" in info:
-                    is_playlist = True
-
-                if not thumbnail and info.get("thumbnail"):
-                    thumbnail = info.get("thumbnail")
-
-                if not thumbnail and isinstance(info.get("thumbnails"), list):
-                    candidate = pick_best_from_thumbnails(info.get("thumbnails"))
-                    if candidate:
-                        thumbnail = candidate
-
-                if not video_id and info.get("id"):
-                    video_id = info.get("id")
-
-                if thumbnail and video_id:
-                    break
-
-            if not video_id:
-                video_id = self._extract_video_id_from_url(self.url)
-
-            return thumbnail, video_id, is_playlist
-        except subprocess.TimeoutExpired:
-            self._log("yt-dlp metadata extraction timed out")
-            return None, None, False
-        except Exception as e:
-            self._log(f"yt-dlp metadata extraction error: {e}")
-            return None, self._extract_video_id_from_url(self.url), False
-
-    def _convert_avif_to_jpg(self, avif_path: Path) -> Optional[Path]:
-        try:
-            from PIL import Image  # type: ignore
-
-            with Image.open(avif_path) as im:
-                rgb = im.convert("RGB")
-                jpg_path = avif_path.with_suffix(".jpg")
-                rgb.save(jpg_path, format="JPEG", quality=95)
-            try:
-                avif_path.unlink()
-            except Exception:
-                pass
-            return jpg_path
-        except Exception:
-            pass
-
-        # Fallback: use ffmpeg to do the conversion.
-        try:
-            jpg_path = avif_path.with_suffix(".jpg")
-            ffmpeg_cmd = ["ffmpeg", "-y", "-i", str(avif_path), str(jpg_path)]
-            try:
-                ffmpeg_path = getattr(self.settings, "FFMPEG_PATH", None)
-                if ffmpeg_path:
-                    ffmpeg_path = Path(ffmpeg_path)
-                    if ffmpeg_path.exists():
-                        ffmpeg_cmd[0] = str(ffmpeg_path)
-            except Exception:
-                pass
-            subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
-            try:
-                avif_path.unlink()
-            except Exception:
-                pass
-            return jpg_path
-        except Exception:
+    def _run_ytdlp(self, extra: Sequence[str], timeout: int) -> Optional[str]:
+        binary = Path(getattr(self.settings, "YT_DLP_PATH", ""))
+        if not binary.is_file():
             return None
 
-    def _derive_referer(self, url: str) -> str:
-        try:
-            parsed = urlparse(url)
-            if parsed.scheme and parsed.netloc:
-                return f"{parsed.scheme}://{parsed.netloc}/"
-        except Exception:
-            pass
-        return "https://www.youtube.com/"
+        _verify, ssl_args, _env = ssl_utils.resolve_ssl_config(self.settings)
+        cmd = [
+            str(binary),
+            "--no-warnings",
+            "--skip-download",
+            "--ignore-errors",
+            *ssl_args,
+            *self._ytdlp_auth_args(),
+            *extra,
+            # URL last: flags placed after it are parsed as extra download
+            # targets, which is how the previous revision silently fetched
+            # metadata for the wrong thing.
+            canonical_watch_url(self.url),
+        ]
 
-    @staticmethod
-    def _atomic_move(tmp_path: Path, final: Path) -> None:
-        """Move tmp_path to final, falling back to copy+delete if a plain
-        rename isn't possible (e.g. across filesystems)."""
         try:
-            tmp_path.replace(final)
-            return
-        except Exception:
-            pass
-        try:
-            tmp_path.rename(final)
-            return
-        except Exception:
-            pass
-        with open(tmp_path, "rb") as src, open(final, "wb") as dst:
-            dst.write(src.read())
-        try:
-            tmp_path.unlink()
-        except Exception:
-            pass
+            process = proc.spawn(cmd, env=proc.tool_env(self.settings), merge_stderr=False)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self._log(f"Could not run yt-dlp: {exc}")
+            return None
 
-    def _download_with_requests(self, thumb_url: str, target: Path) -> Optional[Path]:
+        self._register_proc(process)
+        try:
+            stdout_raw, stderr_raw = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.terminate_tree(process)
+            self._log("yt-dlp timed out")
+            return None
+        finally:
+            self._clear_proc()
+
+        if self._cancelled():
+            return None
+
+        stdout = (stdout_raw or b"").decode("utf-8", errors="replace")
+        if process.returncode != 0 and not stdout.strip():
+            stderr = (stderr_raw or b"").decode("utf-8", errors="replace")
+            self._log(f"yt-dlp exited {process.returncode}: {stderr.strip()[:200]}")
+            return None
+        return stdout
+
+    def _extract_via_ytdlp(self) -> Tuple[Optional[str], Optional[str]]:
+        stdout = self._run_ytdlp(["--print-json", "--flat-playlist"], timeout=30)
+        if not stdout:
+            return None, None
+        try:
+            metadata = __import__(
+                "ytget_gui.workers.fetch_core", fromlist=["parse_metadata"]
+            ).parse_metadata(stdout)
+        except Exception:  # noqa: BLE001 - parse failures are non-fatal here
+            return None, None
+        return metadata.thumb_url or None, metadata.video_id or None
+
+    def _download_via_ytdlp(self, target: Path) -> Optional[Path]:
+        stem = target.stem
+        stdout = self._run_ytdlp(
+            [
+                "--write-thumbnail",
+                "-o", str(self.cache_dir / f"{stem}.%(ext)s"),
+            ],
+            timeout=60,
+        )
+        if stdout is None:
+            return None
+        return self._existing_cache_entry(stem)
+
+    # ------------------------------------------------------------------
+    # Download / conversion
+    # ------------------------------------------------------------------
+
+    def _download_via_requests(self, thumb_url: str, target: Path) -> Optional[Path]:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36",
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-            "Referer": self._derive_referer(thumb_url),
+            "Referer": self._referer(thumb_url),
         }
-
-        proxies = None
-        proxy = getattr(self.settings, "PROXY_URL", "") or ""
-        if proxy:
-            proxies = {"http": proxy, "https": proxy}
-
-        requests_verify, _ytdlp_args, _env = ssl_utils.resolve_ssl_config(self.settings)
-        ssl_utils.maybe_suppress_insecure_warning(requests_verify)
-
         try:
             with _SESSION.get(
                 thumb_url,
                 headers=headers,
                 stream=True,
                 timeout=(5, self.timeout),
-                proxies=proxies,
                 allow_redirects=True,
-                verify=requests_verify,
-            ) as r:
-                try:
-                    r.raise_for_status()
-                except RequestException as e:
-                    self._log(f"HTTP error {getattr(r, 'status_code', '')}: {e}")
-                    return None
-
-                content_type = r.headers.get("Content-Type", "")
-                ext = _ext_from_url_or_ct(thumb_url, content_type)
-                final = target.with_suffix(ext)
-
-                try:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=str(target.parent)) as tf:
-                        for chunk in r.iter_content(chunk_size=65536):
-                            if self._cancelled():
-                                tf.close()
-                                try:
-                                    Path(tf.name).unlink()
-                                except Exception:
-                                    pass
-                                return None
-                            if chunk:
-                                tf.write(chunk)
-                        tmp_path = Path(tf.name)
-                except Exception as e:
-                    self._log(f"Failed to write temp thumbnail file: {e}")
-                    return None
-
-                try:
-                    self._atomic_move(tmp_path, final)
-                except Exception as e:
-                    try:
-                        tmp_path.unlink()
-                    except Exception:
-                        pass
-                    self._log(f"Failed to move temp thumbnail file: {e}")
-                    return None
-
-                if not (final.exists() and final.stat().st_size > 0):
-                    self._log(f"Downloaded thumbnail file missing or empty: {final}")
-                    return None
-
-                if final.suffix.lower() == ".avif":
-                    converted = self._convert_avif_to_jpg(final)
-                    if converted and converted.exists() and converted.stat().st_size > 0:
-                        return converted
-                    self._log("Failed to convert AVIF thumbnail to JPG")
-                    return None
-
-                return final
-        except RequestException as e:
-            self._log(f"requests exception: {e}")
-            return None
-        except Exception as e:
-            self._log(f"unexpected error during requests download: {e}")
-            return None
-
-    def _download_with_ytdlp(self, thumb_url: str, target: Path) -> Optional[Path]:
-        try:
-            ytdlp_path = getattr(self.settings, "YT_DLP_PATH", None)
-            if not ytdlp_path:
-                return None
-            try:
-                ytdlp_path = Path(ytdlp_path)
-                if not ytdlp_path.exists():
-                    return None
-            except Exception:
-                return None
-
-            out_dir = str(target.parent)
-            base = target.stem
-            out_template = str(Path(out_dir) / (base + ".%(ext)s"))
-
-            url_for_metadata = self._canonical_watch_url(self.url)
-
-            cmd: List[str] = [
-                str(ytdlp_path),
-                "--no-warnings",
-                "--skip-download",
-                "--write-thumbnail",
-                "-o",
-                out_template,
-            ]
-
-            _verify, ytdlp_ssl_args, ssl_env = ssl_utils.resolve_ssl_config(self.settings)
-            cmd.extend(ytdlp_ssl_args)
-            cmd.append(url_for_metadata)
-            cmd.extend(self._ytdlp_common_args())
-
-            env = self._build_subprocess_env(ssl_env)
-            startupinfo = self._win_startupinfo()
-
-            try:
-                popen = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    startupinfo=startupinfo,
-                    env=env,
+                **self._request_kwargs(),
+            ) as response:
+                response.raise_for_status()
+                final = target.with_suffix(
+                    _extension_for(thumb_url, response.headers.get("Content-Type"))
                 )
-            except FileNotFoundError:
-                return None
-            except Exception as e:
-                self._log(f"yt-dlp thumbnail write error: {e}")
-                return None
+                written = self._stream_to_file(response, final)
+        except RequestException as exc:
+            self._log(f"HTTP error: {exc}")
+            return None
 
-            self._register_proc(popen)
-            try:
-                _stdout_b, stderr_b = popen.communicate(timeout=60)
-            except subprocess.TimeoutExpired:
-                popen.kill()
+        if written is None:
+            return None
+        if written.suffix.lower() == ".avif":
+            return self._convert_avif(written)
+        return written
+
+    def _stream_to_file(self, response: requests.Response, final: Path) -> Optional[Path]:
+        tmp_path: Optional[Path] = None
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                delete=False, dir=str(self.cache_dir), suffix=final.suffix
+            ) as handle:
+                tmp_path = Path(handle.name)
+                for chunk in response.iter_content(chunk_size=65536):
+                    if self._cancelled():
+                        return None
+                    if chunk:
+                        handle.write(chunk)
+
+            if tmp_path.stat().st_size == 0:
+                return None
+            # Atomic swap: a half-written cache file would be re-served forever
+            # as a valid entry on the next launch.
+            tmp_path.replace(final)
+            tmp_path = None
+            return final
+        except OSError as exc:
+            self._log(f"Could not write thumbnail: {exc}")
+            return None
+        finally:
+            if tmp_path is not None and tmp_path.exists():
                 try:
-                    popen.communicate(timeout=5)
-                except Exception:
+                    tmp_path.unlink()
+                except OSError:
                     pass
-                self._log("yt-dlp thumbnail write timed out")
-                return None
-            finally:
-                with self._proc_lock:
-                    self._current_proc = None
 
-            if self._cancelled():
-                return None
+    def _convert_avif(self, path: Path) -> Optional[Path]:
+        """Qt has no built-in AVIF reader, so convert or the card shows blank."""
+        jpg = path.with_suffix(".jpg")
+        try:
+            from PIL import Image
 
-            if popen.returncode != 0:
-                stderr = (stderr_b or b"").decode("utf-8", errors="replace")
-                self._log(f"yt-dlp returned code {popen.returncode}: {stderr.strip()}")
+            with Image.open(path) as image:
+                image.convert("RGB").save(jpg, format="JPEG", quality=95)
+            path.unlink(missing_ok=True)
+            return jpg
+        except Exception as exc:  # noqa: BLE001 - Pillow may lack AVIF support
+            log.debug("Pillow AVIF conversion failed: %s", exc)
 
-            candidates = list(Path(out_dir).glob(base + ".*"))
-            ordered: List[Path] = []
-            for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"):
-                ordered.extend(c for c in candidates if c.suffix.lower() == ext)
-            if not ordered:
-                ordered = candidates
-
-            for c in ordered:
-                final = target.with_suffix(c.suffix.lower())
-                try:
-                    c.replace(final)
-                except Exception:
-                    final = c  # couldn't rename; use the file where it landed
-
-                if final.suffix.lower() == ".avif":
-                    converted = self._convert_avif_to_jpg(final)
-                    if converted and converted.exists() and converted.stat().st_size > 0:
-                        return converted
-                    return None
-                return final
-
+        ffmpeg = Path(getattr(self.settings, "FFMPEG_PATH", "ffmpeg"))
+        binary = str(ffmpeg) if ffmpeg.is_file() else "ffmpeg"
+        try:
+            # proc.run keeps the console window hidden; the previous revision
+            # called subprocess.run directly here and flashed a window per
+            # thumbnail on Windows.
+            result = proc.run([binary, "-y", "-i", str(path), str(jpg)], timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self._log(f"AVIF conversion failed: {exc}")
             return None
-        except Exception:
+        if result.returncode != 0 or not jpg.is_file():
             return None
+        path.unlink(missing_ok=True)
+        return jpg
+
+    @staticmethod
+    def _referer(url: str) -> str:
+        try:
+            parsed = urlparse(url)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}/"
+        except ValueError:
+            pass
+        return "https://www.youtube.com/"
 
 
-# -------------------------
-# ThumbManager: runs thumbnail fetches on a small bounded thread pool
-# -------------------------
+def is_usable_file_safe(path) -> bool:
+    from ytget_gui.utils.paths import is_usable_file
+
+    return is_usable_file(path)
+
+
 class ThumbManager(QObject):
-    """
-    ThumbManager fetches thumbnails on a bounded thread pool so the GUI
-    thread never blocks, while `max_workers` limits how many fetches
-    (subprocess calls / downloads) run at once.
-
-    Usage:
-      manager = ThumbManager(cache_dir, settings, max_workers=1)
-      manager.started.connect(...)
-      manager.finished.connect(...)
-      manager.error.connect(...)
-      manager.enqueue(url)
-      manager.stop()  # on shutdown
-    """
+    """Runs thumbnail fetches on a bounded pool so the GUI never blocks."""
 
     started = Signal(str)
     finished = Signal(str, str)
     error = Signal(str, str)
 
-    def __init__(self, cache_dir: Path, settings: AppSettings, max_workers: int = 1):
-        super().__init__()
+    def __init__(
+        self,
+        cache_dir: Path,
+        settings: AppSettings,
+        max_workers: int = 2,
+        parent: Optional[QObject] = None,
+    ) -> None:
+        super().__init__(parent)
         self.cache_dir = Path(cache_dir)
         self.settings = settings
-        self.max_workers = max(1, int(max_workers))
-        self._executor = ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix="ThumbFetch")
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        self._executor = ThreadPoolExecutor(
+            max_workers=max(1, int(max_workers)), thread_name_prefix="ThumbFetch"
+        )
         self._lock = threading.Lock()
-        self._pending: set = set()
+        self._pending: Set[str] = set()
+        self._active: Dict[str, ThumbFetcher] = {}
+        self._futures: Dict[str, Future] = {}
         self._stopped = False
-        # Tracks in-flight fetches so stop() can ask each one to cancel
-        # (kills its yt-dlp subprocess, if any) instead of just blocking
-        # until whatever happened to be running finishes on its own -
-        # which, with the network down, could mean waiting out a full
-        # 30-60s subprocess timeout (or several, sequentially) with the
-        # GUI thread frozen the whole time.
-        self._active: dict = {}
-        self._futures: dict = {}
 
-    def enqueue(self, url: str, force: bool = False) -> None:
-        """Queue a thumbnail fetch.
-
-        URLs already queued or in-flight are skipped by default so the same
-        thumbnail is never fetched twice concurrently (common when a GUI
-        list re-renders). Pass force=True to fetch anyway, e.g. to retry
-        after a failure.
-        """
+    def enqueue(self, url: str, *, force: bool = False) -> None:
+        """Queue a fetch, skipping URLs already queued or in flight."""
         if not url or self._stopped:
             return
         with self._lock:
@@ -886,55 +567,55 @@ class ThumbManager(QObject):
             self._pending.add(url)
         try:
             future = self._executor.submit(self._run_one, url)
-            with self._lock:
-                self._futures[url] = future
         except RuntimeError:
-            # Executor already shut down; drop silently.
             with self._lock:
                 self._pending.discard(url)
+            return
+        with self._lock:
+            self._futures[url] = future
+
+    def cancel(self, url: str) -> None:
+        with self._lock:
+            fetcher = self._active.get(url)
+            future = self._futures.get(url)
+            self._pending.discard(url)
+        if future is not None:
+            future.cancel()
+        if fetcher is not None:
+            fetcher.request_cancel()
 
     def stop(self, wait: bool = True) -> None:
+        """Cancel everything in flight and return promptly.
+
+        The previous implementation called shutdown(wait=True), which blocked
+        until whatever was running finished on its own -- with the network down
+        that meant waiting out full subprocess timeouts back to back, freezing
+        the window on close for a minute or more.
+        """
         self._stopped = True
         with self._lock:
-            active_fetchers = list(self._active.values())
-            in_flight_futures = list(self._futures.values())
+            fetchers = list(self._active.values())
+            futures = list(self._futures.values())
             self._pending.clear()
 
-        # Ask every in-flight fetch to stop at its next checkpoint and kill
-        # its yt-dlp subprocess if one is currently running. requests-based
-        # calls (thumbnail HEAD probes / downloads) can't be force-aborted
-        # mid-flight from here, but they're all individually timeout-bounded
-        # (see ThumbFetcher), so this - plus the bounded wait below - is
-        # enough to guarantee stop() itself never blocks the caller (e.g.
-        # MainWindow.closeEvent, running on the GUI thread) for long. It
-        # previously called executor.shutdown(wait=True, cancel_futures=False),
-        # which just sat there until whatever happened to be running
-        # finished on its own - with the network unreachable, that could be
-        # a full subprocess timeout (or several, one after another),
-        # freezing the window for a minute or more.
-        for fetcher in active_fetchers:
+        for fetcher in fetchers:
             try:
                 fetcher.request_cancel()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
 
-        if wait and in_flight_futures:
-            # Best-effort grace period only - requests-based calls (HEAD
-            # probes, thumbnail GET) can't be force-aborted mid-socket-call
-            # from here, so this can't guarantee they've stopped, only give
-            # them a brief window to notice _cancelled() and the subprocess
-            # kill above before we move on regardless. Keep this short:
-            # callers (e.g. MainWindow.closeEvent) may also be bounding
-            # other shutdown work with its own budget, and these add up.
+        if wait and futures:
+            # Grace period only. In-flight requests calls cannot be force-aborted,
+            # so this gives them a moment to observe cancellation; callers bound
+            # their own shutdown budget and these must not stack.
             try:
-                futures_wait(in_flight_futures, timeout=0.3)
-            except Exception:
+                futures_wait(futures, timeout=0.3)
+            except Exception:  # noqa: BLE001
                 pass
 
         try:
             self._executor.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            # cancel_futures was added in Python 3.9; degrade gracefully.
+        except TypeError:  # pragma: no cover - Python < 3.9
             self._executor.shutdown(wait=False)
 
     def _run_one(self, url: str) -> None:
@@ -945,18 +626,10 @@ class ThumbManager(QObject):
             fetcher.started.connect(self.started.emit)
             fetcher.finished.connect(self.finished.emit)
             fetcher.error.connect(self.error.emit)
-            try:
-                fetcher.run()
-            except Exception as e:
-                if getattr(self.settings, "LOG_THUMBNAILS", False):
-                    try:
-                        self.error.emit(url, f"Fetcher run exception: {e}")
-                    except Exception:
-                        pass
-                try:
-                    self.finished.emit(url, "")
-                except Exception:
-                    pass
+            fetcher.run()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Thumb worker failed for %s: %s", url, exc)
+            self.finished.emit(url, "")
         finally:
             with self._lock:
                 self._pending.discard(url)
