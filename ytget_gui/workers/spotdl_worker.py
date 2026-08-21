@@ -320,4 +320,11 @@ class SpotDLWorker(BaseDownloadWorker):
             )
 
         self.emit_progress(100)
+
+        # spotdl reports track titles, not paths, so the destination folder is
+        # the most specific thing that can be offered.
+        folder = Path(self.settings.DOWNLOADS_DIR)
+        if folder.is_dir():
+            self.emit_output(str(folder), 0)
+
         self.emit_finished(0)
