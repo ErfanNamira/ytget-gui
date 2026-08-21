@@ -164,6 +164,16 @@ class DownloadWorker(BaseDownloadWorker):
         self._is_audio = False
         self._outputs: List[str] = []
 
+        # Video-only + audio-only formats (e.g. "399+251") download as two
+        # separate yt-dlp streams that are merged afterwards. Each stream
+        # reports its own 0-100% independently, so relaying it verbatim made
+        # the bar climb to 100%, drop back down, and climb again for the
+        # second file. These fields let us fold both streams into one
+        # continuous 0-100% instead.
+        self._expected_streams = 1
+        self._stream_index = 0
+        self._stream_starts_seen = 0
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -199,6 +209,8 @@ class DownloadWorker(BaseDownloadWorker):
 
         self._recent_output = ""
         self._line_tail = ""
+        self._stream_index = 0
+        self._stream_starts_seen = 0
         self.reset_progress()
 
         try:
@@ -308,21 +320,52 @@ class DownloadWorker(BaseDownloadWorker):
             percent = float(match.group(1))
             speed = match.group(2).strip()
             eta = match.group(3).strip()
-            self.emit_progress(int(percent))
-            parts = [f"{percent:.0f}%"]
+            self._emit_weighted_progress(percent)
+            parts = [self._stream_label(), f"{percent:.0f}%"]
             if speed and speed not in ("Unknown", "N/A", "--"):
                 parts.append(speed)
             if eta and eta not in ("Unknown", "N/A", "--"):
                 parts.append(f"ETA {eta}")
-            self.emit_stage(" \u00b7 ".join(parts))
+            self.emit_stage(" \u00b7 ".join(p for p in parts if p))
             return True
 
         legacy = _LEGACY_PERCENT_RE.search(line)
         if legacy:
-            self.emit_progress(int(float(legacy.group(1))))
+            self._emit_weighted_progress(float(legacy.group(1)))
             return partial
 
         return False
+
+    def _emit_weighted_progress(self, stream_percent: float) -> None:
+        """Fold a single stream's 0-100% into the item's overall 0-100%.
+
+        With two streams (video + audio), stream_index 0 covers the first
+        half of the bar and stream_index 1 the second half, so the bar rises
+        continuously instead of completing once per stream. When only one
+        stream is expected this is just a pass-through.
+        """
+        n = max(1, self._expected_streams)
+        stream_percent = max(0.0, min(100.0, stream_percent))
+        overall = (self._stream_index + stream_percent / 100.0) / n * 100.0
+        self.emit_progress(int(overall))
+
+    def _on_stream_start(self) -> None:
+        """Called when a new "[download] Destination:" marker appears."""
+        if self._stream_starts_seen > 0:
+            self._stream_index = min(self._stream_starts_seen, self._expected_streams - 1)
+        self._stream_starts_seen += 1
+
+    def _stream_label(self) -> str:
+        """Best-effort "Video"/"Audio" label for the stage line.
+
+        yt-dlp lists the video-only format before the audio-only one in a
+        selector like "399+251", and downloads them in that order, so the
+        first stream is (almost always) video and the second is audio. This
+        is a labelling heuristic only -- it never affects the percent math.
+        """
+        if self._expected_streams != 2 or self._is_audio:
+            return ""
+        return "Video" if self._stream_index == 0 else "Audio"
 
     def _log_line(self, line: str) -> None:
         stripped = line.strip()
@@ -340,10 +383,16 @@ class DownloadWorker(BaseDownloadWorker):
 
     def _capture_output(self, line: str) -> None:
         """Record the produced file, so the queue card can open it later."""
-        for pattern in _OUTPUT_PATTERNS:
+        for index, pattern in enumerate(_OUTPUT_PATTERNS):
             match = pattern.match(line)
             if match is None:
                 continue
+            # The first two patterns ("Destination:" and "has already been
+            # downloaded") each mark the start of one yt-dlp stream; the rest
+            # (Merger, ExtractAudio, ...) are postprocessing steps that don't
+            # represent a new download to weight progress against.
+            if index < 2:
+                self._on_stream_start()
             candidate = (match.group("path") or "").strip().strip('"')
             if not candidate:
                 return
@@ -481,12 +530,26 @@ class DownloadWorker(BaseDownloadWorker):
     # Command construction
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _count_expected_streams(format_code: str) -> int:
+        """How many separate yt-dlp downloads this selector will produce.
+
+        "399+251" merges a video-only and an audio-only stream, so that's 2.
+        A selector with fallbacks ("bv+ba/best") only ever resolves to one
+        alternative at runtime, so only the first branch is counted.
+        """
+        if not format_code:
+            return 1
+        first_alt = format_code.split("/", 1)[0]
+        return max(1, first_alt.count("+") + 1)
+
     def _build_command(self) -> List[str]:
         s = self.settings
         url = self.url
 
         format_code = s.resolve_format_code(self.item.get("format_code", ""))
         self._is_audio = formats.is_audio_code(format_code)
+        self._expected_streams = self._count_expected_streams(format_code)
         is_playlist = is_playlist_url(url) or format_code in formats.PLAYLIST_FORMAT_CODES
 
         # Assigned before any branch. Previously this was only bound inside the
