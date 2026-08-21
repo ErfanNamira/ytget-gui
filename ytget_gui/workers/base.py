@@ -37,6 +37,7 @@ class BaseDownloadWorker(QObject):
     stage = Signal(str)
     finished = Signal(int)
     error = Signal(str)
+    output = Signal(str, int)   # final path, number of files produced
 
     def __init__(
         self,
@@ -187,3 +188,7 @@ class BaseDownloadWorker(QObject):
         self._last_stage_text = text
         self._last_stage_at = now
         self.stage.emit(text)
+
+    def emit_output(self, path: str, count: int = 1) -> None:
+        if path:
+            self.output.emit(path, max(1, int(count)))
