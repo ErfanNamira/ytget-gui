@@ -1,1038 +1,829 @@
 # File: ytget_gui/dialogs/update_manager.py
+"""Update manager for the bundled tools.
 
-"""
-Cross-platform Update Manager for YTGet.
-
-Handles checking and updating:
-  • YTGet                — GitHub Releases (ErfanNamira/ytget-gui)
-  • yt-dlp               — GitHub Releases (yt-dlp/yt-dlp)
-  • SpotDL               — GitHub Releases (spotDL/spotify-downloader) on Windows,
-                            matching the standalone spotdl.exe the app actually
-                            uses (see workers/spotdl_worker.py); falls back to
-                            `pip install --upgrade spotdl` elsewhere
-  • Deno                 — GitHub Releases (denoland/deno)
-
-Architecture
-────────────
-  UpdateChecker  (QThread)  — fetches latest versions via GitHub API / pip index
-  UpdateInstaller(QThread)  — downloads & installs a single tool
-  UpdateManager  (QDialog)  — the UI; owns one checker and N installer threads
+Checks and installs:
+  YTGet   - opens the GitHub release page (no in-app self-update)
+  yt-dlp  - single binary from GitHub releases
+  spotdl  - standalone binary on Windows, pip elsewhere
+  deno    - zip archive from GitHub releases
 """
 
 from __future__ import annotations
 
-import json
+import logging
 import os
-import platform
 import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import webbrowser
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from PySide6.QtCore import (
-    Qt, QThread, QTimer, Signal, Slot, QSize,
-)
-from PySide6.QtGui import QColor, QFont, QIcon, QTextCursor
+from PySide6.QtCore import QThread, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout,
-    QLabel, QMessageBox, QProgressBar, QPushButton, QScrollArea,
-    QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
-# ── helpers imported from the app ──────────────────────────────────────────
-from ytget_gui.utils.paths import is_windows, executable_name
+from ytget_gui import _version
+from ytget_gui.dialogs import common as ui
 from ytget_gui.settings import AppSettings
+from ytget_gui.styles import Palette
+from ytget_gui.utils.paths import executable_name, is_frozen, is_windows, platform_label
+from ytget_gui.workers import proc, ssl_utils
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  CONSTANTS
-# ═══════════════════════════════════════════════════════════════════════════
+log = logging.getLogger(__name__)
 
-GITHUB_API          = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
-GITHUB_RELEASES_API = "https://api.github.com/repos/{owner}/{repo}/releases"
-PYPI_API            = "https://pypi.org/pypi/{package}/json"
+GITHUB_LATEST = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
+PYPI_JSON = "https://pypi.org/pypi/{package}/json"
 
-TOOLS: Dict[str, Dict[str, Any]] = {
-    "ytget": {
-        "label":   "YTGet GUI",
-        "owner":   "ErfanNamira",
-        "repo":    "ytget-gui",
-        "kind":    "ytget",
-        "icon":    "🚀",
-    },
-    "yt-dlp": {
-        "label":   "yt-dlp",
-        "owner":   "yt-dlp",
-        "repo":    "yt-dlp",
-        "kind":    "github_binary",
-        "icon":    "📥",
-    },
-    "spotdl": {
-        "label":   "SpotDL",
-        "owner":   "spotDL",
-        "repo":    "spotify-downloader",
-        "package": "spotdl",
-        "kind":    "github_binary_or_pip",
-        "icon":    "🎵",
-    },
-    "deno": {
-        "label":   "Deno",
-        "owner":   "denoland",
-        "repo":    "deno",
-        "kind":    "github_binary",
-        "icon":    "🦕",
-    },
+REQUEST_TIMEOUT = 15
+DOWNLOAD_TIMEOUT = 120
+
+
+@dataclass(frozen=True)
+class Tool:
+    key: str
+    label: str
+    icon: str
+    owner: str = ""
+    repo: str = ""
+    package: str = ""
+
+
+TOOLS: Tuple[Tool, ...] = (
+    Tool("ytget", "YTGet", "\U0001f680", _version.GITHUB_OWNER, _version.GITHUB_REPO),
+    Tool("yt-dlp", "yt-dlp", "\U0001f4e5", "yt-dlp", "yt-dlp"),
+    Tool("spotdl", "spotDL", "\U0001f3b5", "spotDL", "spotify-downloader", "spotdl"),
+    Tool("deno", "Deno", "\U0001f995", "denoland", "deno"),
+)
+
+_BADGES: Dict[str, Tuple[str, str]] = {
+    "checking": (
+        f"background: rgba(255,255,255,25); color: {Palette.TEXT_MUTED};", "Checking\u2026"
+    ),
+    "current": (
+        f"background: rgba(34,211,165,30); color: {Palette.SUCCESS}; "
+        "border: 1px solid rgba(34,211,165,60);", "Up to date"
+    ),
+    "available": (
+        f"background: rgba(0,229,255,30); color: {Palette.ACCENT}; "
+        "border: 1px solid rgba(0,229,255,60);", "Update available"
+    ),
+    "installing": (
+        f"background: rgba(0,229,255,30); color: {Palette.ACCENT}; "
+        "border: 1px solid rgba(0,229,255,60);", "Installing\u2026"
+    ),
+    "done": (
+        f"background: rgba(34,211,165,30); color: {Palette.SUCCESS}; "
+        "border: 1px solid rgba(34,211,165,60);", "Updated"
+    ),
+    "error": (
+        f"background: rgba(248,113,113,30); color: {Palette.ERROR}; "
+        "border: 1px solid rgba(248,113,113,60);", "Error"
+    ),
+    "missing": (
+        f"background: rgba(251,191,36,28); color: {Palette.WARNING}; "
+        "border: 1px solid rgba(251,191,36,70);", "Not installed"
+    ),
 }
 
-REQUEST_TIMEOUT = 15   # seconds
 
-# Prevent a console/terminal window from flashing up when we spawn helper
-# processes (yt-dlp --version, deno --version, pip, etc.) on Windows.
-_POPEN_KWARGS: Dict[str, Any] = {}
-if sys.platform == "win32":
-    _POPEN_KWARGS["creationflags"] = subprocess.CREATE_NO_WINDOW
-    _startupinfo = subprocess.STARTUPINFO()
-    _startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    _startupinfo.wShowWindow = subprocess.SW_HIDE
-    _POPEN_KWARGS["startupinfo"] = _startupinfo
+# ----------------------------------------------------------------------
+# Version helpers
+# ----------------------------------------------------------------------
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  PLATFORM HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
 
-def _system() -> str:
-    return platform.system().lower()
+def parse_version(text: str) -> Tuple[Any, ...]:
+    cleaned = (text or "").strip().lstrip("vn").split("+")[0].split("-")[0]
+    parts: List[Any] = []
+    for chunk in cleaned.split("."):
+        try:
+            parts.append((0, int(chunk)))
+        except ValueError:
+            parts.append((1, chunk))
+    return tuple(parts)
 
-def _machine() -> str:
-    m = platform.machine().lower()
-    if m in ("amd64", "x86_64"):
-        return "x86_64"
-    if m.startswith("aarch64") or m.startswith("arm64"):
-        return "aarch64"
-    return m
 
-def _current_version(tool_key: str, settings: AppSettings) -> str:
-    """Try to read the installed version for a tool."""
+def is_up_to_date(installed: str, latest: str) -> bool:
+    """True when `installed` is at least `latest`.
+
+    Unknown or missing installs are never "up to date", so the Update button
+    stays available rather than silently disabling itself.
+    """
+    if not installed or not latest or installed in ("unknown", "not found"):
+        return False
     try:
-        if tool_key == "ytget":
-            return settings.VERSION
+        return parse_version(installed) >= parse_version(latest)
+    except TypeError:
+        return installed == latest
 
-        if tool_key == "yt-dlp":
-            result = subprocess.run(
-                [str(settings.YT_DLP_PATH), "--version"],
-                capture_output=True, text=True, timeout=8,
-                **_POPEN_KWARGS,
-            )
-            return result.stdout.strip()
 
-        if tool_key == "spotdl":
-            # Resolve the same way workers/spotdl_worker.py does: a bundled
-            # spotdl(.exe) next to the app, or one on PATH. `sys.executable`
-            # is the frozen YTGet.exe itself in a packaged build, not a
-            # Python interpreter, so `-m spotdl` only works when running
-            # from source with spotdl installed as a pip package.
-            from ytget_gui.workers.spotdl_worker import _find_spotdl
-            spotdl_path = _find_spotdl(settings)
-            if spotdl_path is None:
+def installed_version(key: str, settings: AppSettings) -> str:
+    try:
+        if key == "ytget":
+            return _version.__version__
+
+        if key == "yt-dlp":
+            if not Path(settings.YT_DLP_PATH).is_file():
                 return "not found"
-            result = subprocess.run(
-                [str(spotdl_path), "--version"],
-                capture_output=True, text=True, timeout=10,
-                **_POPEN_KWARGS,
-            )
-            out = (result.stdout.strip() or result.stderr.strip())
-            m = re.search(r"(\d+\.\d+\.\d+)", out)
-            return m.group(1) if m else (out or "unknown")
+            return proc.run([str(settings.YT_DLP_PATH), "--version"], timeout=10).stdout.strip()
 
-        if tool_key == "deno":
-            result = subprocess.run(
-                [str(settings.DENO_PATH), "--version"],
-                capture_output=True, text=True, timeout=8,
-                **_POPEN_KWARGS,
-            )
-            # "deno 2.x.y\n..."
-            m = re.search(r"deno\s+([\d.]+)", result.stdout)
-            return m.group(1) if m else "unknown"
+        if key == "deno":
+            if not Path(settings.DENO_PATH).is_file():
+                return "not found"
+            output = proc.run([str(settings.DENO_PATH), "--version"], timeout=10).stdout
+            match = re.search(r"deno\s+([\d.]+)", output)
+            return match.group(1) if match else "unknown"
 
-    except Exception:
-        pass
+        if key == "spotdl":
+            from ytget_gui.workers.spotdl_worker import _find_spotdl
+
+            binary = _find_spotdl(settings)
+            if binary is None:
+                return "not found"
+            result = proc.run([str(binary), "--version"], timeout=20)
+            output = result.stdout.strip() or result.stderr.strip()
+            match = re.search(r"(\d+\.\d+\.\d+)", output)
+            return match.group(1) if match else (output or "unknown")
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.debug("Version probe failed for %s: %s", key, exc)
     return "not found"
 
 
-def _asset_name_for_ytdlp() -> str:
-    """Return the correct yt-dlp binary asset name for this platform."""
+def ytdlp_asset_name() -> str:
     if is_windows():
         return "yt-dlp.exe"
-    sys_ = _system()
-    mach = _machine()
-    if sys_ == "linux":
-        return "yt-dlp_linux" if mach == "x86_64" else f"yt-dlp_linux_{mach}"
-    if sys_ == "darwin":
-        return "yt-dlp_macos" if mach == "aarch64" else "yt-dlp_macos_legacy"
-    return "yt-dlp"
+    machine = os.uname().machine.lower() if hasattr(os, "uname") else "x86_64"
+    if sys.platform == "darwin":
+        return "yt-dlp_macos" if machine in ("arm64", "aarch64") else "yt-dlp_macos_legacy"
+    if machine in ("aarch64", "arm64"):
+        return "yt-dlp_linux_aarch64"
+    if machine.startswith("arm"):
+        return "yt-dlp_linux_armv7l"
+    return "yt-dlp_linux"
 
 
-def _asset_name_for_deno(tag: str) -> str:
-    """Return the correct Deno asset name for this platform."""
-    sys_ = _system()
-    mach = _machine()
+def deno_asset_name() -> str:
+    machine = os.uname().machine.lower() if hasattr(os, "uname") else "x86_64"
+    arch = "aarch64" if machine in ("aarch64", "arm64") else "x86_64"
     if is_windows():
         return "deno-x86_64-pc-windows-msvc.zip"
-    if sys_ == "darwin":
-        arch = "aarch64" if mach == "aarch64" else "x86_64"
+    if sys.platform == "darwin":
         return f"deno-{arch}-apple-darwin.zip"
-    # linux
-    arch = "aarch64" if mach == "aarch64" else "x86_64"
     return f"deno-{arch}-unknown-linux-gnu.zip"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  UPDATE CHECKER
-# ═══════════════════════════════════════════════════════════════════════════
+# ----------------------------------------------------------------------
+# Checker
+# ----------------------------------------------------------------------
+
 
 class UpdateChecker(QThread):
-    """
-    Emits result_ready(tool_key, installed_version, latest_version, download_url)
-    for each tool, then finished() when all checks are done.
-    """
+    result = Signal(str, str, str, str)  # key, installed, latest, url
+    failed = Signal(str, str)
 
-    result_ready = Signal(str, str, str, str)   # key, installed, latest, url
-    error        = Signal(str, str)             # key, message
-
-    def __init__(self, settings: AppSettings, parent=None):
+    def __init__(self, settings: AppSettings, parent=None) -> None:
         super().__init__(parent)
-        self._settings = settings
-        self._session  = requests.Session()
-        self._session.headers["User-Agent"] = f"YTGet/{settings.VERSION}"
+        self.settings = settings
+        self._session = requests.Session()
+        self._session.headers["User-Agent"] = f"YTGet/{_version.__version__}"
+        self._verify, _args, _env = ssl_utils.resolve_ssl_config(settings)
+        ssl_utils.maybe_suppress_insecure_warning(self._verify)
+        proxy = (getattr(settings, "PROXY_URL", "") or "").strip()
+        if proxy:
+            # The previous revision ignored the proxy entirely here, so update
+            # checks failed on every proxied connection while downloads worked.
+            self._session.proxies.update({"http": proxy, "https": proxy})
 
-    # ── internal helpers ───────────────────────────────────────────────────
+    def _latest_release(self, owner: str, repo: str) -> Tuple[str, List[dict]]:
+        response = self._session.get(
+            GITHUB_LATEST.format(owner=owner, repo=repo),
+            timeout=REQUEST_TIMEOUT,
+            verify=self._verify,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return str(payload.get("tag_name", "")).lstrip("v"), payload.get("assets", [])
 
-    def _gh_latest(self, owner: str, repo: str) -> Tuple[str, List[dict]]:
-        """Fetch the single latest release (may include pre-releases/nightlies)."""
-        url  = GITHUB_API.format(owner=owner, repo=repo)
-        resp = self._session.get(url, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        tag  = data.get("tag_name", "").lstrip("v")
-        return tag, data.get("assets", [])
+    def _pypi_latest(self, package: str) -> str:
+        response = self._session.get(
+            PYPI_JSON.format(package=package),
+            timeout=REQUEST_TIMEOUT,
+            verify=self._verify,
+        )
+        response.raise_for_status()
+        return str(response.json()["info"]["version"])
 
-    def _pip_latest(self, package: str) -> str:
-        url  = PYPI_API.format(package=package)
-        resp = self._session.get(url, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        return resp.json()["info"]["version"]
+    @staticmethod
+    def _asset_url(assets: List[dict], predicate) -> str:
+        return next(
+            (a["browser_download_url"] for a in assets if predicate(a.get("name", ""))),
+            "",
+        )
 
-    # ── per-tool check methods ─────────────────────────────────────────────
-
-    def _check_ytget(self):
-        key = "ytget"
-        installed = _current_version(key, self._settings)
+    def run(self) -> None:
         try:
-            latest, _assets = self._gh_latest("ErfanNamira", "ytget-gui")
-            # find the release page URL (no direct binary; user visits GitHub)
-            dl_url = f"https://github.com/ErfanNamira/ytget-gui/releases/tag/{latest}"
-            self.result_ready.emit(key, installed, latest, dl_url)
-        except Exception as e:
-            self.error.emit(key, str(e))
-
-    def _check_ytdlp(self):
-        key = "yt-dlp"
-        installed = _current_version(key, self._settings)
-        try:
-            latest, assets = self._gh_latest("yt-dlp", "yt-dlp")
-            asset_name = _asset_name_for_ytdlp()
-            dl_url = next(
-                (a["browser_download_url"] for a in assets if a["name"] == asset_name),
-                "",
-            )
-            self.result_ready.emit(key, installed, latest, dl_url)
-        except Exception as e:
-            self.error.emit(key, str(e))
-
-    def _check_spotdl(self):
-        key = "spotdl"
-        installed = _current_version(key, self._settings)
-        try:
-            if is_windows():
-                # Match the standalone binary the app actually runs
-                # (see release.yml / workers/spotdl_worker.py), not the
-                # pip package. Asset name is version-stamped, e.g.
-                # "spotdl-4.5.0-win32.exe", so match by prefix/suffix.
-                latest, assets = self._gh_latest("spotDL", "spotify-downloader")
-                dl_url = next(
-                    (
-                        a["browser_download_url"] for a in assets
-                        if a["name"].startswith("spotdl-") and a["name"].endswith("win32.exe")
-                    ),
-                    "",
-                )
-                self.result_ready.emit(key, installed, latest, dl_url)
-            else:
-                # No standalone binary is published for macOS/Linux; spotdl
-                # is expected to be installed via pip there.
-                latest = self._pip_latest("spotdl")
-                self.result_ready.emit(key, installed, latest, "pip")
-        except Exception as e:
-            self.error.emit(key, str(e))
-
-    def _check_deno(self):
-        key = "deno"
-        installed = _current_version(key, self._settings)
-        try:
-            latest, assets = self._gh_latest("denoland", "deno")
-            asset_name = _asset_name_for_deno(latest)
-            dl_url = next(
-                (a["browser_download_url"] for a in assets if a["name"] == asset_name),
-                "",
-            )
-            self.result_ready.emit(key, installed, latest, dl_url)
-        except Exception as e:
-            self.error.emit(key, str(e))
-
-    def run(self):
-        try:
-            for fn in (
-                self._check_ytget,
-                self._check_ytdlp,
-                self._check_spotdl,
-                self._check_deno,
-            ):
+            for tool in TOOLS:
                 if self.isInterruptionRequested():
-                    break
+                    return
                 try:
-                    fn()
-                except Exception:
-                    pass   # individual errors already emitted inside each method
+                    self._check(tool)
+                except requests.RequestException as exc:
+                    self.failed.emit(tool.key, f"Network error: {exc}")
+                except Exception as exc:  # noqa: BLE001
+                    self.failed.emit(tool.key, str(exc))
         finally:
-            # Each "Re-check All" click spins up a brand new UpdateChecker
-            # (and Session); without closing it, the underlying connection
-            # pool's sockets are only reclaimed by GC, which leaks file
-            # descriptors/memory over a long-running session with many
-            # manual re-checks.
+            # Each re-check builds a new session; without closing it the
+            # connection pool's sockets are only reclaimed by GC, leaking file
+            # descriptors across a long session of manual re-checks.
             self._session.close()
 
+    def _check(self, tool: Tool) -> None:
+        current = installed_version(tool.key, self.settings)
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  UPDATE INSTALLER  (runs in a thread, one per tool)
-# ═══════════════════════════════════════════════════════════════════════════
+        if tool.key == "ytget":
+            latest, _assets = self._latest_release(tool.owner, tool.repo)
+            self.result.emit(
+                tool.key, current, latest,
+                f"https://github.com/{tool.owner}/{tool.repo}/releases/latest",
+            )
+            return
+
+        if tool.key == "yt-dlp":
+            latest, assets = self._latest_release(tool.owner, tool.repo)
+            wanted = ytdlp_asset_name()
+            self.result.emit(
+                tool.key, current, latest,
+                self._asset_url(assets, lambda n: n == wanted),
+            )
+            return
+
+        if tool.key == "deno":
+            latest, assets = self._latest_release(tool.owner, tool.repo)
+            wanted = deno_asset_name()
+            self.result.emit(
+                tool.key, current, latest,
+                self._asset_url(assets, lambda n: n == wanted),
+            )
+            return
+
+        if tool.key == "spotdl":
+            if is_windows():
+                # Match the standalone binary the app actually runs, not the
+                # pip package. Asset names are version-stamped, e.g.
+                # "spotdl-4.5.0-win32.exe".
+                latest, assets = self._latest_release(tool.owner, tool.repo)
+                url = self._asset_url(
+                    assets,
+                    lambda n: n.startswith("spotdl-") and n.endswith("win32.exe"),
+                )
+                self.result.emit(tool.key, current, latest, url)
+            else:
+                self.result.emit(
+                    tool.key, current, self._pypi_latest(tool.package), "pip"
+                )
+
+
+# ----------------------------------------------------------------------
+# Installer
+# ----------------------------------------------------------------------
+
 
 class UpdateInstaller(QThread):
-    """
-    Downloads and installs a single tool update.
-    Signals:
-      progress(tool_key, percent)    — 0..100
-      log_line(tool_key, message)
-      finished_ok(tool_key)
-      finished_err(tool_key, reason)
-    """
+    progress = Signal(str, int)
+    message = Signal(str, str)
+    succeeded = Signal(str)
+    failed = Signal(str, str)
 
-    progress     = Signal(str, int)
-    log_line     = Signal(str, str)
-    finished_ok  = Signal(str)
-    finished_err = Signal(str, str)
-
-    def __init__(
-        self,
-        tool_key: str,
-        download_url: str,
-        settings: AppSettings,
-        parent=None,
-    ):
+    def __init__(self, key: str, url: str, settings: AppSettings, parent=None) -> None:
         super().__init__(parent)
-        self._key      = tool_key
-        self._url      = download_url
-        self._settings = settings
+        self.key = key
+        self.url = url
+        self.settings = settings
         self._cancelled = False
 
-    def cancel(self):
+    def cancel(self) -> None:
         self._cancelled = True
         self.requestInterruption()
 
-    # ── helpers ────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
 
-    def _log(self, msg: str):
-        self.log_line.emit(self._key, msg)
+    def _log(self, text: str) -> None:
+        self.message.emit(self.key, text)
 
-    def _download(self, url: str, dest: Path) -> bool:
-        """Stream-download url to dest, emitting progress signals."""
-        try:
-            resp = requests.get(url, stream=True, timeout=60)
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
-            done  = 0
-            with open(dest, "wb") as fh:
-                for chunk in resp.iter_content(chunk_size=65536):
-                    if self._cancelled:
-                        return False
-                    fh.write(chunk)
-                    done += len(chunk)
-                    if total:
-                        self.progress.emit(self._key, int(done * 100 / total))
-            return True
-        except Exception as exc:
-            self._log(f"Download failed: {exc}")
-            return False
+    def _target_path(self) -> Path:
+        """Prefer the path the app is configured to run.
 
-    def _make_executable(self, path: Path):
-        if not is_windows():
-            st = os.stat(path)
-            os.chmod(path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-
-    def _install_path_for(self, tool_key: str) -> Path:
-        """Where to write the updated binary.
-
-        Prefer the path the app is *currently configured* to run (e.g.
-        settings.YT_DLP_PATH), falling back to BASE_DIR only when that
-        attribute is unset. Previously this always installed to
-        BASE_DIR/<name>, which silently diverged from the configured path
-        whenever the user pointed YTGet at a binary living elsewhere (a
-        custom install, a system-wide yt-dlp, etc.) — the update would
-        succeed but the app would keep running the old binary.
+        Installing to BASE_DIR unconditionally, as before, diverged from the
+        configured path whenever a user pointed YTGet at a binary elsewhere:
+        the update succeeded and the app kept running the old one.
         """
-        base = self._settings.BASE_DIR
-        if tool_key == "yt-dlp":
-            configured = getattr(self._settings, "YT_DLP_PATH", None)
+        base = self.settings.BASE_DIR
+        if self.key == "yt-dlp":
+            configured = getattr(self.settings, "YT_DLP_PATH", None)
             return Path(configured) if configured else base / executable_name("yt-dlp")
-        if tool_key == "deno":
-            configured = getattr(self._settings, "DENO_PATH", None)
+        if self.key == "deno":
+            configured = getattr(self.settings, "DENO_PATH", None)
             return Path(configured) if configured else base / executable_name("deno")
-        if tool_key == "spotdl":
-            try:
-                from ytget_gui.workers.spotdl_worker import _find_spotdl
-                found = _find_spotdl(self._settings)
-                if found is not None:
-                    return Path(found)
-            except Exception:
-                pass
-            return base / executable_name("spotdl")
+        if self.key == "spotdl":
+            from ytget_gui.workers.spotdl_worker import _find_spotdl
+
+            found = _find_spotdl(self.settings)
+            return Path(found) if found else base / executable_name("spotdl")
         return base
 
-    # ── install strategies ─────────────────────────────────────────────────
+    def _download(self, url: str, destination: Path) -> bool:
+        verify, _args, _env = ssl_utils.resolve_ssl_config(self.settings)
+        ssl_utils.maybe_suppress_insecure_warning(verify)
+        proxies = None
+        proxy = (getattr(self.settings, "PROXY_URL", "") or "").strip()
+        if proxy:
+            proxies = {"http": proxy, "https": proxy}
 
-    def _install_single_binary(self, tool_key: str, asset_url: str):
-        dest = self._install_path_for(tool_key)
-        self._log(f"Downloading {tool_key} …")
-        # tempfile.mktemp only *reserves* a name; another process (or a
-        # concurrent installer thread) can grab it before we open it. Using
-        # mkstemp atomically creates and opens the file, closing the classic
-        # race, and doubles as a guarantee the parent temp dir is writable
-        # before we start streaming a potentially large download into it.
-        fd, tmp_name = tempfile.mkstemp(suffix=dest.suffix)
-        os.close(fd)
-        tmp = Path(tmp_name)
-        if not self._download(asset_url, tmp):
-            self.finished_err.emit(tool_key, "Download cancelled or failed.")
-            return
-        self._log("Installing …")
         try:
-            shutil.move(str(tmp), str(dest))
-            self._make_executable(dest)
-            self._log("✅ Done.")
-            self.finished_ok.emit(tool_key)
-        except Exception as exc:
-            self.finished_err.emit(tool_key, str(exc))
-        finally:
-            if tmp.exists():
-                tmp.unlink(missing_ok=True)
+            with requests.get(
+                url, stream=True, timeout=DOWNLOAD_TIMEOUT,
+                verify=verify, proxies=proxies,
+            ) as response:
+                response.raise_for_status()
+                total = int(response.headers.get("content-length") or 0)
+                written = 0
+                with open(destination, "wb") as handle:
+                    for chunk in response.iter_content(chunk_size=65536):
+                        if self._cancelled:
+                            return False
+                        if not chunk:
+                            continue
+                        handle.write(chunk)
+                        written += len(chunk)
+                        if total:
+                            self.progress.emit(self.key, int(written * 100 / total))
+            return written > 0
+        except requests.RequestException as exc:
+            self._log(f"Download failed: {exc}")
+            return False
+        except OSError as exc:
+            self._log(f"Could not write the download: {exc}")
+            return False
 
-    def _install_ytdlp(self):
-        self._install_single_binary("yt-dlp", self._url)
-
-    def _install_deno(self):
-        """Download zip, extract deno binary, place in BASE_DIR."""
-        dest_dir = self._settings.BASE_DIR
-        self._log("Downloading Deno …")
-        fd, tmp_zip_name = tempfile.mkstemp(suffix=".zip")
-        os.close(fd)
-        tmp_zip = Path(tmp_zip_name)
-        if not self._download(self._url, tmp_zip):
-            self.finished_err.emit("deno", "Download cancelled or failed.")
+    @staticmethod
+    def _make_executable(path: Path) -> None:
+        if is_windows():
             return
-        self._log("Extracting …")
         try:
-            with zipfile.ZipFile(tmp_zip) as zf:
-                # The archive contains a single 'deno' (or 'deno.exe') binary
-                for member in zf.namelist():
-                    if re.search(r"deno(\.exe)?$", member, re.IGNORECASE):
-                        zf.extract(member, dest_dir)
-                        extracted = dest_dir / member
-                        final = dest_dir / executable_name("deno")
-                        if extracted != final:
-                            shutil.move(str(extracted), str(final))
-                        self._make_executable(final)
-                        self._settings.DENO_PATH = final
-                        self._log("✅ Done.")
-                        self.finished_ok.emit("deno")
-                        return
-            self.finished_err.emit("deno", "deno binary not found in archive.")
-        except Exception as exc:
-            self.finished_err.emit("deno", str(exc))
-        finally:
-            tmp_zip.unlink(missing_ok=True)
+            mode = os.stat(path).st_mode
+            os.chmod(path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        except OSError as exc:
+            log.debug("Could not chmod %s: %s", path, exc)
 
-    def _install_spotdl(self):
-        # Windows: a real download URL means the checker found a matching
-        # spotdl-*.exe GitHub release asset — install it as a plain binary,
-        # exactly like yt-dlp, so it lands next to the running app and is
-        # picked up by workers/spotdl_worker.py's _find_spotdl().
-        if self._url and self._url != "pip":
-            self._install_single_binary("spotdl", self._url)
-            return
+    def _install_binary(self, destination: Path) -> None:
+        self._log(f"Downloading {self.key}\u2026")
+        # mkstemp creates and opens atomically; mktemp only reserved a name,
+        # which another process (or a concurrent installer) could claim first.
+        handle, temp_name = tempfile.mkstemp(
+            suffix=destination.suffix, dir=str(destination.parent)
+        )
+        os.close(handle)
+        temp_path = Path(temp_name)
 
-        # Fallback: pip install (source runs, or platforms with no published
-        # standalone binary). This won't work inside a frozen PyInstaller
-        # build since sys.executable is YTGet.exe, not a Python interpreter —
-        # surface a clear error instead of silently failing.
-        if getattr(sys, "frozen", False):
-            self.finished_err.emit(
-                "spotdl",
-                "No spotdl binary release found for this platform, and pip "
-                "install isn't available inside the packaged app. Install "
-                "spotdl manually and place it next to YTGet, or run "
-                "'pip install spotdl' in a Python environment.",
+        try:
+            if not self._download(self.url, temp_path):
+                self.failed.emit(self.key, "Download cancelled or failed.")
+                return
+
+            self._log("Installing\u2026")
+            self._make_executable(temp_path)
+            try:
+                os.replace(temp_path, destination)
+            except OSError:
+                # Windows refuses to replace a running executable; shutil.move
+                # via a copy is the usual fallback.
+                shutil.move(str(temp_path), str(destination))
+            temp_path = Path("")
+            self._log("Done.")
+            self.succeeded.emit(self.key)
+        except OSError as exc:
+            self.failed.emit(
+                self.key,
+                f"{exc}. If the file is in use, close any running download first.",
             )
-            return
+        finally:
+            if temp_path and temp_path.exists():
+                temp_path.unlink(missing_ok=True)
 
-        self._log("Running: pip install --upgrade spotdl …")
+    def _install_deno(self) -> None:
+        destination_dir = self.settings.BASE_DIR
+        self._log("Downloading Deno\u2026")
+        handle, temp_name = tempfile.mkstemp(suffix=".zip", dir=str(destination_dir))
+        os.close(handle)
+        archive = Path(temp_name)
+
         try:
-            proc = subprocess.Popen(
-                [sys.executable, "-m", "pip", "install", "--upgrade", "spotdl"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                **_POPEN_KWARGS,
-            )
-            for line in proc.stdout:
-                if self._cancelled:
-                    proc.kill()
-                    self.finished_err.emit("spotdl", "Cancelled.")
+            if not self._download(self.url, archive):
+                self.failed.emit(self.key, "Download cancelled or failed.")
+                return
+
+            self._log("Extracting\u2026")
+            final = destination_dir / executable_name("deno")
+            with zipfile.ZipFile(archive) as bundle:
+                member = next(
+                    (
+                        name
+                        for name in bundle.namelist()
+                        # Reject absolute paths and traversal: a malicious or
+                        # malformed archive could otherwise write outside the
+                        # target directory.
+                        if re.fullmatch(r"deno(\.exe)?", os.path.basename(name), re.I)
+                        and not os.path.isabs(name)
+                        and ".." not in Path(name).parts
+                    ),
+                    None,
+                )
+                if member is None:
+                    self.failed.emit(self.key, "No deno binary inside the archive.")
                     return
-                self._log(line.rstrip())
-            proc.wait()
-            if proc.returncode == 0:
-                self._log("✅ Done.")
-                self.finished_ok.emit("spotdl")
-            else:
-                self.finished_err.emit("spotdl", f"pip exited with code {proc.returncode}")
-        except Exception as exc:
-            self.finished_err.emit("spotdl", str(exc))
+                with bundle.open(member) as source, open(final, "wb") as target:
+                    shutil.copyfileobj(source, target)
 
-    def run(self):
-        dispatch = {
-            "yt-dlp":  self._install_ytdlp,
-            "spotdl":  self._install_spotdl,
-            "deno":    self._install_deno,
-        }
-        fn = dispatch.get(self._key)
-        if fn:
-            fn()
+            self._make_executable(final)
+            self.settings.DENO_PATH = final
+            self._log("Done.")
+            self.succeeded.emit(self.key)
+        except (OSError, zipfile.BadZipFile) as exc:
+            self.failed.emit(self.key, str(exc))
+        finally:
+            archive.unlink(missing_ok=True)
+
+    def _install_spotdl(self) -> None:
+        if self.url and self.url != "pip":
+            self._install_binary(self._target_path())
+            return
+
+        if is_frozen():
+            self.failed.emit(
+                self.key,
+                "No standalone spotdl build exists for this platform, and pip "
+                "is not available inside the packaged app. Install spotdl in a "
+                "Python environment, or place the binary next to YTGet.",
+            )
+            return
+
+        self._log("Running: pip install --upgrade spotdl")
+        try:
+            process = proc.spawn(
+                [sys.executable, "-m", "pip", "install", "--upgrade", "spotdl"],
+                own_process_group=True,
+            )
+            assert process.stdout is not None
+            for raw in process.stdout:
+                if self._cancelled:
+                    proc.terminate_tree(process)
+                    self.failed.emit(self.key, "Cancelled.")
+                    return
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    self._log(line)
+            code = process.wait()
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.failed.emit(self.key, str(exc))
+            return
+
+        if code == 0:
+            self._log("Done.")
+            self.succeeded.emit(self.key)
         else:
-            self.finished_err.emit(self._key, f"No installer for '{self._key}'.")
+            self.failed.emit(self.key, f"pip exited with code {code}")
+
+    def run(self) -> None:
+        try:
+            if self.key == "deno":
+                self._install_deno()
+            elif self.key == "spotdl":
+                self._install_spotdl()
+            elif self.key == "yt-dlp":
+                self._install_binary(self._target_path())
+            else:
+                self.failed.emit(self.key, f"No installer for {self.key}.")
+        except Exception as exc:  # noqa: BLE001 - a thread must not die silently
+            log.exception("Installer crashed")
+            self.failed.emit(self.key, str(exc))
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  QSS  (mirrors app theme)
-# ═══════════════════════════════════════════════════════════════════════════
+# ----------------------------------------------------------------------
+# Dialog
+# ----------------------------------------------------------------------
 
-_QSS = """
-QDialog {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #0a0e1a, stop:0.3 #15102e,
-        stop:0.6 #1e1b4b, stop:1 #0c1733);
-    color: #F4F4F8;
-    font-family: "Inter", "Segoe UI", sans-serif;
-    font-size: 13px;
-}
-QLabel { color: #F4F4F8; background: transparent; }
-#Title {
-    font-size: 18px;
-    font-weight: 800;
-    color: #00E5FF;
-    letter-spacing: 0.5px;
-}
-#Subtitle {
-    font-size: 11px;
-    color: rgba(255, 255, 255, 120);
-}
-QFrame#Divider {
-    background: rgba(255, 255, 255, 20);
-    min-height: 1px;
-    max-height: 1px;
-    border: none;
-}
-/* ── Tool row — glass card ── */
-QFrame#ToolRow {
-    background: rgba(255, 255, 255, 15);
-    border: 1px solid rgba(255, 255, 255, 30);
-    border-radius: 12px;
-}
-QFrame#ToolRow:hover {
-    background: rgba(255, 255, 255, 25);
-    border: 1px solid rgba(255, 255, 255, 50);
-}
-#ToolIcon  { font-size: 22px; background: transparent; }
-#ToolLabel { font-weight: 700; font-size: 13px; color: #F4F4F8; background: transparent; }
-#VersionInstalled { font-size: 11px; color: rgba(255, 255, 255, 120); background: transparent; }
-#VersionLatest    { font-size: 11px; color: #00E5FF; background: transparent; }
-#StatusBadge {
-    border-radius: 6px;
-    padding: 2px 10px;
-    font-size: 11px;
-    font-weight: 700;
-}
-/* ── Buttons — glass ── */
-QPushButton#BtnUpdate {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #00E5FF, stop:1 #00B8FF);
-    color: #0a0e1a;
-    border: 1px solid rgba(0, 229, 255, 100);
-    border-radius: 8px;
-    padding: 6px 16px;
-    font-weight: 700;
-    font-size: 12px;
-}
-QPushButton#BtnUpdate:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #33EEFF, stop:1 #33CCFF);
-}
-QPushButton#BtnUpdate:disabled {
-    background: rgba(255, 255, 255, 10);
-    color: rgba(255, 255, 255, 60);
-    border: 1px solid rgba(255, 255, 255, 15);
-}
-QPushButton#BtnRefresh {
-    background: rgba(255, 255, 255, 15);
-    color: rgba(255, 255, 255, 180);
-    border: 1px solid rgba(255, 255, 255, 30);
-    border-radius: 8px;
-    padding: 6px 14px;
-    font-size: 12px;
-}
-QPushButton#BtnRefresh:hover {
-    color: #F4F4F8;
-    border: 1px solid rgba(255, 255, 255, 50);
-    background: rgba(255, 255, 255, 25);
-}
-QPushButton#BtnClose {
-    background: rgba(255, 255, 255, 15);
-    color: rgba(255, 255, 255, 180);
-    border: 1px solid rgba(255, 255, 255, 30);
-    border-radius: 8px;
-    padding: 6px 14px;
-    font-size: 12px;
-}
-QPushButton#BtnClose:hover {
-    color: #F4F4F8;
-    border: 1px solid rgba(255, 255, 255, 50);
-    background: rgba(255, 255, 255, 25);
-}
-/* ── Log pane — dark glass ── */
-QTextEdit#LogPane {
-    background: rgba(5, 5, 15, 200);
-    color: rgba(255, 255, 255, 160);
-    border: 1px solid rgba(255, 255, 255, 20);
-    border-radius: 8px;
-    font-size: 11px;
-    font-family: "JetBrains Mono", Consolas, monospace;
-    padding: 8px;
-}
-/* ── Progress ── */
-QProgressBar {
-    background: rgba(255, 255, 255, 20);
-    border: none;
-    border-radius: 3px;
-    height: 4px;
-    text-align: center;
-    color: transparent;
-}
-QProgressBar::chunk {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #00E5FF, stop:1 #7C4DFF);
-    border-radius: 3px;
-}
-/* ── Scroll ── */
-QScrollArea { border: none; background: transparent; }
-QScrollBar:vertical {
-    background: transparent;
-    width: 8px;
-    border-radius: 4px;
-}
-QScrollBar::handle:vertical {
-    background: rgba(255, 255, 255, 40);
-    border-radius: 4px;
-    min-height: 20px;
-}
-QScrollBar::handle:vertical:hover { background: rgba(255, 255, 255, 70); }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-"""
-
-# ── status badge colours ────────────────────────────────────────────────────
-_STATUS_STYLE = {
-    "checking":   ("background: rgba(255, 255, 255, 25); color: rgba(255, 255, 255, 150);", "Checking…"),
-    "up_to_date": ("background: rgba(34, 211, 165, 30); color: #22D3A5; border: 1px solid rgba(34, 211, 165, 60);", "Up to date"),
-    "update":     ("background: rgba(0, 229, 255, 30); color: #00E5FF; border: 1px solid rgba(0, 229, 255, 60);", "Update available"),
-    "error":      ("background: rgba(248, 113, 113, 30); color: #F87171; border: 1px solid rgba(248, 113, 113, 60);", "Error"),
-    "installing": ("background: rgba(0, 229, 255, 30); color: #00E5FF; border: 1px solid rgba(0, 229, 255, 60);", "Installing…"),
-    "done":       ("background: rgba(34, 211, 165, 30); color: #22D3A5; border: 1px solid rgba(34, 211, 165, 60);", "Updated ✓"),
-    "warning":    ("background: rgba(251, 191, 36, 30); color: #FBBF24; border: 1px solid rgba(251, 191, 36, 60);", "Manual update"),
-}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  UPDATE MANAGER  (dialog)
-# ═══════════════════════════════════════════════════════════════════════════
 
 class UpdateManager(QDialog):
-    """
-    Main update-manager dialog.  Call UpdateManager(settings, parent).exec()
-    """
+    MAX_LOG_BLOCKS = 400
 
-    def __init__(self, settings: AppSettings, parent=None):
+    def __init__(self, settings: AppSettings, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.settings = settings
         self._checker: Optional[UpdateChecker] = None
         self._installers: Dict[str, UpdateInstaller] = {}
-
-        # per-tool widget references
         self._rows: Dict[str, Dict[str, Any]] = {}
 
-        self.setWindowTitle("Update Manager — YTGet")
-        self.setMinimumSize(680, 560)
-        self.setStyleSheet(_QSS)
-        self._build_ui()
-        self._start_check()
+        self.setWindowTitle(f"Update Manager \u2014 {_version.APP_NAME}")
+        self.setModal(True)
+        self.setMinimumSize(700, 580)
+        self.setStyleSheet(ui.dialog_qss())
 
-    # ── UI construction ────────────────────────────────────────────────────
+        self._build()
+        self._check_all()
 
-    def _build_ui(self):
+    # ------------------------------------------------------------------
+
+    def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(16)
+        root.setContentsMargins(22, 20, 22, 20)
+        root.setSpacing(14)
 
-        # Header
-        hdr = QHBoxLayout()
+        header = QHBoxLayout()
         title = QLabel("Update Manager")
-        title.setObjectName("Title")
-        subtitle = QLabel(f"YTGet {self.settings.VERSION}  ·  {platform.system()} {platform.release()}")
-        subtitle.setObjectName("Subtitle")
-        hdr.addWidget(title)
-        hdr.addStretch()
-        hdr.addWidget(subtitle)
-        root.addLayout(hdr)
+        title.setObjectName("dlgTitle")
+        subtitle = QLabel(f"{_version.APP_NAME} {_version.__version__}  \u00b7  {platform_label()}")
+        subtitle.setObjectName("dlgSubtitle")
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(subtitle)
+        root.addLayout(header)
+        root.addWidget(ui.divider())
 
-        divider = QFrame()
-        divider.setObjectName("Divider")
-        root.addWidget(divider)
-
-        # Scrollable tool list
         scroll = QScrollArea()
+        scroll.setObjectName("scrollArea")
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        inner = QWidget()
-        self._tool_layout = QVBoxLayout(inner)
-        self._tool_layout.setSpacing(8)
-        self._tool_layout.setContentsMargins(0, 0, 0, 0)
-        for key, meta in TOOLS.items():
-            self._add_tool_row(key, meta)
-        self._tool_layout.addStretch()
-        scroll.setWidget(inner)
-        root.addWidget(scroll, stretch=1)
+        holder = QWidget()
+        self._rows_layout = QVBoxLayout(holder)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(8)
+        for tool in TOOLS:
+            self._add_row(tool)
+        self._rows_layout.addStretch(1)
+        scroll.setWidget(holder)
+        root.addWidget(scroll, 1)
 
-        divider2 = QFrame()
-        divider2.setObjectName("Divider")
-        root.addWidget(divider2)
+        root.addWidget(ui.divider())
 
-        # Log pane
-        self._log = QTextEdit()
-        self._log.setObjectName("LogPane")
-        self._log.setReadOnly(True)
-        self._log.setFixedHeight(110)
-        root.addWidget(self._log)
-
-        # Bottom buttons
-        btn_row = QHBoxLayout()
-        self._btn_refresh = QPushButton("🔄  Re-check All")
-        self._btn_refresh.setObjectName("BtnRefresh")
-        self._btn_refresh.clicked.connect(self._start_check)
-        btn_row.addWidget(self._btn_refresh)
-        btn_row.addStretch()
-        btn_close = QPushButton("Close")
-        btn_close.setObjectName("BtnClose")
-        btn_close.clicked.connect(self.reject)
-        btn_row.addWidget(btn_close)
-        root.addLayout(btn_row)
-
-    def _add_tool_row(self, key: str, meta: dict):
-        row_frame = QFrame()
-        row_frame.setObjectName("ToolRow")
-        row_layout = QHBoxLayout(row_frame)
-        row_layout.setContentsMargins(14, 12, 14, 12)
-        row_layout.setSpacing(12)
-
-        # icon
-        icon_lbl = QLabel(meta.get("icon", "🔧"))
-        icon_lbl.setObjectName("ToolIcon")
-        icon_lbl.setFixedWidth(32)
-        row_layout.addWidget(icon_lbl)
-
-        # name + versions column
-        info_col = QVBoxLayout()
-        info_col.setSpacing(2)
-        name_lbl = QLabel(meta["label"])
-        name_lbl.setObjectName("ToolLabel")
-        ver_installed = QLabel("installed: —")
-        ver_installed.setObjectName("VersionInstalled")
-        ver_latest = QLabel("latest: —")
-        ver_latest.setObjectName("VersionLatest")
-        info_col.addWidget(name_lbl)
-        info_col.addWidget(ver_installed)
-        info_col.addWidget(ver_latest)
-        row_layout.addLayout(info_col, stretch=1)
-
-        # progress bar (hidden by default)
-        prog = QProgressBar()
-        prog.setRange(0, 100)
-        prog.setValue(0)
-        prog.setFixedWidth(120)
-        prog.hide()
-        row_layout.addWidget(prog)
-
-        # status badge
-        badge = QLabel("Checking…")
-        badge.setObjectName("StatusBadge")
-        badge.setMinimumWidth(120)
-        badge.setAlignment(Qt.AlignCenter)
-        self._set_badge(badge, "checking")
-        row_layout.addWidget(badge)
-
-        # update button
-        btn = QPushButton("Update")
-        btn.setObjectName("BtnUpdate")
-        btn.setEnabled(False)
-        btn.setFixedWidth(90)
-        btn.clicked.connect(lambda checked=False, k=key: self._on_update(k))
-        row_layout.addWidget(btn)
-
-        self._tool_layout.addWidget(row_frame)
-
-        self._rows[key] = {
-            "frame":         row_frame,
-            "ver_installed": ver_installed,
-            "ver_latest":    ver_latest,
-            "badge":         badge,
-            "btn":           btn,
-            "progress":      prog,
-            "latest":        "",
-            "url":           "",
-        }
-
-    # ── badge helper ───────────────────────────────────────────────────────
-
-    def _set_badge(self, badge: QLabel, status_key: str):
-        style, text = _STATUS_STYLE.get(status_key, ("", status_key))
-        badge.setStyleSheet(style)
-        badge.setText(text)
-
-    # ── logging ────────────────────────────────────────────────────────────
-
-    _MAX_LOG_BLOCKS = 500
-
-    def _log_line(self, tool_key: str, msg: str, color: str = "#52525B"):
-        label = TOOLS.get(tool_key, {}).get("label", tool_key)
-        html  = (
-            f'<span style="color:#3F3F46">[{label}]</span> '
-            f'<span style="color:{color}">{msg}</span>'
+        self.log_view = QTextEdit(readOnly=True)
+        self.log_view.setFixedHeight(120)
+        self.log_view.setStyleSheet(
+            f"background: rgba(5,5,15,200); color: {Palette.TEXT_MUTED};"
+            f"border: 1px solid {Palette.DIVIDER}; border-radius: 8px;"
+            f"font-family: {Palette.MONO_FONTS}; font-size: 11px; padding: 8px;"
         )
-        self._log.append(html)
-        self._log.moveCursor(QTextCursor.End)
+        root.addWidget(self.log_view)
 
-        # Without a cap, a session left open through many manual re-checks
-        # and installs accumulates an ever-growing QTextDocument (each
-        # append also pushes an undo entry) for no user-visible benefit —
-        # only the tail of the log is ever read. Trim from the top instead.
-        doc = self._log.document()
-        if doc.blockCount() > self._MAX_LOG_BLOCKS:
-            cursor = QTextCursor(doc)
+        footer = QHBoxLayout()
+        self.recheck_button = QPushButton("Re-check all")
+        self.recheck_button.clicked.connect(self._check_all)
+        close_button = QPushButton("Close")
+        close_button.setDefault(True)
+        close_button.clicked.connect(self.reject)
+        footer.addWidget(self.recheck_button)
+        footer.addStretch(1)
+        footer.addWidget(close_button)
+        root.addLayout(footer)
+
+    def _add_row(self, tool: Tool) -> None:
+        frame = QFrame()
+        frame.setObjectName("card")
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(12)
+
+        icon = QLabel(tool.icon)
+        icon.setFixedWidth(32)
+        icon.setStyleSheet("font-size: 22px; background: transparent;")
+        layout.addWidget(icon)
+
+        column = QVBoxLayout()
+        column.setSpacing(2)
+        name = QLabel(tool.label)
+        name.setObjectName("cardTitle")
+        current = QLabel("installed: \u2014")
+        current.setObjectName("cardSubtitle")
+        latest = QLabel("latest: \u2014")
+        latest.setObjectName("cardSubtitle")
+        column.addWidget(name)
+        column.addWidget(current)
+        column.addWidget(latest)
+        layout.addLayout(column, 1)
+
+        progress = QProgressBar()
+        progress.setRange(0, 100)
+        progress.setFixedWidth(120)
+        progress.setTextVisible(False)
+        progress.hide()
+        layout.addWidget(progress)
+
+        badge = QLabel()
+        badge.setMinimumWidth(130)
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setStyleSheet("border-radius: 6px; padding: 3px 10px; font-size: 11px;")
+        layout.addWidget(badge)
+
+        button = QPushButton("Update")
+        button.setFixedWidth(96)
+        button.setEnabled(False)
+        button.clicked.connect(lambda _checked=False, key=tool.key: self._install(key))
+        layout.addWidget(button)
+
+        self._rows_layout.addWidget(frame)
+        self._rows[tool.key] = {
+            "tool": tool,
+            "installed": current,
+            "latest": latest,
+            "badge": badge,
+            "button": button,
+            "progress": progress,
+            "url": "",
+        }
+        self._set_badge(tool.key, "checking")
+
+    def _set_badge(self, key: str, state: str) -> None:
+        row = self._rows.get(key)
+        if row is None:
+            return
+        style, text = _BADGES.get(state, ("", state))
+        row["badge"].setStyleSheet(
+            f"{style} border-radius: 6px; padding: 3px 10px; font-size: 11px; font-weight: 600;"
+        )
+        row["badge"].setText(text)
+
+    def _log(self, key: str, text: str, colour: str = Palette.TEXT_MUTED) -> None:
+        label = self._rows.get(key, {}).get("tool")
+        prefix = f"[{label.label}] " if label else ""
+        self.log_view.append(
+            f'<span style="color:{Palette.TEXT_FAINT}">{prefix}</span>'
+            f'<span style="color:{colour}">{text}</span>'
+        )
+        self.log_view.moveCursor(QTextCursor.End)
+
+        # Trim from the top: only the tail is ever read, and an unbounded
+        # document grows for the whole session.
+        document = self.log_view.document()
+        excess = document.blockCount() - self.MAX_LOG_BLOCKS
+        if excess > 0:
+            cursor = QTextCursor(document)
             cursor.movePosition(QTextCursor.Start)
-            excess = doc.blockCount() - self._MAX_LOG_BLOCKS
             cursor.movePosition(QTextCursor.Down, QTextCursor.KeepAnchor, excess)
             cursor.removeSelectedText()
 
-    # ── check flow ─────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
 
-    def _start_check(self):
-        # Reset UI
+    def _check_all(self) -> None:
         for key, row in self._rows.items():
-            self._set_badge(row["badge"], "checking")
-            row["btn"].setEnabled(False)
-            row["ver_latest"].setText("latest: —")
+            self._set_badge(key, "checking")
+            row["button"].setEnabled(False)
+            row["latest"].setText("latest: \u2014")
             row["progress"].hide()
             row["progress"].setValue(0)
-        self._btn_refresh.setEnabled(False)
-        self._log.clear()
-        self._log_line("", "Checking for updates…", "#71717A")
 
-        if self._checker and self._checker.isRunning():
+        self.recheck_button.setEnabled(False)
+        self.log_view.clear()
+        self._log("", "Checking for updates\u2026")
+
+        if self._checker is not None and self._checker.isRunning():
             self._checker.requestInterruption()
             self._checker.wait(3000)
 
         self._checker = UpdateChecker(self.settings, self)
-        self._checker.result_ready.connect(self._on_check_result)
-        self._checker.error.connect(self._on_check_error)
+        self._checker.result.connect(self._on_result)
+        self._checker.failed.connect(self._on_check_failed)
         self._checker.finished.connect(self._on_check_done)
         self._checker.start()
 
     @Slot(str, str, str, str)
-    def _on_check_result(self, key: str, installed: str, latest: str, url: str):
+    def _on_result(self, key: str, current: str, latest: str, url: str) -> None:
         row = self._rows.get(key)
-        if not row:
+        if row is None:
             return
-        row["latest"] = latest
-        row["url"]    = url
-        row["ver_installed"].setText(f"installed: {installed}")
-        row["ver_latest"].setText(f"latest: {latest}")
+        row["url"] = url
+        row["installed"].setText(f"installed: {current}")
+        row["latest"].setText(f"latest: {latest}")
 
         if key == "ytget":
-            # No in-app binary update for YTGet itself
-            up_to_date = _versions_equal(installed, latest)
-            if up_to_date:
-                self._set_badge(row["badge"], "up_to_date")
+            if is_up_to_date(current, latest):
+                self._set_badge(key, "current")
             else:
-                self._set_badge(row["badge"], "update")
-                row["btn"].setText("GitHub ↗")
-                row["btn"].setEnabled(True)
+                self._set_badge(key, "available")
+                row["button"].setText("Open \u2197")
+                row["button"].setEnabled(True)
             return
 
-        up_to_date = _versions_equal(installed, latest)
-        if up_to_date:
-            self._set_badge(row["badge"], "up_to_date")
-            row["btn"].setEnabled(False)
+        if current == "not found":
+            self._set_badge(key, "missing")
+            row["button"].setText("Install")
+            row["button"].setEnabled(bool(url))
+            return
+
+        if is_up_to_date(current, latest):
+            self._set_badge(key, "current")
+            row["button"].setEnabled(False)
         else:
-            self._set_badge(row["badge"], "update")
-            row["btn"].setEnabled(bool(url))
+            self._set_badge(key, "available")
+            row["button"].setEnabled(bool(url))
 
     @Slot(str, str)
-    def _on_check_error(self, key: str, msg: str):
-        row = self._rows.get(key)
-        if row:
-            self._set_badge(row["badge"], "error")
-        self._log_line(key, f"Error: {msg}", "#FB923C")
+    def _on_check_failed(self, key: str, message: str) -> None:
+        self._set_badge(key, "error")
+        self._log(key, message, Palette.WARNING)
 
     @Slot()
-    def _on_check_done(self):
-        self._btn_refresh.setEnabled(True)
-        self._log_line("", "Check complete.", "#71717A")
+    def _on_check_done(self) -> None:
+        self.recheck_button.setEnabled(True)
+        self._log("", "Check complete.")
 
-    # ── install flow ───────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
 
-    def _on_update(self, key: str):
+    def _install(self, key: str) -> None:
         row = self._rows.get(key)
-        if not row:
+        if row is None:
             return
         url = row["url"]
 
         if key == "ytget":
-            import webbrowser
             webbrowser.open(url)
             return
 
-        # guard: don't start a second installer for the same tool
-        if key in self._installers and self._installers[key].isRunning():
+        existing = self._installers.get(key)
+        if existing is not None and existing.isRunning():
             return
 
-        row["btn"].setEnabled(False)
+        row["button"].setEnabled(False)
         row["progress"].setValue(0)
         row["progress"].show()
-        self._set_badge(row["badge"], "installing")
+        self._set_badge(key, "installing")
 
         installer = UpdateInstaller(key, url, self.settings, self)
         installer.progress.connect(self._on_progress)
-        installer.log_line.connect(lambda k, m: self._log_line(k, m, "#00E5FF"))
-        installer.finished_ok.connect(self._on_install_ok)
-        installer.finished_err.connect(self._on_install_err)
+        installer.message.connect(lambda k, m: self._log(k, m, Palette.ACCENT))
+        installer.succeeded.connect(self._on_installed)
+        installer.failed.connect(self._on_install_failed)
         self._installers[key] = installer
         installer.start()
 
     @Slot(str, int)
-    def _on_progress(self, key: str, pct: int):
+    def _on_progress(self, key: str, percent: int) -> None:
         row = self._rows.get(key)
-        if row:
-            row["progress"].setValue(pct)
+        if row is not None:
+            row["progress"].setValue(percent)
 
     @Slot(str)
-    def _on_install_ok(self, key: str):
+    def _on_installed(self, key: str) -> None:
         row = self._rows.get(key)
-        if row:
+        if row is not None:
             row["progress"].setValue(100)
             QTimer.singleShot(800, row["progress"].hide)
-            self._set_badge(row["badge"], "done")
-            # refresh installed version label
-            new_ver = _current_version(key, self.settings)
-            row["ver_installed"].setText(f"installed: {new_ver}")
-        self._log_line(key, "Update installed successfully.", "#22C55E")
+            self._set_badge(key, "done")
+            row["installed"].setText(
+                f"installed: {installed_version(key, self.settings)}"
+            )
+        self._log(key, "Installed successfully.", Palette.SUCCESS)
         self.settings.save_config()
 
     @Slot(str, str)
-    def _on_install_err(self, key: str, reason: str):
+    def _on_install_failed(self, key: str, reason: str) -> None:
         row = self._rows.get(key)
-        if row:
+        if row is not None:
             row["progress"].hide()
-            self._set_badge(row["badge"], "error")
-            row["btn"].setEnabled(True)
-        self._log_line(key, f"Install failed: {reason}", "#F87171")
+            self._set_badge(key, "error")
+            row["button"].setEnabled(True)
+        self._log(key, reason, Palette.ERROR)
 
-    # ── cleanup ────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
 
-    def _stop_all_threads(self):
-        """Cancel and wait for all running background threads."""
-        if self._checker and self._checker.isRunning():
+    def _stop_threads(self) -> None:
+        if self._checker is not None and self._checker.isRunning():
             self._checker.requestInterruption()
             self._checker.wait(2000)
-        for inst in self._installers.values():
-            if inst.isRunning():
-                inst.cancel()
-                inst.wait(3000)
+        for installer in self._installers.values():
+            if installer.isRunning():
+                installer.cancel()
+                installer.wait(3000)
 
-    def closeEvent(self, event):
-        self._stop_all_threads()
+    def closeEvent(self, event) -> None:
+        self._stop_threads()
         super().closeEvent(event)
 
-    def reject(self):
-        self._stop_all_threads()
+    def reject(self) -> None:
+        self._stop_threads()
         super().reject()
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  UTILITY
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _versions_equal(a: str, b: str) -> bool:
-    """
-    Loose version comparison: strip leading 'v'/'n', compare normalised segments.
-    Returns True when the installed version is considered equal or newer.
-    """
-    if not a or not b or a in ("unknown", "not found"):
-        return False
-
-    def _norm(v: str) -> tuple:
-        # Strip leading 'v' or 'n' (BtbN uses 'n' prefix on stable tags)
-        v = v.lstrip("vn").split("+")[0].split("-")[0]
-        parts = []
-        for x in v.split("."):
-            try:
-                parts.append((0, int(x)))   # (0, int) sorts before (1, str)
-            except ValueError:
-                parts.append((1, x))
-        return tuple(parts)
-
-    try:
-        return _norm(a) >= _norm(b)
-    except TypeError:
-        # Last-resort: plain string comparison
-        return a >= b
