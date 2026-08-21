@@ -1,105 +1,148 @@
 # File: main.py
+"""YTGet entry point.
+
+Kept deliberately thin: argument handling, Qt bootstrapping, palette/style
+installation, then hand off to MainWindow.
+"""
+
 from __future__ import annotations
 
+import argparse
+import logging
+import os
 import sys
 from pathlib import Path
-from platform import system
 
-__version__ = "2.7.9"
-
-# --- Windows taskbar icon: set AppUserModelID before QApplication is created ---
-if system() == "Windows":
+# AppUserModelID must be set before QApplication is constructed, or Windows
+# groups the window under the generic python.exe taskbar entry.
+if sys.platform == "win32":
     import ctypes
-    myappid = f"YTGet.{__version__}"
+
     try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-    except Exception:
+        from ytget_gui._version import __version__ as _v
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(f"YTGet.{_v}")
+    except Exception:  # noqa: BLE001 - cosmetic only, never fatal
         pass
 
+from PySide6.QtGui import QColor, QIcon, QPalette
 from PySide6.QtWidgets import QApplication, QStyleFactory
-from PySide6.QtGui import QIcon, QPalette, QColor
 
-from ytget_gui.main_window import MainWindow
-from ytget_gui.styles import refresh_styles
+from ytget_gui import _version
+from ytget_gui.styles import Palette, global_font, refresh_styles
+
+log = logging.getLogger("ytget")
 
 
-def make_dark_palette() -> QPalette:
-    """
-    Build a Fusion-style dark palette covering all common roles.
-    Tuned for the glassmorphism theme — deep indigo base with cyan accents.
+def build_dark_palette() -> QPalette:
+    """Fusion dark palette covering the roles QSS does not reach.
+
+    Native popups, tooltips and disabled states fall back to the palette
+    rather than the stylesheet, so all of them are set explicitly.
     """
     pal = QPalette()
 
-    # Core colors — deep space indigo for the glass backdrop
-    dark_bg    = QColor("#0a0e1a")
-    dark_alt   = QColor("#15102e")
-    light_txt  = QColor("#F4F4F8")
-    highlight  = QColor("#00E5FF")
+    bg = QColor(Palette.WINDOW_BG)
+    alt = QColor(Palette.WIDGET_BG)
+    text = QColor(Palette.TEXT)
+    accent = QColor(Palette.ACCENT)
+    disabled = QColor(120, 120, 132)
 
-    # Window / widget backgrounds
-    pal.setColor(QPalette.Window,         dark_bg)
-    pal.setColor(QPalette.Base,           dark_bg)
-    pal.setColor(QPalette.AlternateBase,  dark_alt)
-    pal.setColor(QPalette.ToolTipBase,    dark_bg)
-    pal.setColor(QPalette.ToolTipText,    light_txt)
+    for role in (QPalette.Window, QPalette.Base, QPalette.Button,
+                 QPalette.ToolTipBase):
+        pal.setColor(role, bg)
+    pal.setColor(QPalette.AlternateBase, alt)
 
-    # Text
-    pal.setColor(QPalette.WindowText,     light_txt)
-    pal.setColor(QPalette.Text,           light_txt)
-    pal.setColor(QPalette.Button,         dark_bg)
-    pal.setColor(QPalette.ButtonText,     light_txt)
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText,
+                 QPalette.ToolTipText, QPalette.BrightText):
+        pal.setColor(role, text)
 
-    # Selection
-    pal.setColor(QPalette.Highlight,      highlight)
-    pal.setColor(QPalette.HighlightedText, QColor("#0a0e1a"))
+    pal.setColor(QPalette.Highlight, accent)
+    pal.setColor(QPalette.HighlightedText, bg)
+    pal.setColor(QPalette.Link, accent)
+    pal.setColor(QPalette.LinkVisited, QColor(Palette.ACCENT_ALT))
+
+    pal.setColor(QPalette.Mid, alt)
+    pal.setColor(QPalette.Midlight, QColor(40, 40, 62))
+    pal.setColor(QPalette.Dark, QColor(6, 8, 16))
+    pal.setColor(QPalette.Shadow, QColor(0, 0, 0))
+
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText,
+                 QPalette.HighlightedText):
+        pal.setColor(QPalette.Disabled, role, disabled)
 
     return pal
 
 
-def main():
-    # Handle --version flag
-    if "--version" in sys.argv:
-        print(f"YTGet version {__version__}")
-        sys.exit(0)
+def find_icon() -> QIcon | None:
+    """Locate the app icon in both source and frozen layouts."""
+    from ytget_gui.utils.paths import get_base_path, get_bundle_path, is_macos
 
-    # 1) Create the QApplication before any QWidget
+    names = ("icon.icns", "icon.ico", "icon.png") if is_macos() else ("icon.ico", "icon.png")
+    roots = (get_bundle_path(), get_base_path(), get_bundle_path() / "_internal")
+
+    for root in roots:
+        for name in names:
+            candidate = root / name
+            if candidate.is_file():
+                return QIcon(str(candidate))
+    return None
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="ytget", add_help=True)
+    parser.add_argument("--version", action="store_true", help="print version and exit")
+    parser.add_argument("--verbose", "-v", action="store_true", help="debug logging")
+    parser.add_argument("urls", nargs="*", help="URLs to enqueue on startup")
+    # Qt swallows its own flags; ignore anything we do not recognise so
+    # -platform/-style still work.
+    args, _unknown = parser.parse_known_args(argv)
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    args = parse_args(argv)
+
+    if args.version:
+        print(f"{_version.APP_NAME} {_version.__version__}")
+        return 0
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    )
+
     app = QApplication(sys.argv)
+    app.setApplicationName(_version.APP_NAME)
+    app.setApplicationVersion(_version.__version__)
+    app.setOrganizationName(_version.ORG_NAME)
+    app.setOrganizationDomain(_version.ORG_DOMAIN)
 
-    # 2) Force Qt Fusion style and install our dark palette globally
     app.setStyle(QStyleFactory.create("Fusion"))
-    app.setPalette(make_dark_palette())
+    app.setPalette(build_dark_palette())
 
-    # 2b) Now that QApplication + primary screen exist, recompute the
-    #     DPI-scaled QSS in AppStyles (it was a placeholder at import time).
+    # QApplication and its primary screen now exist, so DPI-scaled QSS can
+    # finally be computed for real.
     refresh_styles()
+    app.setFont(global_font())
 
-    # 3) Application metadata
-    app.setApplicationName("YTGet")
-    app.setOrganizationName("YTGet")
-    app.setOrganizationDomain("ytget_gui.local")
+    icon = find_icon()
+    if icon is not None:
+        app.setWindowIcon(icon)
 
-    # 4) Load the appropriate icon for each platform
-    icon_dir = Path(__file__).parent
-    if system() == "Darwin":
-        icns = icon_dir / "icon.icns"
-        if icns.exists():
-            app.setWindowIcon(QIcon(str(icns)))
-        else:
-            ico = icon_dir / "icon.ico"
-            if ico.exists():
-                app.setWindowIcon(QIcon(str(ico)))
-    else:
-        ico = icon_dir / "icon.ico"
-        if ico.exists():
-            app.setWindowIcon(QIcon(str(ico)))
+    # Imported after Qt is up: MainWindow constructs widgets at import-adjacent
+    # time and pulls in the whole worker stack.
+    from ytget_gui.main_window import MainWindow
 
-    # 5) Instantiate and show the main window
-    w = MainWindow()
-    w.show()
+    window = MainWindow(app_icon=icon)
+    window.show()
 
-    # 6) Enter Qt event loop
-    sys.exit(app.exec())
+    if args.urls:
+        window.enqueue_urls(args.urls)
+
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
