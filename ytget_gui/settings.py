@@ -1,23 +1,45 @@
 # File: ytget_gui/settings.py
+"""Application settings with declarative, atomic persistence.
+
+The previous revision maintained `save_config()` and `load_config()` as two
+parallel hand-written key lists. Every new setting had to be added in three
+places (the dataclass, the saver, the loader) and omitting one produced a
+setting that silently reverted on restart. Persistence is now driven by
+`_PLAIN_KEYS` / `_PATH_KEYS` plus a per-key validator table, so a field can
+only be forgotten in one place instead of three.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
-import re
+import tempfile
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Pattern
+from typing import Any, Callable, Dict, List, Mapping
 
+from ytget_gui import _version
+from ytget_gui.formats import (
+    build_resolution_presets,
+    ensure_best_fallback,
+    video_chain,
+)
+from ytget_gui.spotdl_settings import SpotDLSettings
 from ytget_gui.utils.paths import (
-    get_base_path,
-    executable_name,
-    which_or_path,
     default_downloads_dir,
+    ensure_dir,
+    executable_name,
+    get_base_path,
+    is_usable_file,
+    resolve_tool,
 )
 
-from ytget_gui.spotdl_settings import SpotDLSettings
+log = logging.getLogger(__name__)
+
+# --------------------------------------------------------------------------
+# Enumerated choices
+# --------------------------------------------------------------------------
 
 YOUTUBE_PLAYER_CLIENTS: Dict[str, str] = {
     "Auto (yt-dlp default)": "auto",
@@ -47,396 +69,518 @@ FILENAME_FORMAT_PRESETS: Dict[str, str] = {
     "id_title": "%(id)s - %(title)s",
 }
 
+CHAPTERS_MODES = ("none", "embed", "split")
+VIDEO_CONTAINERS = (".mkv", ".mp4", ".webm")
+THUMBNAIL_FORMATS = ("png", "jpg", "webp")
+BROWSERS = (
+    "", "chrome", "chromium", "edge", "firefox",
+    "opera", "brave", "vivaldi", "safari", "whale",
+)
+
+DEFAULT_TITLE_TEMPLATE = "%(title)s.%(ext)s"
+DEFAULT_PLAYLIST_TEMPLATE = "%(playlist_index)s - %(title)s.%(ext)s"
+
+MAX_LOG_LINES = 1000
+
+# Keys serialised as JSON natives. Coerced on load to the type of the
+# in-memory default, so a hand-edited config cannot inject a wrong type.
+_PLAIN_KEYS: tuple[str, ...] = (
+    "PROXY_URL",
+    "IGNORE_SSL_ERRORS",
+    "CUSTOM_CA_CERT",
+    "SPONSORBLOCK_CATEGORIES",
+    "CHAPTERS_MODE",
+    "WRITE_SUBS",
+    "SUB_LANGS",
+    "WRITE_AUTO_SUBS",
+    "CONVERT_SUBS_TO_SRT",
+    "ENABLE_ARCHIVE",
+    "PLAYLIST_REVERSE",
+    "PLAYLIST_ITEMS",
+    "AUDIO_NORMALIZE",
+    "ADD_METADATA",
+    "LIMIT_RATE",
+    "RETRIES",
+    "AUTO_RETRY_COUNT",
+    "QUEUE_ERROR_RETRIES",
+    "ORGANIZE_BY_UPLOADER",
+    "FILENAME_FORMAT",
+    "CUSTOM_FILENAME_TEMPLATE",
+    "DATEAFTER",
+    "COOKIES_FROM_BROWSER",
+    "COOKIES_AUTO_REFRESH",
+    "COOKIES_LAST_IMPORTED",
+    "LIVE_FROM_START",
+    "YT_MUSIC_METADATA",
+    "CLIP_START",
+    "CLIP_END",
+    "CUSTOM_FFMPEG_ARGS",
+    "EXTRA_YTDLP_ARGS",
+    "YOUTUBE_PLAYER_CLIENT",
+    "CROP_AUDIO_COVERS",
+    "VIDEO_FORMAT",
+    "WRITE_THUMBNAIL",
+    "CONVERT_THUMBNAILS",
+    "THUMBNAIL_FORMAT",
+    "EMBED_THUMBNAIL",
+    "PREFER_HLS",
+    "HLS_PREFERRED_DOMAINS",
+    "LOG_THUMBNAILS",
+    "MAX_LOG_LINES",
+    "CONFIRM_ON_QUIT",
+)
+
+# Keys stored as strings but held as Path. Restored only when still valid.
+_PATH_KEYS: tuple[str, ...] = (
+    "DOWNLOADS_DIR",
+    "YT_DLP_PATH",
+    "FFMPEG_PATH",
+    "FFPROBE_PATH",
+    "PHANTOMJS_PATH",
+    "DENO_PATH",
+    "COOKIES_PATH",
+    "ARCHIVE_PATH",
+)
+
+# Per-key sanitisers applied after load, so an out-of-range or stale value
+# from a downgraded/hand-edited config can never reach a CLI invocation.
+_VALIDATORS: Dict[str, Callable[[Any], Any]] = {
+    "CHAPTERS_MODE": lambda v: v if v in CHAPTERS_MODES else "embed",
+    "VIDEO_FORMAT": lambda v: v if v in VIDEO_CONTAINERS else ".mkv",
+    "THUMBNAIL_FORMAT": lambda v: v if v in THUMBNAIL_FORMATS else "png",
+    "YOUTUBE_PLAYER_CLIENT": (
+        lambda v: v if v in YOUTUBE_PLAYER_CLIENTS.values() else "auto"
+    ),
+    "FILENAME_FORMAT": (
+        lambda v: v
+        if v in ("default", "custom") or v in FILENAME_FORMAT_PRESETS
+        else "default"
+    ),
+    "COOKIES_FROM_BROWSER": lambda v: v if v in BROWSERS else "",
+    "RETRIES": lambda v: max(1, min(100, int(v))),
+    "AUTO_RETRY_COUNT": lambda v: max(0, min(20, int(v))),
+    "QUEUE_ERROR_RETRIES": lambda v: max(0, min(20, int(v))),
+    "MAX_LOG_LINES": lambda v: max(100, min(50_000, int(v))),
+    "SPONSORBLOCK_CATEGORIES": lambda v: [str(x) for x in v if str(x).strip()],
+    "HLS_PREFERRED_DOMAINS": lambda v: [
+        str(x).strip().lower() for x in v if str(x).strip()
+    ],
+}
+
+
 @dataclass
 class AppSettings:
-    VERSION: str = "2.7.9"
-    APP_NAME: str = "YTGet"
-    GITHUB_URL: str = "https://github.com/ErfanNamira/ytget-gui"
+    # --- Identity (never persisted) ---
+    VERSION: str = _version.__version__
+    APP_NAME: str = _version.APP_NAME
+    GITHUB_URL: str = _version.GITHUB_URL
 
+    # --- Locations ---
     BASE_DIR: Path = field(default_factory=get_base_path)
-    INTERNAL_DIR: Path = field(init=False)
     DOWNLOADS_DIR: Path = field(default_factory=default_downloads_dir)
+    INTERNAL_DIR: Path = field(init=False)
+    CACHE_DIR: Path = field(init=False)
     CONFIG_PATH: Path = field(init=False)
+    QUEUE_PATH: Path = field(init=False)
     COOKIES_PATH: Path = field(init=False)
     ARCHIVE_PATH: Path = field(init=False)
 
+    # --- External binaries ---
     YT_DLP_PATH: Path = field(init=False)
     FFMPEG_PATH: Path = field(init=False)
     FFPROBE_PATH: Path = field(init=False)
     PHANTOMJS_PATH: Path = field(init=False)
     DENO_PATH: Path = field(init=False)
 
-    OUTPUT_TEMPLATE: str = field(init=False)
-    PLAYLIST_TEMPLATE: str = field(init=False)
+    # --- Output templates (derived from DOWNLOADS_DIR) ---
+    OUTPUT_TEMPLATE: str = field(init=False, default="")
+    PLAYLIST_TEMPLATE: str = field(init=False, default="")
 
-    YOUTUBE_URL_PATTERN: Pattern = field(
-        default_factory=lambda: re.compile(
-            r"^(https?://)?(www\.|m\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/.+",
-            re.IGNORECASE,
-        )
-    )
+    # --- Format presets ---
+    RESOLUTIONS: Dict[str, str] = field(default_factory=build_resolution_presets)
 
-    RESOLUTIONS: Dict[str, str] = field(
-        default_factory=lambda: {
-            # --- YouTube-optimized presets ---
-            # Built via AppSettings._video_format_chain() -- see that method
-            # for why this replaced the old hard-coded itag pairs (251+271
-            # etc): those itags don't exist on every video, and the fallback
-            # they had ("bestvideo[height<=N]+bestaudio") carried no codec
-            # or protocol preference, so it could -- and did -- resolve to
-            # an HLS stream capped below the requested height.
-            "🎬 YouTube 4320p (8K)": AppSettings._video_format_chain(4320),
-            "🎬 YouTube 2160p (4K)": AppSettings._video_format_chain(2160),
-            "🎥 YouTube 1440p (QHD)": AppSettings._video_format_chain(1440),
-            "🎥 YouTube 1080p (FHD)": AppSettings._video_format_chain(1080),
-            "📱 YouTube 720p (HD)":  AppSettings._video_format_chain(720),
-            "📱 YouTube 480p (SD)":  AppSettings._video_format_chain(480),
-
-            # --- Universal presets (stricter, work across any site supported by yt-dlp) ---
-            # Same codec/protocol-aware chain as above, with an added width
-            # cap so oddly-cropped/anamorphic sources don't sneak past the
-            # intended resolution tier on non-YouTube sites.
-            "🌐 Universal 4320p (8K)": AppSettings._video_format_chain(4320, width=7680),
-            "🌐 Universal 2160p (4K)": AppSettings._video_format_chain(2160, width=3840),
-            "🌐 Universal 1440p (QHD)": AppSettings._video_format_chain(1440, width=2560),
-            "🌐 Universal 1080p (FHD)": AppSettings._video_format_chain(1080, width=1920),
-            "🌐 Universal 720p (HD)":   AppSettings._video_format_chain(720, width=1280),
-            "🌐 Universal 480p (SD)":   AppSettings._video_format_chain(480, width=854),
-
-            # --- Audio / playlist presets (unchanged) ---
-            "🎵 Single Audio (MP3)": "bestaudio",
-            "🎧 Single Audio (FLAC)": "audio_flac",
-            "🎧 Single Audio (Opus)": "audio_opus",
-            "🎶 Audio Playlist (MP3 – YouTube/Music)": "playlist_mp3",
-            "🎶 Audio Playlist (Opus – YouTube/Music)": "playlist_opus",
-
-            # --- Spotify via SpotDL ---
-            "🎸 Spotify (via SpotDL)": "spotify",
-        }
-    )
-
+    # --- Network ---
     PROXY_URL: str = ""
     IGNORE_SSL_ERRORS: bool = False
-    # Path to a self-signed CA certificate to trust explicitly (e.g. the
-    # mycert.crt you generate yourself for a local MITM/domain-fronting proxy
-    # such as https://github.com/patterniha/MITM-DomainFronting). When set,
-    # this takes precedence over IGNORE_SSL_ERRORS: TLS validation stays on,
-    # it just also trusts this one certificate, instead of trusting nothing.
+    # Path to a self-signed CA to trust explicitly (e.g. for a local
+    # MITM/domain-fronting proxy). Takes precedence over IGNORE_SSL_ERRORS:
+    # validation stays on, it just also trusts this one certificate rather
+    # than trusting nothing.
     CUSTOM_CA_CERT: str = ""
+    LIMIT_RATE: str = ""
+    RETRIES: int = 10
+    # In-process re-runs of the whole yt-dlp command after a known-transient
+    # failure (expired signed URL/403, momentarily missing format, dropped
+    # connection). 0 disables.
+    AUTO_RETRY_COUNT: int = 3
+    # Times a failed item is moved to the back of the queue for a later
+    # attempt, after AUTO_RETRY_COUNT in-process retries are exhausted.
+    QUEUE_ERROR_RETRIES: int = 2
+
+    # --- Cookies ---
+    COOKIES_FROM_BROWSER: str = ""
+    COOKIES_AUTO_REFRESH: bool = False
+    COOKIES_LAST_IMPORTED: str = ""
+
+    # --- Content selection ---
     SPONSORBLOCK_CATEGORIES: List[str] = field(default_factory=list)
-    CHAPTERS_MODE: str = "embed"       # none|embed|split
+    CHAPTERS_MODE: str = "embed"
     WRITE_SUBS: bool = False
     SUB_LANGS: str = "en"
     WRITE_AUTO_SUBS: bool = False
     CONVERT_SUBS_TO_SRT: bool = False
-    ENABLE_ARCHIVE: bool = False
     PLAYLIST_REVERSE: bool = False
-    AUDIO_NORMALIZE: bool = False
-    ADD_METADATA: bool = True
-    LIMIT_RATE: str = ""
-    RETRIES: int = 10
-    # How many times DownloadWorker will silently re-run the *entire*
-    # yt-dlp command after a known-transient failure (expired signed URL /
-    # 403, momentarily unavailable format, dropped connection, etc) before
-    # giving up on the item. Set to 0 to disable auto-retry entirely.
-    AUTO_RETRY_COUNT: int = 3
-    # How many times the queue will move a failed item to the back of the
-    # queue (instead of dropping it) to try again later, after
-    # AUTO_RETRY_COUNT in-process retries have already been exhausted.
-    QUEUE_ERROR_RETRIES: int = 2
+    PLAYLIST_ITEMS: str = ""
+    DATEAFTER: str = ""
+    CLIP_START: str = ""
+    CLIP_END: str = ""
+    LIVE_FROM_START: bool = False
+
+    # --- Output ---
+    ENABLE_ARCHIVE: bool = False
     ORGANIZE_BY_UPLOADER: bool = False
     FILENAME_FORMAT: str = "default"
     CUSTOM_FILENAME_TEMPLATE: str = ""
-    DATEAFTER: str = ""
-    COOKIES_FROM_BROWSER: str = ""
-    COOKIES_AUTO_REFRESH: bool = False
-    COOKIES_LAST_IMPORTED: str = ""
-    LIVE_FROM_START: bool = False
-    YT_MUSIC_METADATA: bool = False
-    PLAYLIST_ITEMS: str = ""
-    CLIP_START: str = ""
-    CLIP_END: str = ""
-    CUSTOM_FFMPEG_ARGS: str = ""
-    # Raw extra yt-dlp CLI args, e.g. "--sleep-interval 5 --max-sleep-interval 15".
-    # Parsed with shlex and appended verbatim to every yt-dlp invocation, after
-    # all built-in flags so the user can override defaults if they want to.
-    EXTRA_YTDLP_ARGS: str = "--sleep-interval 15 --max-sleep-interval 20"
-    # Which yt-dlp "player_client" extractor-arg to force for YouTube URLs.
-    # "" / "auto" leaves it up to yt-dlp's own default. yt-dlp periodically
-    # has to deprecate/patch individual clients (e.g. tv_downgraded, the
-    # default client for logged-in/cookie requests, breaking for many users
-    # in mid-2026) faster than app releases can keep up, so this is exposed
-    # as a preference instead of hard-coded.
-    YOUTUBE_PLAYER_CLIENT: str = "auto"
-    CROP_AUDIO_COVERS: bool = True
     VIDEO_FORMAT: str = ".mkv"
-    # Thumbnail embedding
+
+    # --- Post-processing ---
+    AUDIO_NORMALIZE: bool = False
+    ADD_METADATA: bool = True
+    CROP_AUDIO_COVERS: bool = True
+    CUSTOM_FFMPEG_ARGS: str = ""
+    YT_MUSIC_METADATA: bool = False
+
+    # --- Thumbnails ---
     WRITE_THUMBNAIL: bool = False
     CONVERT_THUMBNAILS: bool = True
     THUMBNAIL_FORMAT: str = "png"
     EMBED_THUMBNAIL: bool = True
-    # HLS preference controls
-    PREFER_HLS: bool = True
-    HLS_PREFERRED_DOMAINS: List[str] = field(default_factory=list)
-    SPOTDL: SpotDLSettings = field(default_factory=SpotDLSettings)    
 
-    def __post_init__(self):
-        # Prepare paths
+    # --- yt-dlp passthrough ---
+    # Parsed with shlex and appended after all built-in flags, so a user can
+    # override any default.
+    EXTRA_YTDLP_ARGS: str = "--sleep-interval 15 --max-sleep-interval 20"
+    # yt-dlp periodically has to deprecate individual player clients faster
+    # than app releases can track, so this is a preference, not a constant.
+    YOUTUBE_PLAYER_CLIENT: str = "auto"
+
+    # --- HLS ---
+    # Off by default: forcing HLS caps quality wherever DASH offers a taller
+    # ladder. Opt in per-domain for sites that only serve usable HLS.
+    PREFER_HLS: bool = False
+    HLS_PREFERRED_DOMAINS: List[str] = field(default_factory=list)
+
+    # --- Diagnostics / UX ---
+    LOG_THUMBNAILS: bool = False
+    MAX_LOG_LINES: int = MAX_LOG_LINES
+    CONFIRM_ON_QUIT: bool = True
+
+    # --- Nested ---
+    SPOTDL: SpotDLSettings = field(default_factory=SpotDLSettings)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def __post_init__(self) -> None:
+        self.BASE_DIR = Path(self.BASE_DIR).resolve()
         self.INTERNAL_DIR = (self.BASE_DIR / "_internal").resolve()
+        self.CACHE_DIR = (self.BASE_DIR / "cache").resolve()
         self.CONFIG_PATH = (self.BASE_DIR / "config.json").resolve()
+        self.QUEUE_PATH = (self.BASE_DIR / "queue.json").resolve()
         self.COOKIES_PATH = (self.BASE_DIR / "cookies.txt").resolve()
         self.ARCHIVE_PATH = (self.BASE_DIR / "archive.txt").resolve()
 
-        # Ensure directories exist
-        self.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-        self.INTERNAL_DIR.mkdir(parents=True, exist_ok=True)
+        for d in (self.DOWNLOADS_DIR, self.INTERNAL_DIR, self.CACHE_DIR):
+            try:
+                ensure_dir(d)
+            except OSError as exc:
+                log.warning("Could not create %s: %s", d, exc)
 
-        # Touch files if missing
-        if not self.COOKIES_PATH.exists():
-            self.COOKIES_PATH.touch()
-        if self.ENABLE_ARCHIVE and not self.ARCHIVE_PATH.exists():
-            self.ARCHIVE_PATH.touch()
-
-        # Define bundled candidates
-        yt_dlp_candidate = self.BASE_DIR / executable_name("yt-dlp")
-        ffmpeg_candidate = self.BASE_DIR / executable_name("ffmpeg")
-        ffprobe_candidate = self.BASE_DIR / executable_name("ffprobe")
-        phantom_candidate = self.BASE_DIR / executable_name("phantomjs")
-        deno_candidate = self.BASE_DIR / executable_name("deno")
-
-        # Resolve via ENV override, then system PATH, then bundled
-        yt_env = os.getenv("YTGET_YT_DLP_PATH")
-        self.YT_DLP_PATH = Path(yt_env) if yt_env and Path(yt_env).exists() \
-            else which_or_path(yt_dlp_candidate, executable_name("yt-dlp"))
-
-        ff_env = os.getenv("YTGET_FFMPEG_PATH")
-        self.FFMPEG_PATH = Path(ff_env) if ff_env and Path(ff_env).exists() \
-            else which_or_path(ffmpeg_candidate, executable_name("ffmpeg"))
-
-        fp_env = os.getenv("YTGET_FFPROBE_PATH")
-        self.FFPROBE_PATH = Path(fp_env) if fp_env and Path(fp_env).exists() \
-            else which_or_path(ffprobe_candidate, executable_name("ffprobe"))
-
-        ph_env = os.getenv("YTGET_PHANTOMJS_PATH")
-        self.PHANTOMJS_PATH = Path(ph_env) if ph_env and Path(ph_env).exists() \
-            else which_or_path(phantom_candidate, executable_name("phantomjs"))
-
-        deno_env = os.getenv("YTGET_DENO_PATH")
-        self.DENO_PATH = Path(deno_env) if deno_env and Path(deno_env).exists() \
-            else which_or_path(deno_candidate, executable_name("deno"))
-            
-        # Output templates
-        self.OUTPUT_TEMPLATE = str((self.DOWNLOADS_DIR / "%(title)s.%(ext)s").resolve())
-        self.PLAYLIST_TEMPLATE = str((self.DOWNLOADS_DIR / "%(playlist_index)s - %(title)s.%(ext)s").resolve())
-
-        # Load persisted config last
+        self._resolve_binaries()
+        self._refresh_templates()
         self.load_config()
 
-    # -------- Format selection (AV1 -> VP9 -> best, HLS as last resort) --------
+    def _resolve_binaries(self) -> None:
+        """Resolve helper binaries: env override, then PATH, then bundled.
+
+        Env overrides exist so a packaged build can be pointed at
+        system/toolbox binaries without editing config.json.
+        """
+        self.YT_DLP_PATH = resolve_tool(
+            "YTGET_YT_DLP_PATH",
+            self.BASE_DIR / executable_name("yt-dlp"),
+            executable_name("yt-dlp"),
+        )
+        self.FFMPEG_PATH = resolve_tool(
+            "YTGET_FFMPEG_PATH",
+            self.BASE_DIR / executable_name("ffmpeg"),
+            executable_name("ffmpeg"),
+        )
+        self.FFPROBE_PATH = resolve_tool(
+            "YTGET_FFPROBE_PATH",
+            self.BASE_DIR / executable_name("ffprobe"),
+            executable_name("ffprobe"),
+        )
+        self.PHANTOMJS_PATH = resolve_tool(
+            "YTGET_PHANTOMJS_PATH",
+            self.BASE_DIR / executable_name("phantomjs"),
+            executable_name("phantomjs"),
+        )
+        self.DENO_PATH = resolve_tool(
+            "YTGET_DENO_PATH",
+            self.BASE_DIR / executable_name("deno"),
+            executable_name("deno"),
+        )
+
+    def _refresh_templates(self) -> None:
+        self.OUTPUT_TEMPLATE = str(self.DOWNLOADS_DIR / DEFAULT_TITLE_TEMPLATE)
+        self.PLAYLIST_TEMPLATE = str(self.DOWNLOADS_DIR / DEFAULT_PLAYLIST_TEMPLATE)
+
+    # ------------------------------------------------------------------
+    # Derived helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def thumb_cache_dir(self) -> Path:
+        return self.CACHE_DIR / "thumbs"
+
+    def has_cookies_file(self) -> bool:
+        return is_usable_file(self.COOKIES_PATH)
+
+    def has_custom_ca(self) -> bool:
+        return is_usable_file(self.CUSTOM_CA_CERT)
+
+    def archive_target(self) -> Path | None:
+        """Archive path, or None when it is unusable.
+
+        Returning None (rather than a bare Path) is what stops an empty
+        setting from becoming `--download-archive .`.
+        """
+        if not self.ENABLE_ARCHIVE:
+            return None
+        p = Path(self.ARCHIVE_PATH)
+        if str(p) in ("", "."):
+            return None
+        try:
+            if not p.exists():
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.touch()
+        except OSError as exc:
+            log.warning("Archive file unusable (%s): %s", p, exc)
+            return None
+        return p
 
     def get_format_for_resolution(self, height: int, audio: str = "bestaudio") -> str:
-        """
-        Build a yt-dlp format string for an arbitrary height, using the
-        exact same chain as the RESOLUTIONS presets (see
-        _video_format_chain for the ordering and the reasoning behind it).
-        """
-        return self._video_format_chain(height, audio=audio)
+        return video_chain(height, audio=audio)
 
     @staticmethod
-    @lru_cache(maxsize=64)
-    def _video_format_chain(
-        height: int, width: int | None = None, audio: str = "bestaudio"
-    ) -> str:
+    def ensure_format_fallback(fmt: str) -> str:
+        return ensure_best_fallback(fmt)
+
+    def resolve_format_code(self, code: str) -> str:
+        """Normalise whatever the UI handed us into a real yt-dlp selector.
+
+        Accepts a preset label, a bare "1080p" token, or an already-valid
+        selector string.
         """
-        Build a yt-dlp format-selector chain, in this order:
+        import re
 
-          1) AV1 video at or below the target height, DASH/HTTP only.
-          2) VP9 video (matches both legacy "vp9" and "vp09.xx" codec
-             strings) at or below the target height, DASH/HTTP only.
-          3) Best video at or below the target height, still excluding HLS.
-          4) Best video at or below the target height, HLS now allowed --
-             this only fires when nothing better exists under the cap
-             (e.g. the DASH ladder for that video/session is incomplete).
-          5) Generic bestvideo+bestaudio with no height cap, in case even
-             the height filter can't be satisfied (missing/odd metadata).
-          6) "best" -- absolute last resort, whatever yt-dlp can get.
+        code = str(code or "")
+        if code in self.RESOLUTIONS:
+            return self.RESOLUTIONS[code]
+        m = re.fullmatch(r"(\d{3,4})p", code.strip())
+        if m:
+            return self.get_format_for_resolution(int(m.group(1)))
+        return code
 
-        Every tier before (4) uses "[protocol!*=m3u8]" so a same-or-lower
-        DASH/HTTP stream is always tried before an HLS one is ever
-        considered. Codec filters use "^=" (starts-with) or "~=" (regex)
-        rather than "=" (exact match) because yt-dlp reports codecs like
-        "av01.0.05M.08" or "vp09.00.50.08", not the bare "av01"/"vp9" an
-        exact-match filter would require -- with "=", these tiers silently
-        never match anything and are effectively dead code.
+    def set_download_path(self, path: Path) -> None:
+        """The only correct way to change the download folder.
 
-        Cached because the UI can re-request the same (height, width,
-        audio) combination many times (e.g. re-opening a dropdown).
+        Assigning DOWNLOADS_DIR directly leaves OUTPUT_TEMPLATE and
+        PLAYLIST_TEMPLATE pointing at the previous folder and skips the mkdir.
         """
-        no_hls = "[protocol!*=m3u8]"
-        width_filter = f"[width<={width}]" if width else ""
-
-        av1 = f"bestvideo[height<={height}]{width_filter}[vcodec^=av01]{no_hls}+{audio}"
-        vp9 = f"bestvideo[height<={height}]{width_filter}[vcodec~='^vp0?9']{no_hls}+{audio}"
-        best_no_hls = f"bestvideo[height<={height}]{width_filter}{no_hls}+{audio}"
-        best_any_proto = f"bestvideo[height<={height}]{width_filter}+{audio}"
-        generic_best = f"bestvideo+{audio}"
-        ultimate = "best"
-
-        chain = "/".join([av1, vp9, best_no_hls, best_any_proto, generic_best, ultimate])
-        return AppSettings._dedupe_format_chain(chain)
-
-    @staticmethod
-    def _dedupe_format_chain(chain: str) -> str:
-        seen = set()
-        parts: List[str] = []
-        for seg in (s.strip() for s in chain.split("/") if s.strip()):
-            if seg not in seen:
-                parts.append(seg)
-                seen.add(seg)
-        return "/".join(parts)
-
-    # ---------------------- Persistence ----------------------
-
-    def set_download_path(self, path: Path):
-        self.DOWNLOADS_DIR = path.resolve()
-        self.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-        self.OUTPUT_TEMPLATE = str(self.DOWNLOADS_DIR / "%(title)s.%(ext)s")
-        self.PLAYLIST_TEMPLATE = str(self.DOWNLOADS_DIR / "%(playlist_index)s - %(title)s.%(ext)s")
+        self.DOWNLOADS_DIR = Path(path).expanduser().resolve()
+        ensure_dir(self.DOWNLOADS_DIR)
+        self._refresh_templates()
         self.save_config()
 
-    def save_config(self):
-        config = {
-            "PROXY_URL": self.PROXY_URL,
-            "IGNORE_SSL_ERRORS": self.IGNORE_SSL_ERRORS,
-            "CUSTOM_CA_CERT": self.CUSTOM_CA_CERT,
-            "SPONSORBLOCK_CATEGORIES": self.SPONSORBLOCK_CATEGORIES,
-            "CHAPTERS_MODE": self.CHAPTERS_MODE,
-            "WRITE_SUBS": self.WRITE_SUBS,
-            "SUB_LANGS": self.SUB_LANGS,
-            "WRITE_AUTO_SUBS": self.WRITE_AUTO_SUBS,
-            "CONVERT_SUBS_TO_SRT": self.CONVERT_SUBS_TO_SRT,
-            "ENABLE_ARCHIVE": self.ENABLE_ARCHIVE,
-            "PLAYLIST_REVERSE": self.PLAYLIST_REVERSE,
-            "AUDIO_NORMALIZE": self.AUDIO_NORMALIZE,
-            "ADD_METADATA": self.ADD_METADATA,
-            "LIMIT_RATE": self.LIMIT_RATE,
-            "RETRIES": self.RETRIES,
-            "AUTO_RETRY_COUNT": self.AUTO_RETRY_COUNT,
-            "QUEUE_ERROR_RETRIES": self.QUEUE_ERROR_RETRIES,
-            "ORGANIZE_BY_UPLOADER": self.ORGANIZE_BY_UPLOADER,
-            "FILENAME_FORMAT": self.FILENAME_FORMAT,
-            "CUSTOM_FILENAME_TEMPLATE": self.CUSTOM_FILENAME_TEMPLATE,
-            "DATEAFTER": self.DATEAFTER,
-            "COOKIES_FROM_BROWSER": self.COOKIES_FROM_BROWSER,
-            "COOKIES_AUTO_REFRESH": self.COOKIES_AUTO_REFRESH,
-            "COOKIES_LAST_IMPORTED": self.COOKIES_LAST_IMPORTED,
-            "LIVE_FROM_START": self.LIVE_FROM_START,
-            "YT_MUSIC_METADATA": self.YT_MUSIC_METADATA,
-            "PLAYLIST_ITEMS": self.PLAYLIST_ITEMS,
-            "CLIP_START": self.CLIP_START,
-            "CLIP_END": self.CLIP_END,
-            "CUSTOM_FFMPEG_ARGS": self.CUSTOM_FFMPEG_ARGS,
-            "EXTRA_YTDLP_ARGS": self.EXTRA_YTDLP_ARGS,
-            "YOUTUBE_PLAYER_CLIENT": self.YOUTUBE_PLAYER_CLIENT,
-            "CROP_AUDIO_COVERS": self.CROP_AUDIO_COVERS,
-            "VIDEO_FORMAT": self.VIDEO_FORMAT,
-            "WRITE_THUMBNAIL": self.WRITE_THUMBNAIL,
-            "CONVERT_THUMBNAILS": self.CONVERT_THUMBNAILS,
-            "THUMBNAIL_FORMAT": self.THUMBNAIL_FORMAT,
-            "EMBED_THUMBNAIL": self.EMBED_THUMBNAIL,
-            "DOWNLOADS_DIR": str(self.DOWNLOADS_DIR),
-            "YT_DLP_PATH": str(self.YT_DLP_PATH),
-            "FFMPEG_PATH": str(self.FFMPEG_PATH),
-            "FFPROBE_PATH": str(self.FFPROBE_PATH),
-            "PHANTOMJS_PATH": str(self.PHANTOMJS_PATH),   
-            "DENO_PATH": str(self.DENO_PATH),            
-            "COOKIES_PATH": str(self.COOKIES_PATH),
-            "ARCHIVE_PATH": str(self.ARCHIVE_PATH),
-            "PREFER_HLS": self.PREFER_HLS,
-            "HLS_PREFERRED_DOMAINS": self.HLS_PREFERRED_DOMAINS,
-            "SPOTDL": self.SPOTDL.to_dict(),
-        }
-        with open(self.CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
+    def apply(self, values: Mapping[str, Any]) -> None:
+        """Bulk-apply a dict of settings (used by the dialogs).
 
-    def load_config(self):
-        if not self.CONFIG_PATH.exists():
-            return
+        DOWNLOADS_DIR is routed through set_download_path so templates stay
+        consistent no matter which path the value arrives by.
+        """
+        download_dir = values.get("DOWNLOADS_DIR")
+
+        for key, value in values.items():
+            if key in ("DOWNLOADS_DIR", "SPOTDL"):
+                continue
+            if not hasattr(self, key):
+                log.debug("Ignoring unknown setting %r", key)
+                continue
+            setattr(self, key, value)
+
+        spotdl = values.get("SPOTDL")
+        if isinstance(spotdl, SpotDLSettings):
+            self.SPOTDL = spotdl
+        elif isinstance(spotdl, dict):
+            self.SPOTDL = SpotDLSettings.from_dict(spotdl)
+
+        self._sanitise()
+
+        if download_dir:
+            self.set_download_path(Path(download_dir))
+        else:
+            self._refresh_templates()
+
+    def _sanitise(self) -> None:
+        for key, validator in _VALIDATORS.items():
+            try:
+                setattr(self, key, validator(getattr(self, key)))
+            except (TypeError, ValueError):
+                pass
+        self.SPOTDL.normalise()
+
+        # An empty cookies/archive field must fall back to the canonical
+        # location rather than becoming Path(".").
+        if str(self.COOKIES_PATH) in ("", "."):
+            self.COOKIES_PATH = self.BASE_DIR / "cookies.txt"
+        if str(self.ARCHIVE_PATH) in ("", "."):
+            self.ARCHIVE_PATH = self.BASE_DIR / "archive.txt"
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {k: getattr(self, k) for k in _PLAIN_KEYS}
+        data.update({k: str(getattr(self, k)) for k in _PATH_KEYS})
+        data["SPOTDL"] = self.SPOTDL.to_dict()
+        data["_schema"] = self.VERSION
+        return data
+
+    def save_config(self) -> bool:
+        """Write config.json atomically.
+
+        A plain `open(..., "w")` truncates first, so a crash or full disk
+        mid-write left a zero-length or half-written config that failed to
+        parse on next launch and silently reset every preference. Writing to a
+        temp file in the same directory and then `os.replace` makes the
+        swap atomic on both POSIX and Windows.
+        """
+        payload = json.dumps(self.to_dict(), indent=2, ensure_ascii=False)
+        tmp_path: str | None = None
         try:
-            config = json.loads(self.CONFIG_PATH.read_text(encoding="utf-8"))
+            self.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(self.CONFIG_PATH.parent),
+                prefix=".config-",
+                suffix=".tmp",
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_path, self.CONFIG_PATH)
+            tmp_path = None
+            return True
+        except OSError as exc:
+            log.error("Failed to save config: %s", exc)
+            return False
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
-            # Basic flags
-            self.PROXY_URL = config.get("PROXY_URL", self.PROXY_URL)
-            self.IGNORE_SSL_ERRORS = config.get("IGNORE_SSL_ERRORS", self.IGNORE_SSL_ERRORS)
-            self.CUSTOM_CA_CERT = config.get("CUSTOM_CA_CERT", self.CUSTOM_CA_CERT)
-            self.SPONSORBLOCK_CATEGORIES = config.get("SPONSORBLOCK_CATEGORIES", self.SPONSORBLOCK_CATEGORIES)
-            self.CHAPTERS_MODE = config.get("CHAPTERS_MODE", self.CHAPTERS_MODE)
-            self.WRITE_SUBS = config.get("WRITE_SUBS", self.WRITE_SUBS)
-            self.SUB_LANGS = config.get("SUB_LANGS", self.SUB_LANGS)
-            self.WRITE_AUTO_SUBS = config.get("WRITE_AUTO_SUBS", self.WRITE_AUTO_SUBS)
-            self.CONVERT_SUBS_TO_SRT = config.get("CONVERT_SUBS_TO_SRT", self.CONVERT_SUBS_TO_SRT)
-            self.ENABLE_ARCHIVE = config.get("ENABLE_ARCHIVE", self.ENABLE_ARCHIVE)
-            self.PLAYLIST_REVERSE = config.get("PLAYLIST_REVERSE", self.PLAYLIST_REVERSE)
-            self.AUDIO_NORMALIZE = config.get("AUDIO_NORMALIZE", self.AUDIO_NORMALIZE)
-            self.ADD_METADATA = config.get("ADD_METADATA", self.ADD_METADATA)
-            self.LIMIT_RATE = config.get("LIMIT_RATE", self.LIMIT_RATE)
-            self.RETRIES = config.get("RETRIES", self.RETRIES)
-            self.AUTO_RETRY_COUNT = config.get("AUTO_RETRY_COUNT", self.AUTO_RETRY_COUNT)
-            self.QUEUE_ERROR_RETRIES = config.get("QUEUE_ERROR_RETRIES", self.QUEUE_ERROR_RETRIES)
-            self.ORGANIZE_BY_UPLOADER = config.get("ORGANIZE_BY_UPLOADER", self.ORGANIZE_BY_UPLOADER)
-            self.FILENAME_FORMAT = config.get("FILENAME_FORMAT", self.FILENAME_FORMAT)
-            if self.FILENAME_FORMAT not in ("default", "custom", *FILENAME_FORMAT_PRESETS.keys()):
-                self.FILENAME_FORMAT = "default"
-            self.CUSTOM_FILENAME_TEMPLATE = config.get("CUSTOM_FILENAME_TEMPLATE", self.CUSTOM_FILENAME_TEMPLATE)
-            self.DATEAFTER = config.get("DATEAFTER", self.DATEAFTER)
-            self.COOKIES_FROM_BROWSER = config.get("COOKIES_FROM_BROWSER", self.COOKIES_FROM_BROWSER)
-            self.COOKIES_AUTO_REFRESH = config.get("COOKIES_AUTO_REFRESH", self.COOKIES_AUTO_REFRESH)
-            self.COOKIES_LAST_IMPORTED = config.get("COOKIES_LAST_IMPORTED", self.COOKIES_LAST_IMPORTED)
-            self.LIVE_FROM_START = config.get("LIVE_FROM_START", self.LIVE_FROM_START)
-            self.YT_MUSIC_METADATA = config.get("YT_MUSIC_METADATA", self.YT_MUSIC_METADATA)
-            self.PLAYLIST_ITEMS = config.get("PLAYLIST_ITEMS", self.PLAYLIST_ITEMS)
-            self.CLIP_START = config.get("CLIP_START", self.CLIP_START)
-            self.CLIP_END = config.get("CLIP_END", self.CLIP_END)
-            self.CUSTOM_FFMPEG_ARGS = config.get("CUSTOM_FFMPEG_ARGS", self.CUSTOM_FFMPEG_ARGS)
-            self.EXTRA_YTDLP_ARGS = config.get("EXTRA_YTDLP_ARGS", self.EXTRA_YTDLP_ARGS)
-            self.YOUTUBE_PLAYER_CLIENT = config.get("YOUTUBE_PLAYER_CLIENT", self.YOUTUBE_PLAYER_CLIENT)
-            if self.YOUTUBE_PLAYER_CLIENT not in YOUTUBE_PLAYER_CLIENTS.values():
-                self.YOUTUBE_PLAYER_CLIENT = "auto"
-            self.CROP_AUDIO_COVERS = config.get("CROP_AUDIO_COVERS", self.CROP_AUDIO_COVERS)
-            self.VIDEO_FORMAT = config.get("VIDEO_FORMAT", self.VIDEO_FORMAT)
-            # Thumbnail options
-            self.WRITE_THUMBNAIL      = config.get("WRITE_THUMBNAIL", self.WRITE_THUMBNAIL)
-            self.CONVERT_THUMBNAILS   = config.get("CONVERT_THUMBNAILS", self.CONVERT_THUMBNAILS)
-            self.THUMBNAIL_FORMAT     = config.get("THUMBNAIL_FORMAT", self.THUMBNAIL_FORMAT)
-            self.EMBED_THUMBNAIL      = config.get("EMBED_THUMBNAIL", self.EMBED_THUMBNAIL)
-            self.PREFER_HLS = config.get("PREFER_HLS", self.PREFER_HLS)
-            self.HLS_PREFERRED_DOMAINS = config.get("HLS_PREFERRED_DOMAINS", self.HLS_PREFERRED_DOMAINS)
+    # Backwards-compatible alias; MainWindow previously probed for `save`.
+    save = save_config
 
-            spotdl_data = config.get("SPOTDL")
-            if isinstance(spotdl_data, dict):
-                self.SPOTDL = SpotDLSettings.from_dict(spotdl_data)
+    def load_config(self) -> None:
+        if not self.CONFIG_PATH.is_file():
+            self._sanitise()
+            return
 
-            # Override download dir if set
-            dl_dir = config.get("DOWNLOADS_DIR")
-            if dl_dir:
-                self.DOWNLOADS_DIR = Path(dl_dir).resolve()
-                self.DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-                self.OUTPUT_TEMPLATE = str(self.DOWNLOADS_DIR / "%(title)s.%(ext)s")
-                self.PLAYLIST_TEMPLATE = str(self.DOWNLOADS_DIR / "%(playlist_index)s - %(title)s.%(ext)s")
+        try:
+            raw = self.CONFIG_PATH.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as exc:
+            log.error("Config unreadable, keeping defaults: %s", exc)
+            self._quarantine_config()
+            self._sanitise()
+            return
 
-            # Override binary paths if valid
-            for key, attr in (
-                ("YT_DLP_PATH", "YT_DLP_PATH"),
-                ("FFMPEG_PATH", "FFMPEG_PATH"),
-                ("FFPROBE_PATH", "FFPROBE_PATH"),
-                ("PHANTOMJS_PATH", "PHANTOMJS_PATH"),   
-                ("DENO_PATH", "DENO_PATH"),                
-                ("COOKIES_PATH", "COOKIES_PATH"),
-                ("ARCHIVE_PATH", "ARCHIVE_PATH"),
-            ):
-                val = config.get(key)
-                if val and Path(val).exists():
-                    setattr(self, attr, Path(val))
+        if not isinstance(data, dict):
+            log.error("Config root is %s, expected object", type(data).__name__)
+            self._sanitise()
+            return
 
-        except Exception as e:
-            print(f"Error loading config: {e}")
+        for key in _PLAIN_KEYS:
+            if key in data:
+                setattr(self, key, _coerce(data[key], getattr(self, key)))
+
+        spotdl = data.get("SPOTDL")
+        if isinstance(spotdl, dict):
+            self.SPOTDL = SpotDLSettings.from_dict(spotdl)
+
+        # Download dir first: templates depend on it.
+        dl = data.get("DOWNLOADS_DIR")
+        if dl:
+            candidate = Path(str(dl)).expanduser()
+            try:
+                ensure_dir(candidate)
+                self.DOWNLOADS_DIR = candidate.resolve()
+            except OSError as exc:
+                log.warning(
+                    "Saved download dir %s unusable (%s); keeping %s",
+                    candidate, exc, self.DOWNLOADS_DIR,
+                )
+
+        # Binaries: only honour a saved path that still resolves, so a
+        # relocated/uninstalled tool falls back to PATH discovery instead of
+        # pinning a dead path forever.
+        for key in ("YT_DLP_PATH", "FFMPEG_PATH", "FFPROBE_PATH",
+                    "PHANTOMJS_PATH", "DENO_PATH"):
+            value = data.get(key)
+            if value and Path(str(value)).is_file():
+                setattr(self, key, Path(str(value)))
+
+        # Cookies/archive may legitimately not exist yet (archive is created
+        # on demand), so only the obviously-bogus values are rejected.
+        for key in ("COOKIES_PATH", "ARCHIVE_PATH"):
+            value = str(data.get(key) or "").strip()
+            if value and value != ".":
+                setattr(self, key, Path(value))
+
+        self._sanitise()
+        self._refresh_templates()
+
+    def _quarantine_config(self) -> None:
+        """Move a corrupt config aside so the user can inspect it."""
+        try:
+            backup = self.CONFIG_PATH.with_suffix(".json.corrupt")
+            os.replace(self.CONFIG_PATH, backup)
+            log.warning("Corrupt config moved to %s", backup)
+        except OSError:
+            pass
+
+
+def _coerce(value: Any, current: Any) -> Any:
+    if isinstance(current, bool):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+    if isinstance(current, int):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return current
+    if isinstance(current, list):
+        return list(value) if isinstance(value, list) else ([value] if value else [])
+    if isinstance(current, str):
+        return "" if value is None else str(value)
+    return value
