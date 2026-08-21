@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ytget_gui.utils.paths import is_usable_file
-from ytget_gui.utils.validators import is_spotify_url
+from ytget_gui.utils.validators import is_spotify_url, is_youtube_url
 from ytget_gui.workers import cookies as cookie_manager
 from ytget_gui.workers import proc, ssl_utils
 
@@ -67,6 +67,7 @@ class FetchResult:
 # --------------------------------------------------------------------------
 
 _SPOTIFY_KINDS = ("track", "album", "playlist", "artist", "show", "episode")
+_SPOTIFY_MULTI = ("/playlist/", "/album/", "/artist/", "/show/")
 
 
 def spotify_placeholder_title(url: str) -> str:
@@ -208,11 +209,8 @@ def build_command(
         cmd.extend(["--proxy", proxy_url])
 
     player_client = str(getattr(settings, "YOUTUBE_PLAYER_CLIENT", "auto") or "auto")
-    if player_client and player_client != "auto":
-        from ytget_gui.utils.validators import is_youtube_url
-
-        if is_youtube_url(url):
-            cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
+    if player_client and player_client != "auto" and is_youtube_url(url):
+        cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
 
     # User args last so they can override anything above.
     cmd.extend(parse_extra_args(getattr(settings, "EXTRA_YTDLP_ARGS", "")))
@@ -286,6 +284,23 @@ def run_yt_dlp(
 # --------------------------------------------------------------------------
 
 
+def _looks_like_playlist(info: Dict[str, Any]) -> bool:
+    """Decide whether one yt-dlp info dict describes a playlist.
+
+    Every test is on truthiness, never key presence. yt-dlp sets `playlist`,
+    `playlist_index`, `playlist_title` and friends to None on a standalone
+    video, so `"playlist_index" in info` is True for every ordinary watch URL
+    -- which is why single videos were being labelled as playlists.
+    """
+    if str(info.get("_type") or "") in ("playlist", "multi_video"):
+        return True
+    if info.get("entries"):
+        return True
+    if info.get("n_entries"):
+        return True
+    return bool(info.get("playlist_index")) or bool(info.get("playlist_title"))
+
+
 def _best_thumbnail(info: Dict[str, Any]) -> str:
     direct = info.get("thumbnail")
     if direct:
@@ -328,18 +343,16 @@ def parse_metadata(stdout_text: str) -> Metadata:
     if not infos:
         raise MetadataError("Could not parse yt-dlp metadata (no JSON objects)")
 
-    is_playlist = any(
-        ("entries" in info) or ("playlist_index" in info) or info.get("playlist_title")
-        for info in infos
-    )
+    is_playlist = any(_looks_like_playlist(info) for info in infos)
+
     playlist_title = next(
-        (info.get("playlist_title") for info in infos if info.get("playlist_title")),
+        (str(info["playlist_title"]) for info in infos if info.get("playlist_title")),
         None,
     )
 
     head = infos[0]
     title = (
-        str(playlist_title)
+        playlist_title
         if (is_playlist and playlist_title)
         else str(head.get("title") or "Unknown Title")
     )
@@ -348,7 +361,14 @@ def parse_metadata(stdout_text: str) -> Metadata:
     entries = head.get("entries")
     if isinstance(entries, list):
         entry_count = len(entries)
+    elif head.get("n_entries"):
+        try:
+            entry_count = int(head["n_entries"])
+        except (TypeError, ValueError):
+            entry_count = None
     elif is_playlist and len(infos) > 1:
+        # --flat-playlist prints one JSON object per entry, so the object count
+        # is the entry count when no explicit total was given.
         entry_count = len(infos)
 
     duration = head.get("duration")
@@ -382,17 +402,15 @@ def fetch_metadata(
     on_process_started: Optional[Callable[[subprocess.Popen], None]] = None,
     cancel_event: Optional[threading.Event] = None,
 ) -> FetchResult:
-    """Synchronous metadata fetch. Emits no Qt signals.
-
-    Spotify URLs are not handled here; check validators.is_spotify_url first.
-    """
+    """Synchronous metadata fetch. Emits no Qt signals."""
     if is_spotify_url(url):
+        lowered = (url or "").lower()
         return FetchResult(
             metadata=Metadata(
                 title=spotify_placeholder_title(url),
                 video_id="",
                 thumb_url="",
-                is_playlist="/playlist/" in url or "/album/" in url,
+                is_playlist=any(kind in lowered for kind in _SPOTIFY_MULTI),
             ),
             error=None,
             cookies_path=cookies_path,
@@ -411,7 +429,8 @@ def fetch_metadata(
     if not Path(yt_dlp_path).is_file():
         return FetchResult(
             None,
-            f"yt-dlp not found at {yt_dlp_path}. Install it via Help > Check for Updates.",
+            f"yt-dlp not found at {yt_dlp_path}. "
+            "Install it via Help \u203a Check for Updates.",
             cookies_path,
             warning,
         )
@@ -429,7 +448,9 @@ def fetch_metadata(
 
     try:
         returncode, stdout, stderr = run_yt_dlp(
-            cmd, build_env(settings), timeout=timeout,
+            cmd,
+            build_env(settings),
+            timeout=timeout,
             on_process_started=on_process_started,
         )
     except subprocess.TimeoutExpired:
