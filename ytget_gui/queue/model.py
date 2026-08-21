@@ -60,6 +60,8 @@ class QueueItem:
     queue_attempts: int = 0
     last_error: str = ""
     added_at: float = field(default_factory=time.time)
+    output_path: str = ""
+    output_count: int = 0
 
     @property
     def display_title(self) -> str:
@@ -72,6 +74,25 @@ class QueueItem:
     @property
     def is_runnable(self) -> bool:
         return not self.is_terminal
+
+    @property
+    def has_output(self) -> bool:
+        """True when a recorded output file still exists on disk.
+
+        Checked live rather than cached: the file may have been moved or
+        deleted at any point since the download finished.
+        """
+        if not self.output_path:
+            return False
+        try:
+            return Path(self.output_path).is_file()
+        except OSError:
+            return False
+
+    @property
+    def output_missing(self) -> bool:
+        """A path was recorded, but the file is no longer there."""
+        return bool(self.output_path) and not self.has_output
 
     def reset_for_retry(self) -> None:
         self.status = Status.PENDING
@@ -95,6 +116,8 @@ class QueueItem:
             "queue_attempts": self.queue_attempts,
             "last_error": self.last_error,
             "added_at": self.added_at,
+            "output_path": self.output_path,
+            "output_count": self.output_count,
         }
 
     @classmethod
@@ -132,6 +155,8 @@ class QueueItem:
             queue_attempts=as_int(data.get("queue_attempts")),
             last_error=str(data.get("last_error") or ""),
             added_at=float(data.get("added_at") or time.time()),
+            output_path=str(data.get("output_path") or ""),
+            output_count=as_int(data.get("output_count")),
         )
 
 
