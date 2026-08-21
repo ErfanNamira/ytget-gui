@@ -63,7 +63,7 @@
 
 ---
 ## 🆚 Updated Dependencies
-- **yt-dlp:** `2026.07.04`
+- **yt-dlp:** `2026.08.19`
 - **ffmpeg:** `9.0.1`  
 - **deno:**  `2.9.5`
 - **SpotDL (Windows only):**  `4.5.2 - hotfix`
