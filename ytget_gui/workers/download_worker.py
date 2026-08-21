@@ -9,6 +9,7 @@ regex-scraping the human-readable progress bar.
 from __future__ import annotations
 
 import codecs
+import glob
 import logging
 import os
 import re
@@ -50,6 +51,18 @@ _PROGRESS_RE = re.compile(
 )
 # Fallback for yt-dlp builds that do not honour the template keys.
 _LEGACY_PERCENT_RE = re.compile(r"\[download\]\s+([\d.]+)%")
+
+# yt-dlp's own progress markers, in the order it emits them. Each match
+# supersedes the previous one, so the last hit is the final resting place of
+# the file: Destination -> Merger -> ExtractAudio -> Remux -> MoveFiles.
+_OUTPUT_PATTERNS = (
+    re.compile(r"^\[download\]\s+Destination:\s*(?P<path>.+?)\s*$"),
+    re.compile(r"^\[download\]\s+(?P<path>.+?)\s+has already been downloaded"),
+    re.compile(r'^\[Merger\]\s+Merging formats into\s+"(?P<path>.+?)"'),
+    re.compile(r"^\[ExtractAudio\]\s+Destination:\s*(?P<path>.+?)\s*$"),
+    re.compile(r'^\[(?:VideoRemuxer|VideoConvertor)\][^"]*into\s+"(?P<path>.+?)"'),
+    re.compile(r'^\[MoveFiles\]\s+Moving file\s+".+?"\s+to\s+"(?P<path>.+?)"'),
+)
 
 _FATAL_RE = re.compile(
     r"(Video unavailable"
@@ -149,6 +162,7 @@ class DownloadWorker(BaseDownloadWorker):
 
         self._flat_playlist_dir: Optional[Path] = None
         self._is_audio = False
+        self._outputs: List[str] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -314,6 +328,7 @@ class DownloadWorker(BaseDownloadWorker):
         stripped = line.strip()
         if not stripped:
             return
+        self._capture_output(stripped)
         lowered = stripped.lower()
         if "error" in lowered:
             colour = AppStyles.ERROR_COLOR
@@ -322,6 +337,56 @@ class DownloadWorker(BaseDownloadWorker):
         else:
             colour = AppStyles.TEXT_COLOR
         self.add_log(stripped, colour)
+
+    def _capture_output(self, line: str) -> None:
+        """Record the produced file, so the queue card can open it later."""
+        for pattern in _OUTPUT_PATTERNS:
+            match = pattern.match(line)
+            if match is None:
+                continue
+            candidate = (match.group("path") or "").strip().strip('"')
+            if not candidate:
+                return
+            # Intermediate streams (.f251.webm) and fragments are superseded by
+            # a later marker; keeping them all lets the last one win.
+            if candidate not in self._outputs:
+                self._outputs.append(candidate)
+            return
+
+    def _resolve_output(self) -> Optional[Path]:
+        """Best guess at the final file, verified against the filesystem.
+
+        Later markers win, but a marker can name an intermediate that
+        postprocessing has since removed, so unwind to the newest path that
+        actually exists.
+        """
+        for candidate in reversed(self._outputs):
+            try:
+                path = Path(candidate)
+                if path.is_file():
+                    return path
+            except OSError:
+                continue
+
+        # Every recorded path is gone: postprocessing changed the extension
+        # without announcing it, or the cleanup pass renamed the file. Match on
+        # the stem within the same folder.
+        for candidate in reversed(self._outputs):
+            try:
+                stub = Path(candidate)
+                folder = stub.parent
+                if not folder.is_dir():
+                    continue
+                matches = sorted(
+                    (p for p in folder.glob(f"{glob.escape(stub.stem)}.*") if p.is_file()),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if matches:
+                    return matches[0]
+            except OSError:
+                continue
+        return None
 
     # ------------------------------------------------------------------
     # Completion
@@ -374,6 +439,14 @@ class DownloadWorker(BaseDownloadWorker):
                 self.add_log(
                     f"\u2728 Cleaned {renamed} filename(s).", AppStyles.SUCCESS_COLOR
                 )
+
+        final = self._resolve_output()
+        if final is not None:
+            self.emit_output(str(final), len(self._outputs))
+        elif self._flat_playlist_dir is not None and self._flat_playlist_dir.is_dir():
+            # A flat playlist produces many files; the folder is the useful
+            # thing to open.
+            self.emit_output(str(self._flat_playlist_dir), len(self._outputs))
 
         self.emit_finished(0)
 
@@ -940,6 +1013,13 @@ class DownloadWorker(BaseDownloadWorker):
                 continue
 
             renamed += 1
+            # Keep the recorded output in step with the rename, or Play opens a
+            # path that no longer exists.
+            self._outputs = [
+                str(target) if Path(p) == path else p for p in self._outputs
+            ]
+            if str(target) not in self._outputs:
+                self._outputs.append(str(target))
             self.add_log(
                 f"\U0001f9f9 Renamed: {short(path.name, 60)} \u2192 {short(target.name, 60)}",
                 AppStyles.INFO_COLOR,
