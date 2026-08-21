@@ -1,33 +1,84 @@
 # File: ytget_gui/dialogs/preferences.py
+"""Preferences dialog.
+
+Every field is registered once as a Binding that knows how to read and write
+itself. The previous revision listed each setting in four places -- the widget
+construction, _load_from_settings, _apply_snapshot and get_settings -- so
+omitting one produced a preference that looked editable but silently reverted,
+which is exactly how PREFER_HLS, AUTO_RETRY_COUNT and QUEUE_ERROR_RETRIES ended
+up unreachable from the UI at all.
+"""
 
 from __future__ import annotations
 
 import datetime
+import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from PySide6 import QtCore, QtGui, QtWidgets
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import (
+    QCalendarWidget,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QSpinBox,
+    QSplitter,
+    QStackedWidget,
+    QStyle,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+)
 
-from ytget_gui.styles import AppStyles
-from ytget_gui.settings import AppSettings, FILENAME_FORMAT_PRESETS, YOUTUBE_PLAYER_CLIENTS
-from ytget_gui.dialogs.advanced import UISwitch
-from ytget_gui.workers import cookies as CookieManager
+from ytget_gui.dialogs import common as ui
 from ytget_gui.dialogs.spotdl_preferences_tab import SpotDLPreferencesTab
+from ytget_gui.settings import (
+    BROWSERS,
+    FILENAME_FORMAT_PRESETS,
+    THUMBNAIL_FORMATS,
+    VIDEO_CONTAINERS,
+    YOUTUBE_PLAYER_CLIENTS,
+    AppSettings,
+)
+from ytget_gui.utils.validators import (
+    is_valid_dateafter,
+    is_valid_proxy,
+    is_valid_playlist_items,
+    is_valid_rate_limit,
+    is_valid_sub_langs,
+)
+from ytget_gui.widgets.ui_switch import UISwitch
+from ytget_gui.workers import cookies as cookie_manager
 
-_SPONSORBLOCK_CATEGORIES = {
-    "Sponsor": "sponsor",
-    "Intro": "intro",
-    "Outro": "outro",
-    "Self Promotion": "selfpromo",
-    "Interaction Reminder": "interaction",
-    "Music Non-Music": "music_offtopic",
-    "Preview/Recap": "preview",
-    "Filler": "filler",
-}
+log = logging.getLogger(__name__)
 
-_FILENAME_FORMAT_ITEMS: List[Tuple[str, str]] = [
+SPONSORBLOCK_CATEGORIES: Tuple[Tuple[str, str], ...] = (
+    ("Sponsor", "sponsor"),
+    ("Intro", "intro"),
+    ("Outro", "outro"),
+    ("Self Promotion", "selfpromo"),
+    ("Interaction Reminder", "interaction"),
+    ("Non-Music", "music_offtopic"),
+    ("Preview / Recap", "preview"),
+    ("Filler", "filler"),
+)
+
+FILENAME_CHOICES: Tuple[Tuple[str, str], ...] = (
     ("Default", "default"),
     ("Title only", "title_only"),
     ("Artist - Title", "artist_title"),
@@ -40,2138 +91,1236 @@ _FILENAME_FORMAT_ITEMS: List[Tuple[str, str]] = [
     ("Channel - Title", "channel_title"),
     ("Upload Date - Title", "date_title"),
     ("Video/Track ID - Title", "id_title"),
-    ("Custom Template", "custom"),
-]
-
-assert all(
-    v in ("default", "custom") or v in FILENAME_FORMAT_PRESETS
-    for _lbl, v in _FILENAME_FORMAT_ITEMS
+    ("Custom template\u2026", "custom"),
 )
 
-_ALLOWED_TEMPLATE_FIELDS = {
-    "title", "artist", "creator", "uploader", "uploader_id", "channel", "channel_id",
-    "album", "album_artist", "track", "track_number", "track_id", "disc_number",
-    "genre", "release_year", "release_date", "upload_date", "playlist_title",
-    "playlist_index", "playlist_id", "id", "ext", "duration", "duration_string",
-    "view_count", "like_count", "repost_count", "comment_count", "resolution",
-    "height", "width", "fps", "vcodec", "acodec", "format_id", "extractor",
-    "extractor_key", "language", "season_number", "episode_number", "autonumber",
-    "abr", "vbr", "tbr", "epoch",
-}
+assert all(
+    value in ("default", "custom") or value in FILENAME_FORMAT_PRESETS
+    for _label, value in FILENAME_CHOICES
+), "FILENAME_CHOICES references a preset that does not exist"
 
-# One %(field[,field2,...][|default])s / d / f placeholder, e.g.:
-#   %(title)s   %(autonumber)03d   %(artist,uploader)s   %(album|Unknown)s
-_TEMPLATE_PLACEHOLDER_RE = re.compile(
+CHAPTER_CHOICES: Tuple[Tuple[str, str], ...] = (
+    ("Ignore chapters", "none"),
+    ("Embed chapters in the file", "embed"),
+    ("Split into one file per chapter", "split"),
+)
+
+ALLOWED_TEMPLATE_FIELDS = frozenset(
+    {
+        "title", "artist", "creator", "uploader", "uploader_id", "channel",
+        "channel_id", "album", "album_artist", "track", "track_number",
+        "track_id", "disc_number", "genre", "release_year", "release_date",
+        "upload_date", "playlist_title", "playlist_index", "playlist_id", "id",
+        "ext", "duration", "duration_string", "view_count", "like_count",
+        "repost_count", "comment_count", "resolution", "height", "width", "fps",
+        "vcodec", "acodec", "format_id", "extractor", "extractor_key",
+        "language", "season_number", "episode_number", "autonumber", "abr",
+        "vbr", "tbr", "epoch",
+    }
+)
+
+# One %(field[,alt][|default])s / d / f placeholder.
+_PLACEHOLDER_RE = re.compile(
     r"%\((?P<fields>[a-zA-Z_][a-zA-Z0-9_]*(?:,[a-zA-Z_][a-zA-Z0-9_]*)*)"
     r"(?:\|[^)%]*)?\)(?P<conv>[-+ #0]*\d*(?:\.\d+)?[sdf])"
 )
-
-# Characters that can never appear outside a placeholder: filesystem-illegal
-# characters plus path separators (this is a filename stub, not a full path).
-_TEMPLATE_ILLEGAL_LITERAL_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
-
-# Field validators, compiled once and shared across all dialog instances
-# (previously recompiled every time PreferencesDialog was constructed).
-_RX_RATE = QtCore.QRegularExpression(r"^\s*$|^\d+(\.\d+)?\s*[KkMmGg]$")
-_RX_LANGS = QtCore.QRegularExpression(r"^\s*$|^\s*[A-Za-z]{2,3}(\s*,\s*[A-Za-z]{2,3})*\s*$")
-_RX_ITEMS = QtCore.QRegularExpression(r"^\s*$|^\s*\d+(\s*-\s*\d+)?(\s*,\s*\d+(\s*-\s*\d+)?)*\s*$")
-_RX_DATE = QtCore.QRegularExpression(r"^\s*$|^\d{8}$")
+# Illegal outside a placeholder: this is a filename stub, not a path.
+_ILLEGAL_LITERAL_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
-class PreferencesDialog(QtWidgets.QDialog):
+@dataclass(frozen=True)
+class Binding:
+    """Links a settings key to the widget that edits it."""
 
-    MIN_WIDE_LAYOUT = 900
-    _FILENAME_FORMAT_ITEMS = _FILENAME_FORMAT_ITEMS
+    key: str
+    widget: QWidget
+    get: Callable[[], Any]
+    set: Callable[[Any], None]
 
-    def __init__(self, parent: Optional[QtWidgets.QWidget], settings: AppSettings):
+
+class PreferencesDialog(QDialog):
+    NARROW_WIDTH = 900
+
+    def __init__(self, parent: Optional[QWidget], settings: AppSettings) -> None:
         super().__init__(parent)
         self.settings = settings
 
         self.setWindowTitle("Preferences")
         self.setModal(True)
-        self.setMinimumSize(980, 660)
+        self.setMinimumSize(980, 680)
         self.setSizeGripEnabled(True)
+        self.setStyleSheet(ui.dialog_qss())
 
-        # State
-        self._initial_snapshot: dict = {}
+        self._bindings: List[Binding] = []
+        self._labels: List[QLabel] = []
+        self._sponsor_checks: Dict[str, QCheckBox] = {}
+        self._chapter_radios: Dict[str, QRadioButton] = {}
+        self._sponsor_grid: Optional[QGridLayout] = None
+        self._sponsor_columns = 0
+        self._snapshot: Dict[str, Any] = {}
         self._dirty = False
-        self._base_tips: Dict[QtWidgets.QWidget, str] = {}
-        self._filters_installed = False
-        self._validation_actions: Dict[QtWidgets.QLineEdit, QtGui.QAction] = {}
 
-        # SponsorBlock layout helpers
-        self._sb_gridw: Optional[QtWidgets.QWidget] = None
-        self._sb_grid: Optional[QtWidgets.QGridLayout] = None
-        self._sb_ordered_cbs: List[QtWidgets.QCheckBox] = []
-
-        # Global alignment helpers
-        self._label_refs: List[QtWidgets.QLabel] = []
-        self._label_col_width: int = 0
-
-        # Build UI and styles
-        self._build_ui()
-        self._apply_styles()
-
-        # Data and behavior
+        self._build_shell()
         self._build_pages()
-        self._finalize_label_column()
-        self._load_from_settings()
-        self._wire_validation()
-        self._wire_dirty_tracking()
-        self._validate_all()
+        self._align_labels()
+        self._load()
+        self._wire()
+        self._validate()
         self._set_dirty(False)
-        self._update_responsive_layout()
-        self._focus_first_in_current_page()
+        self._update_responsive()
 
-        # Keyboard navigation
-        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Tab"), self, activated=self._nav_next)
-        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Shift+Tab"), self, activated=self._nav_prev)
-        QtGui.QShortcut(QtGui.QKeySequence.MoveToNextPage, self, activated=self._nav_next)
-        QtGui.QShortcut(QtGui.QKeySequence.MoveToPreviousPage, self, activated=self._nav_prev)
+    # ==================================================================
+    # Shell
+    # ==================================================================
 
-    # ---------- UI scaffold ----------
-    def _build_ui(self) -> None:
-        root = QtWidgets.QVBoxLayout(self)
+    def _build_shell(self) -> None:
+        root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
 
-        # Header (brand + subtitle)
-        header = QtWidgets.QWidget(self)
-        header.setObjectName("header")
-        hb = QtWidgets.QHBoxLayout(header)
-        hb.setContentsMargins(0, 0, 0, 0)
-        hb.setSpacing(12)
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        badge = QLabel("\u2699")
+        badge.setObjectName("brandIcon")
+        badge.setFixedSize(40, 40)
+        badge.setAlignment(Qt.AlignCenter)
 
-        # Brand icon (gradient badge)
-        brand_ic = QtWidgets.QLabel("⚙")
-        brand_ic.setObjectName("brandIcon")
-        brand_ic.setFixedSize(40, 40)
-        brand_ic.setAlignment(QtCore.Qt.AlignCenter)
-
-        title_box = QtWidgets.QVBoxLayout()
-        title_box.setContentsMargins(0, 0, 0, 0)
-        title_box.setSpacing(2)
-
-        title = QtWidgets.QLabel("Preferences")
+        titles = QVBoxLayout()
+        titles.setContentsMargins(0, 0, 0, 0)
+        titles.setSpacing(2)
+        title = QLabel("Preferences")
         title.setObjectName("dlgTitle")
-        title.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-
-        subtitle = QtWidgets.QLabel("Configure network, output, and processing. Changes affect new downloads.")
+        subtitle = QLabel(
+            "Network, output and processing options. Changes apply to new downloads."
+        )
         subtitle.setObjectName("dlgSubtitle")
-        subtitle.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        titles.addWidget(title)
+        titles.addWidget(subtitle)
 
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
+        header.addWidget(badge, 0, Qt.AlignVCenter)
+        header.addLayout(titles, 1)
+        root.addLayout(header)
+        root.addWidget(ui.divider())
 
-        hb.addWidget(brand_ic, 0, QtCore.Qt.AlignVCenter)
-        hb.addLayout(title_box, 1)
-        root.addWidget(header)
-        root.addWidget(self._divider())
-
-        # Section picker for narrow layouts
-        top_nav_row = QtWidgets.QWidget(self)
-        tn = QtWidgets.QHBoxLayout(top_nav_row)
-        tn.setContentsMargins(0, 0, 0, 0)
-        tn.setSpacing(8)
-        self.section_combo = QtWidgets.QComboBox()
-        self.section_combo.setObjectName("sectionCombo")
+        self.section_combo = QComboBox()
+        self.section_combo.setObjectName("combo")
         self.section_combo.setVisible(False)
-        tn.addWidget(self.section_combo, 1)
-        root.addWidget(top_nav_row)
+        self.section_combo.setAccessibleName("Preferences section")
+        root.addWidget(self.section_combo)
 
-        # Body: sidebar + stack
-        body = QtWidgets.QSplitter(self)
-        body.setObjectName("contentSplitter")
-        body.setOrientation(QtCore.Qt.Horizontal)
+        body = QSplitter(Qt.Horizontal, self)
         body.setChildrenCollapsible(False)
-        root.addWidget(body, 1)
-
-        self.sidebar = QtWidgets.QListWidget()
+        self.sidebar = QListWidget()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setIconSize(QtCore.QSize(18, 18))
+        self.sidebar.setIconSize(QSize(18, 18))
         self.sidebar.setUniformItemSizes(True)
-        self.sidebar.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.sidebar.setSpacing(2)
-        self.sidebar.setFixedWidth(252)
-        self.sidebar.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.sidebar.setFixedWidth(240)
+        self.sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.sidebar.setAccessibleName("Preferences sections")
-        self.sidebar.setAccessibleDescription("Select a section to adjust preferences")
 
-        self.stack = QtWidgets.QStackedWidget()
-        self.stack.setObjectName("stack")
+        self.stack = QStackedWidget()
         body.addWidget(self.sidebar)
         body.addWidget(self.stack)
         body.setStretchFactor(0, 0)
         body.setStretchFactor(1, 1)
+        root.addWidget(body, 1)
 
-        root.addWidget(self._divider())
+        root.addWidget(ui.divider())
 
-        # Footer with status and actions
-        footer = QtWidgets.QWidget(self)
-        footer.setObjectName("footer")
-        fl = QtWidgets.QHBoxLayout(footer)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(6)
-
-        self.status_lbl = QtWidgets.QLabel("All changes saved")
-        self.status_lbl.setObjectName("status")
-        self.status_lbl.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-
-        self.buttons = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel
+        footer = QHBoxLayout()
+        footer.setSpacing(6)
+        self.status_label = QLabel()
+        self.status_label.setObjectName("status")
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel
         )
-        self.buttons.setObjectName("footerButtons")
-        self.reset_btn = self.buttons.addButton("Reset", QtWidgets.QDialogButtonBox.ResetRole)
-        self.reset_btn.hide()
-        self.reset_btn.setToolTip("Revert all changes to the last saved values (Ctrl+R)")
-        self.reset_btn.setShortcut(QtGui.QKeySequence("Ctrl+R"))
+        self.reset_button = self.buttons.addButton("Reset", QDialogButtonBox.ResetRole)
+        self.reset_button.setToolTip("Revert to the last saved values (Ctrl+R)")
+        self.reset_button.setShortcut(QKeySequence("Ctrl+R"))
+        footer.addWidget(self.status_label, 1, Qt.AlignVCenter)
+        footer.addWidget(self.buttons, 0, Qt.AlignRight)
+        root.addLayout(footer)
 
-        fl.addWidget(self.status_lbl, 1, QtCore.Qt.AlignVCenter)
-        fl.addWidget(self.buttons, 0, QtCore.Qt.AlignRight)
-        root.addWidget(footer)
-
-        # Signals
-        self.buttons.accepted.connect(self._on_accept)
-        self.buttons.rejected.connect(self._on_reject)
-        self.reset_btn.clicked.connect(self._on_reset)
+        self.buttons.accepted.connect(self._accept)
+        self.buttons.rejected.connect(self._reject)
+        self.reset_button.clicked.connect(self._reset)
         self.sidebar.currentRowChanged.connect(self.stack.setCurrentIndex)
         self.section_combo.currentIndexChanged.connect(self.stack.setCurrentIndex)
-        self.stack.currentChanged.connect(self._sync_nav_selection)
-        self.stack.currentChanged.connect(lambda _: self._focus_first_in_current_page())
+        self.stack.currentChanged.connect(self._sync_navigation)
 
-        # Shortcuts
-        QtGui.QShortcut(QtGui.QKeySequence.Save, self, activated=self._on_accept)
-        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Enter"), self, activated=self._on_accept)
-        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Return"), self, activated=self._on_accept)
+        QShortcut(QKeySequence.Save, self, activated=self._accept)
+        QShortcut(QKeySequence("Ctrl+Return"), self, activated=self._accept)
+        QShortcut(QKeySequence("Ctrl+Tab"), self, activated=lambda: self._step(1))
+        QShortcut(QKeySequence("Ctrl+Shift+Tab"), self, activated=lambda: self._step(-1))
 
-    # ---------- Page registry ----------
-    def _wrap_scroll(self, content: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
-        sa = QtWidgets.QScrollArea()
-        sa.setObjectName("scrollArea")
-        sa.setFrameShape(QtWidgets.QFrame.NoFrame)
-        sa.setWidgetResizable(True)
-        sa.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        vp = QtWidgets.QWidget()
-        v = QtWidgets.QVBoxLayout(vp)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(8)
-        v.addWidget(content)
-        v.addStretch(1)
-        sa.setWidget(vp)
-        return sa
-
-    def _add_card_elevation(self, card: QtWidgets.QFrame) -> None:
-        eff = QtWidgets.QGraphicsDropShadowEffect(card)
-        eff.setBlurRadius(18)
-        eff.setColor(QtGui.QColor(0, 0, 0, 60))
-        eff.setOffset(0, 6)
-        card.setGraphicsEffect(eff)
-
-    def _add_page(self, name: str, icon: QtGui.QIcon, content: QtWidgets.QWidget):
-        item = QtWidgets.QListWidgetItem(icon, name)
-        item.setSizeHint(QtCore.QSize(item.sizeHint().width(), 34))
+    def _add_page(self, name: str, icon_enum, content: QWidget, *, scroll: bool = True) -> None:
+        icon = self.style().standardIcon(icon_enum)
+        item = QListWidgetItem(icon, name)
+        item.setSizeHint(QSize(item.sizeHint().width(), 34))
         self.sidebar.addItem(item)
-
-        # Wrap content in a scroll area
-        sa = self._wrap_scroll(content)
-        self.stack.addWidget(sa)
-
-        # Section combo
+        self.stack.addWidget(ui.wrap_scroll(content) if scroll else content)
         self.section_combo.addItem(icon, name)
 
-        # Track for external reference if needed
-        if not hasattr(self, "_pages"):
-            self._pages = {}
-        self._pages[name] = content
+    def _register(
+        self, key: str, widget: QWidget, get: Callable[[], Any], setter: Callable[[Any], None]
+    ) -> QWidget:
+        self._bindings.append(Binding(key, widget, get, setter))
+        return widget
+
+    def _bind_text(self, key: str, widget: QLineEdit) -> QLineEdit:
+        return self._register(
+            key, widget, lambda w=widget: w.text().strip(),
+            lambda v, w=widget: w.setText("" if v is None else str(v)),
+        )
+
+    def _bind_switch(self, key: str, widget: UISwitch) -> UISwitch:
+        return self._register(
+            key, widget, widget.isChecked, lambda v, w=widget: w.setChecked(bool(v))
+        )
+
+    def _bind_check(self, key: str, widget: QCheckBox) -> QCheckBox:
+        return self._register(
+            key, widget, widget.isChecked, lambda v, w=widget: w.setChecked(bool(v))
+        )
+
+    def _bind_spin(self, key: str, widget: QSpinBox) -> QSpinBox:
+        return self._register(
+            key, widget, widget.value, lambda v, w=widget: w.setValue(int(v or 0))
+        )
+
+    def _bind_combo_text(self, key: str, widget: QComboBox) -> QComboBox:
+        return self._register(
+            key, widget, widget.currentText,
+            lambda v, w=widget: w.setCurrentText(str(v)),
+        )
+
+    def _bind_combo_mapped(
+        self, key: str, widget: QComboBox, pairs: Sequence[Tuple[str, str]], fallback: str
+    ) -> QComboBox:
+        """Combo whose display labels differ from the stored values."""
+        labels = [label for label, _ in pairs]
+        values = [value for _, value in pairs]
+
+        def getter() -> str:
+            index = widget.currentIndex()
+            return values[index] if 0 <= index < len(values) else fallback
+
+        def setter(value: Any) -> None:
+            try:
+                widget.setCurrentIndex(values.index(str(value)))
+            except ValueError:
+                widget.setCurrentIndex(values.index(fallback))
+
+        widget.clear()
+        widget.addItems(labels)
+        return self._register(key, widget, getter, setter)
+
+    # ==================================================================
+    # Pages
+    # ==================================================================
 
     def _build_pages(self) -> None:
-        style = self.style()
-        self._add_page("Network", style.standardIcon(QtWidgets.QStyle.SP_DriveNetIcon), self._page_network())
-        self._add_page("SponsorBlock", style.standardIcon(QtWidgets.QStyle.SP_DialogYesButton), self._page_sponsorblock())
-        self._add_page("Chapters", style.standardIcon(QtWidgets.QStyle.SP_FileDialogDetailedView), self._page_chapters())
-        self._add_page("Subtitles", style.standardIcon(QtWidgets.QStyle.SP_FileDialogInfoView), self._page_subtitles())
-        self._add_page("Playlist", style.standardIcon(QtWidgets.QStyle.SP_DirIcon), self._page_playlist())
-        self._add_page("Post-processing", style.standardIcon(QtWidgets.QStyle.SP_ToolBarHorizontalExtensionButton), self._page_post())
-        self._add_page("Output", style.standardIcon(QtWidgets.QStyle.SP_DialogOpenButton), self._page_output())
-        self._add_page("Experimental", style.standardIcon(QtWidgets.QStyle.SP_MessageBoxInformation), self._page_experimental())
+        icons = QStyle
+        self._add_page("Network", icons.SP_DriveNetIcon, self._page_network())
+        self._add_page("Cookies", icons.SP_DialogSaveButton, self._page_cookies())
+        self._add_page("SponsorBlock", icons.SP_DialogYesButton, self._page_sponsorblock())
+        self._add_page("Subtitles", icons.SP_FileDialogInfoView, self._page_subtitles())
+        self._add_page("Playlist", icons.SP_DirIcon, self._page_playlist())
+        self._add_page("Output", icons.SP_DialogOpenButton, self._page_output())
+        self._add_page("Processing", icons.SP_FileDialogDetailedView, self._page_processing())
+        self._add_page("Thumbnails", icons.SP_FileDialogContentsView, self._page_thumbnails())
+        self._add_page("Advanced", icons.SP_MessageBoxWarning, self._page_advanced())
 
-        # SpotDL page
-        spotdl_content = SpotDLPreferencesTab(self.settings.SPOTDL)
-        self.spotdl_tab = spotdl_content
-        item = QtWidgets.QListWidgetItem(
-            self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay), "Spotify"
-        )
-        item.setSizeHint(QtCore.QSize(item.sizeHint().width(), 34))
-        self.sidebar.addItem(item)
-        self.stack.addWidget(spotdl_content)   
-        self.section_combo.addItem(
-            self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay), "Spotify"
-        )
-        
+        self.spotdl_tab = SpotDLPreferencesTab(self.settings.SPOTDL)
+        self._add_page("Spotify", icons.SP_MediaPlay, self.spotdl_tab, scroll=False)
+
         self.sidebar.setCurrentRow(0)
         self.section_combo.setCurrentIndex(0)
 
-    # ---------- Layout primitives ----------
-    def _divider(self) -> QtWidgets.QFrame:
-        line = QtWidgets.QFrame()
-        line.setFrameShape(QtWidgets.QFrame.HLine)
-        line.setFrameShadow(QtWidgets.QFrame.Plain)
-        line.setObjectName("divider")
-        return line
+    @staticmethod
+    def _column(*rows: QWidget) -> QWidget:
+        holder = QWidget()
+        layout = QVBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        for row in rows:
+            layout.addWidget(row)
+        return holder
 
-    def _section_label(self, text: str) -> QtWidgets.QLabel:
-        lbl = QtWidgets.QLabel(text)
-        lbl.setObjectName("sectionLabel")
-        return lbl
-
-    def _card(self, *inner: QtWidgets.QWidget, title: Optional[str] = None, subtitle: Optional[str] = None) -> QtWidgets.QFrame:
-        card = QtWidgets.QFrame()
-        card.setObjectName("card")
-        v = QtWidgets.QVBoxLayout(card)
-        v.setContentsMargins(12, 10, 12, 10)
-        v.setSpacing(7)
-
-        if title:
-            head = QtWidgets.QWidget()
-            hl = QtWidgets.QVBoxLayout(head)
-            hl.setContentsMargins(0, 0, 0, 0)
-            hl.setSpacing(2)
-            tl = QtWidgets.QLabel(title)
-            tl.setObjectName("cardTitle")
-            hl.addWidget(tl)
-            if subtitle:
-                st = QtWidgets.QLabel(subtitle)
-                st.setObjectName("cardSubtitle")
-                st.setWordWrap(True)
-                hl.addWidget(st)
-            v.addWidget(head)
-
-        for w in inner:
-            v.addWidget(w)
-
-        self._add_card_elevation(card)
-        return card
-
-    def _tweak_toggle(self, w: QtWidgets.QWidget) -> None:
-        sp = w.sizePolicy()
-        sp.setHorizontalPolicy(QtWidgets.QSizePolicy.Fixed)
-        sp.setVerticalPolicy(QtWidgets.QSizePolicy.Fixed)
-        w.setSizePolicy(sp)
-        w.setMinimumHeight(24)
-        # If UISwitch exposes setText, ensure it's empty—label/description live outside
-        if hasattr(w, "setText"):
-            try:
-                w.setText("")
-            except Exception:
-                pass
-
-    def _form_row(self, label: str, widget: QtWidgets.QWidget, description: Optional[str] = None) -> QtWidgets.QWidget:
-        """
-        Consistent 3-column row:
-        [label][description/content stretch][control]
-        - Fields (line edit, combo, spin) span middle + right columns
-        - UISwitch toggles align in right column; optional description sits in middle column
-        - Checkboxes/radios (self-labeled) span middle + right columns; label column kept for alignment
-        """
-        row = QtWidgets.QWidget()
-        grid = QtWidgets.QGridLayout(row)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(5)
-
-        # Label column
-        l = QtWidgets.QLabel(label)
-        l.setObjectName("formLabel")
-        l.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self._label_refs.append(l)
-        grid.addWidget(l, 0, 0, 1, 1)
-
-        is_switch = isinstance(widget, UISwitch)
-        is_checkbox = isinstance(widget, QtWidgets.QCheckBox)
-        is_radio = isinstance(widget, QtWidgets.QRadioButton)
-        is_field = isinstance(widget, (QtWidgets.QLineEdit, QtWidgets.QComboBox, QtWidgets.QSpinBox))
-
-        # Middle column content
-        if description and (is_switch or (label and (is_checkbox or is_radio))):
-            desc_lbl = QtWidgets.QLabel(description)
-            desc_lbl.setObjectName("formDescription")
-            desc_lbl.setWordWrap(True)
-            desc_lbl.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
-            desc_lbl.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
-            grid.addWidget(desc_lbl, 0, 1, 1, 1)
-        else:
-            spacer = QtWidgets.QWidget()
-            spacer.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
-            grid.addWidget(spacer, 0, 1, 1, 1)
-
-        # Right/content placement
-        if is_switch:
-            self._tweak_toggle(widget)
-            grid.addWidget(widget, 0, 2, 1, 1, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        elif is_field:
-            sp = widget.sizePolicy()
-            sp.setHorizontalPolicy(QtWidgets.QSizePolicy.Expanding)
-            widget.setSizePolicy(sp)
-            if isinstance(widget, QtWidgets.QLineEdit):
-                widget.setMinimumHeight(36)
-                widget.setProperty("hasTrailingAdorner", True)
-            grid.addWidget(widget, 0, 1, 1, 2)
-        elif is_checkbox or is_radio:
-            # Self-labeled controls: occupy middle+right for clean alignment
-            sp = widget.sizePolicy()
-            sp.setHorizontalPolicy(QtWidgets.QSizePolicy.Fixed)
-            widget.setSizePolicy(sp)
-            grid.addWidget(widget, 0, 1, 1, 2, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        else:
-            # Fallback
-            grid.addWidget(widget, 0, 1, 1, 2)
-
-        grid.setColumnStretch(1, 1)
-        return row
-
-    def _line_edit(self, placeholder: str = "", tip: str = "", name: str = "input") -> QtWidgets.QLineEdit:
-        le = QtWidgets.QLineEdit()
-        le.setClearButtonEnabled(True)
-        le.setMinimumHeight(36)
-        if placeholder:
-            le.setPlaceholderText(placeholder)
-        if tip:
-            le.setToolTip(tip)
-            self._base_tips[le] = tip
-        le.setObjectName(name)
-        return le
-
-    def _picker_row(self, le: QtWidgets.QLineEdit, button_text: str, cb) -> QtWidgets.QWidget:
-        w = QtWidgets.QWidget()
-        h = QtWidgets.QHBoxLayout(w)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(6)
-        btn = QtWidgets.QPushButton(button_text)
-        btn.setMinimumHeight(36)
-        btn.clicked.connect(cb)
-        h.addWidget(le, 1)
-        h.addWidget(btn, 0)
-        return w
-
-    # ---------- Pages ----------
-    def _page_network(self) -> QtWidgets.QWidget:
-        page = QtWidgets.QWidget()
-        pv = QtWidgets.QVBoxLayout(page)
-        pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(8)
-
-        # Proxy + cookies card
-        proxy_form = QtWidgets.QWidget()
-        pf = QtWidgets.QVBoxLayout(proxy_form)
-        pf.setContentsMargins(0, 0, 0, 0)
-        pf.setSpacing(6)
-
-        self.proxy_input = self._line_edit(
-            placeholder="http://proxy:port, https://proxy:port, or socks5://proxy:port",
-            tip="Supported schemes: http, https, socks5",
-        )
-        self.proxy_input.setAccessibleName("Proxy URL")
-        self.proxy_input.setAccessibleDescription("Enter a proxy URL including scheme and port")
-        pf.addWidget(self._form_row("Proxy URL", self.proxy_input))
-
-        self.cookies_path_input = self._line_edit(tip="Path to exported cookies file (.txt or .json)")
-        self.cookies_path_input.setAccessibleName("Cookies file path")
-        self.cookies_path_input.setAccessibleDescription("Select a cookies file to use for authenticated requests")
-        cookies_row = self._picker_row(self.cookies_path_input, "Browse…", self._browse_cookies)
-        pf.addWidget(self._form_row("Cookies file", cookies_row))
-
-        self.cookies_browser_combo = QtWidgets.QComboBox()
-        self.cookies_browser_combo.setObjectName("combo")
-        self.cookies_browser_combo.addItems(["", "chrome", "chromium", "edge", "firefox", "opera", "brave", "vivaldi", "safari", "whale"])
-        self.cookies_browser_combo.setAccessibleName("Import cookies from browser")
-        self._base_tips[self.cookies_browser_combo] = "Import cookies directly from a supported browser profile"
-        pf.addWidget(self._form_row("Import from browser", self.cookies_browser_combo))
-
-        # Manual import row: browser selector + Import Now button
-        self.import_cookies_combo = QtWidgets.QComboBox()
-        self.import_cookies_combo.setObjectName("combo")
-        self.import_cookies_combo.addItems(["", "chrome", "chromium", "edge", "firefox", "opera", "brave", "vivaldi", "safari", "whale"])
-        self.import_cookies_combo.setAccessibleName("Browser for import")
-
-        self.import_cookies_btn = QtWidgets.QPushButton("Import YouTube cookies now")
-        self.import_cookies_btn.setMinimumHeight(36)
-        self.import_cookies_btn.clicked.connect(self._on_import_cookies)
-
-        imp_row = QtWidgets.QWidget()
-        imp_h = QtWidgets.QHBoxLayout(imp_row)
-        imp_h.setContentsMargins(0, 0, 0, 0)
-        imp_h.setSpacing(6)
-        imp_h.addWidget(self.import_cookies_combo, 1)
-        imp_h.addWidget(self.import_cookies_btn, 0)
-
-        pf.addWidget(self._form_row("Import cookies", imp_row, "Export fresh cookies from a local browser profile"))
-
-        self.cookies_auto_refresh = QtWidgets.QCheckBox("Refresh cookies before each download")
-        self.cookies_auto_refresh.setObjectName("check")
-        self.cookies_auto_refresh.setToolTip("Attempt to export fresh cookies from the selected browser before each download")
-        pf.addWidget(self._form_row("", self.cookies_auto_refresh))
-
-        self.ignore_ssl_errors = QtWidgets.QCheckBox("Ignore SSL certificate errors (unsafe)")
-        self.ignore_ssl_errors.setObjectName("check")
-        self.ignore_ssl_errors.setToolTip("Adds --no-check-certificates to yt-dlp. Use only if you trust your network.")
-        pf.addWidget(self._form_row("", self.ignore_ssl_errors))
-
-        self.custom_ca_cert_input = self._line_edit(
-            placeholder="Path to a self-signed CA cert (e.g. mycert.crt)",
-            tip="Trust this specific certificate instead of disabling verification entirely. "
-                "Used for local MITM/domain-fronting proxies (e.g. MITM-DomainFronting) where "
-                "you generated your own cert. Takes precedence over 'Ignore SSL certificate errors'.",
-        )
-        self.custom_ca_cert_input.setAccessibleName("Custom CA certificate path")
-        self.custom_ca_cert_input.setAccessibleDescription("Select a self-signed CA certificate to trust for MITM proxies")
-        ca_cert_row = self._picker_row(self.custom_ca_cert_input, "Browse…", self._browse_ca_cert)
-        pf.addWidget(self._form_row("Custom CA certificate", ca_cert_row))
-
-        self.cookies_last_label = QtWidgets.QLabel("")
-        self.cookies_last_label.setObjectName("formDescription")
-        pf.addWidget(self.cookies_last_label)
-
-        proxy_card = self._card(
-            proxy_form,
-            title="Network access",
-            subtitle="Route traffic via a proxy or provide cookies for authenticated sessions.",
-        )
-        pv.addWidget(proxy_card)
-
-        # Performance card
-        perf_form = QtWidgets.QWidget()
-        prf = QtWidgets.QVBoxLayout(perf_form)
-        prf.setContentsMargins(0, 0, 0, 0)
-        prf.setSpacing(6)
-
-        self.limit_rate_input = self._line_edit(
-            placeholder="e.g., 5M, 500K, 1G",
-            tip="Limit download speed (e.g., 5M, 500K, 1G). Leave empty for unlimited.",
-        )
-        self.limit_rate_input.setAccessibleName("Maximum download speed")
-        prf.addWidget(self._form_row("Max download speed", self.limit_rate_input))
-
-        self.retries_spin = QtWidgets.QSpinBox()
-        self.retries_spin.setRange(1, 100)
-        self.retries_spin.setMinimumHeight(36)
-        self.retries_spin.setObjectName("spin")
-        self.retries_spin.setAccessibleName("Retry attempts")
-        prf.addWidget(self._form_row("Retry attempts", self.retries_spin))
-
-        perf_card = self._card(
-            perf_form,
-            title="Performance",
-            subtitle="Throughput limits and retry behavior for unstable networks.",
-        )
-        pv.addWidget(perf_card)
-
-        self.cookies_browser_combo.currentTextChanged.connect(self._on_cookies_source_changed)
+    def _page(self, *cards: QWidget) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        for card in cards:
+            layout.addWidget(card)
+        layout.addStretch(1)
         return page
 
-    def _page_sponsorblock(self) -> QtWidgets.QWidget:
-        page = QtWidgets.QWidget()
-        pv = QtWidgets.QVBoxLayout(page)
-        pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(8)
+    def _row(self, label: str, widget: QWidget, description: str = "") -> QWidget:
+        return ui.form_row(label, widget, description, label_registry=self._labels)
 
-        self._sb_gridw = QtWidgets.QWidget()
-        self._sb_gridw.setObjectName("sbGridw")
-        self._sb_grid = QtWidgets.QGridLayout(self._sb_gridw)
-        self._sb_grid.setContentsMargins(0, 0, 0, 0)
-        self._sb_grid.setHorizontalSpacing(16)
-        self._sb_grid.setVerticalSpacing(5)
+    # -- Network -------------------------------------------------------
 
-        self.category_cb: Dict[str, QtWidgets.QCheckBox] = {}
-        items = list(_SPONSORBLOCK_CATEGORIES.items())
-
-        self._sb_ordered_cbs.clear()
-        for (label, code) in items:
-            cb = QtWidgets.QCheckBox(label)
-            cb.setObjectName("check")
-            sp = cb.sizePolicy()
-            sp.setHorizontalPolicy(QtWidgets.QSizePolicy.Fixed)
-            cb.setSizePolicy(sp)
-            cb.setAccessibleName(f"SponsorBlock category: {label}")
-            self.category_cb[code] = cb
-            self._sb_ordered_cbs.append(cb)
-
-        # Initial layout (will be reflowed responsively)
-        self._layout_sponsorblock(cols=2)
-
-        card = self._card(
-            self._sb_gridw,
-            title="SponsorBlock",
-            subtitle="Automatically skip selected categories while downloading.",
+    def _page_network(self) -> QWidget:
+        self.proxy_input = self._bind_text(
+            "PROXY_URL",
+            ui.line_edit(
+                "http://host:port, socks5://host:port",
+                "Supported schemes: http, https, socks4, socks5, socks5h",
+                "Proxy URL",
+            ),
         )
-        pv.addWidget(card)
-        return page
 
-    def _layout_sponsorblock(self, cols: int) -> None:
-        if not self._sb_grid or not self._sb_gridw or not self._sb_ordered_cbs:
+        self.ignore_ssl = self._bind_check(
+            "IGNORE_SSL_ERRORS",
+            ui.check(
+                "Ignore SSL certificate errors (unsafe)",
+                "Adds --no-check-certificates. Prefer a custom CA below.",
+            ),
+        )
+
+        self.ca_cert_input = self._bind_text(
+            "CUSTOM_CA_CERT",
+            ui.line_edit(
+                "Path to a CA certificate",
+                "Trust one certificate instead of disabling verification "
+                "entirely. Takes precedence over ignoring SSL errors.",
+                "Custom CA certificate",
+            ),
+        )
+        ca_row = ui.picker_row(self.ca_cert_input, "Browse\u2026", self._browse_ca)
+
+        network_card = ui.card(
+            self._column(
+                self._row("Proxy", self.proxy_input),
+                self._row("", self.ignore_ssl),
+                self._row("Custom CA", ca_row),
+            ),
+            title="Connection",
+            subtitle="Route traffic through a proxy and control TLS trust.",
+        )
+
+        self.limit_rate = self._bind_text(
+            "LIMIT_RATE",
+            ui.line_edit("e.g. 5M, 500K", "Leave empty for unlimited", "Speed limit"),
+        )
+        self.retries = self._bind_spin(
+            "RETRIES", ui.spin(1, 100, "Network retries")
+        )
+        self.auto_retry = self._bind_spin(
+            "AUTO_RETRY_COUNT", ui.spin(0, 20, "Automatic restarts")
+        )
+        self.queue_retries = self._bind_spin(
+            "QUEUE_ERROR_RETRIES", ui.spin(0, 20, "Queue retries")
+        )
+
+        performance_card = ui.card(
+            self._column(
+                self._row("Max speed", self.limit_rate),
+                self._row("Network retries", self.retries, ""),
+                self._row(
+                    "Restart attempts",
+                    self.auto_retry,
+                    "Re-run a download from scratch after a transient failure "
+                    "such as an expired link or HTTP 403. 0 disables.",
+                ),
+                self._row(
+                    "Queue retries",
+                    self.queue_retries,
+                    "Times a failed item returns to the back of the queue "
+                    "before it is marked as an error.",
+                ),
+            ),
+            title="Reliability",
+            subtitle="Retry behaviour for unstable networks and rate limits.",
+        )
+
+        return self._page(network_card, performance_card)
+
+    # -- Cookies -------------------------------------------------------
+
+    def _page_cookies(self) -> QWidget:
+        self.cookies_path = self._bind_text(
+            "COOKIES_PATH",
+            ui.line_edit("Path to cookies.txt", "Netscape-format cookie file", "Cookies file"),
+        )
+        cookies_row = ui.picker_row(self.cookies_path, "Browse\u2026", self._browse_cookies)
+
+        self.cookies_browser = self._bind_combo_text(
+            "COOKIES_FROM_BROWSER", ui.combo(BROWSERS, "Read cookies from browser")
+        )
+        self.cookies_auto = self._bind_switch(
+            "COOKIES_AUTO_REFRESH", ui.switch("Refresh cookies automatically")
+        )
+
+        self.import_button = QPushButton("Import cookies now")
+        self.import_button.setMinimumHeight(34)
+        self.import_button.clicked.connect(self._import_cookies)
+
+        self.cookies_status = QLabel()
+        self.cookies_status.setObjectName("formDescription")
+        self.cookies_status.setWordWrap(True)
+
+        return self._page(
+            ui.card(
+                self._column(
+                    self._row("Cookies file", cookies_row),
+                    self._row(
+                        "Read from browser",
+                        self.cookies_browser,
+                        "Takes precedence over the file above",
+                    ),
+                    self._row(
+                        "Auto refresh",
+                        self.cookies_auto,
+                        "Re-export before every download. Slower, but keeps "
+                        "long sessions from expiring mid-queue.",
+                    ),
+                    self._row("", self.import_button),
+                    self.cookies_status,
+                ),
+                title="Cookies",
+                subtitle="Needed for age-restricted, private and members-only content.",
+            )
+        )
+
+    # -- SponsorBlock --------------------------------------------------
+
+    def _page_sponsorblock(self) -> QWidget:
+        holder = QWidget()
+        self._sponsor_grid = QGridLayout(holder)
+        self._sponsor_grid.setContentsMargins(0, 0, 0, 0)
+        self._sponsor_grid.setHorizontalSpacing(16)
+        self._sponsor_grid.setVerticalSpacing(5)
+
+        for label, code in SPONSORBLOCK_CATEGORIES:
+            box = ui.check(label, f"Remove {label.lower()} segments")
+            self._sponsor_checks[code] = box
+
+        self._layout_sponsorblock(2)
+        self._sponsor_holder = holder
+
+        return self._page(
+            ui.card(
+                holder,
+                title="SponsorBlock",
+                subtitle="Cut the selected segments out while downloading. "
+                "Skipped for Shorts, which have no submissions.",
+            )
+        )
+
+    def _layout_sponsorblock(self, columns: int) -> None:
+        if self._sponsor_grid is None or columns == self._sponsor_columns:
             return
-        # Clear grid
-        while self._sb_grid.count():
-            it = self._sb_grid.takeAt(0)
-            w = it.widget()
-            if w:
-                w.setParent(self._sb_gridw)
-        # Re-add with new columns
-        for i, cb in enumerate(self._sb_ordered_cbs):
-            r, c = divmod(i, cols)
-            self._sb_grid.addWidget(cb, r, c)
+        self._sponsor_columns = columns
+        while self._sponsor_grid.count():
+            entry = self._sponsor_grid.takeAt(0)
+            widget = entry.widget()
+            if widget is not None:
+                widget.setParent(self._sponsor_holder)
+        for index, box in enumerate(self._sponsor_checks.values()):
+            row, column = divmod(index, columns)
+            self._sponsor_grid.addWidget(box, row, column)
 
-    def _page_chapters(self) -> QtWidgets.QWidget:
-        page = QtWidgets.QWidget()
-        pv = QtWidgets.QVBoxLayout(page)
-        pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(8)
+    # -- Subtitles -----------------------------------------------------
 
-        group = QtWidgets.QWidget()
-        gl = QtWidgets.QVBoxLayout(group)
-        gl.setContentsMargins(0, 0, 0, 0)
-        gl.setSpacing(6)
-
-        self.chapters_none = QtWidgets.QRadioButton("Don't use chapters")
-        self.chapters_embed = QtWidgets.QRadioButton("Embed chapters in file")
-        self.chapters_split = QtWidgets.QRadioButton("Split into files by chapters")
-
-        for rb in (self.chapters_none, self.chapters_embed, self.chapters_split):
-            rb.setObjectName("radio")
-            rb.setMinimumHeight(28)
-            sp = rb.sizePolicy()
-            sp.setHorizontalPolicy(QtWidgets.QSizePolicy.Fixed)
-            rb.setSizePolicy(sp)
-            gl.addWidget(rb)
-
-        card = self._card(group, title="Chapters", subtitle="Choose how to treat chapters when present.")
-        pv.addWidget(card)
-        return page
-
-    def _page_subtitles(self) -> QtWidgets.QWidget:
-        page = QtWidgets.QWidget()
-        pv = QtWidgets.QVBoxLayout(page)
-        pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(8)
-
-        form = QtWidgets.QWidget()
-        fl = QtWidgets.QVBoxLayout(form)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(6)
-
-        # UISwitch in right column, label+desc managed by form row
-        self.subtitles_enabled = UISwitch("")
-        self._tweak_toggle(self.subtitles_enabled)
-        self.subtitles_enabled.setAccessibleName("Enable subtitles")
-        fl.addWidget(self._form_row("Subtitles", self.subtitles_enabled, "Download subtitle tracks if available"))
-
-        self.languages_input = self._line_edit(
-            placeholder="en,es,fr",
-            tip="Comma-separated 2–3 letter language codes (e.g., en, es, fra)",
+    def _page_subtitles(self) -> QWidget:
+        self.subs_enabled = self._bind_switch("WRITE_SUBS", ui.switch("Download subtitles"))
+        self.sub_langs = self._bind_text(
+            "SUB_LANGS",
+            ui.line_edit("en,es,fr", "Two or three letter codes", "Subtitle languages"),
         )
-        self.languages_input.setAccessibleName("Subtitle languages")
-        fl.addWidget(self._form_row("Languages", self.languages_input))
-
-        self.auto_subs = QtWidgets.QCheckBox("Include auto-generated subtitles")
-        self.auto_subs.setObjectName("check")
-        self.auto_subs.setAccessibleName("Include auto-generated subtitles")
-        fl.addWidget(self._form_row("", self.auto_subs))
-
-        self.convert_subs = QtWidgets.QCheckBox("Convert subtitles to SRT")
-        self.convert_subs.setObjectName("check")
-        self.convert_subs.setAccessibleName("Convert subtitles to SRT")
-        fl.addWidget(self._form_row("", self.convert_subs))
-
-        card = self._card(form, title="Subtitles", subtitle="Fetch, convert, and include subtitles in your downloads.")
-        pv.addWidget(card)
-
-        self.subtitles_enabled.toggled.connect(self._on_subtitles_toggled)
-        return page
-
-    def _page_playlist(self) -> QtWidgets.QWidget:
-        page = QtWidgets.QWidget()
-        pv = QtWidgets.QVBoxLayout(page)
-        pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(8)
-
-        form = QtWidgets.QWidget()
-        fl = QtWidgets.QVBoxLayout(form)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(6)
-
-        self.enable_archive = UISwitch("")
-        self._tweak_toggle(self.enable_archive)
-        self.enable_archive.setAccessibleName("Enable download archive")
-        self.enable_archive.setEnabled(True)
-        fl.addWidget(self._form_row("Archive", self.enable_archive, "Track downloaded items to avoid duplicates"))
-
-        self.archive_path_input = self._line_edit(tip="Text file to track downloaded items (yt-dlp --download-archive)")
-        self.archive_path_input.setAccessibleName("Archive file path")
-        archive_row = self._picker_row(self.archive_path_input, "Browse…", self._browse_archive)
-        fl.addWidget(self._form_row("Archive file", archive_row))
-
-        self.playlist_reverse = UISwitch("")
-        self._tweak_toggle(self.playlist_reverse)
-        self.playlist_reverse.setAccessibleName("Reverse playlist order")
-        self.playlist_reverse.setEnabled(True)
-        fl.addWidget(self._form_row("Order", self.playlist_reverse, "Download items in reverse order"))
-
-        self.playlist_items = self._line_edit(
-            placeholder="e.g., 1,5-10,15",
-            tip="Comma-separated indices or ranges (e.g., 1,5-10,15)",
+        self.auto_subs = self._bind_check(
+            "WRITE_AUTO_SUBS", ui.check("Include auto-generated subtitles")
         )
-        self.playlist_items.setAccessibleName("Playlist items selection")
-        fl.addWidget(self._form_row("Items", self.playlist_items))
-
-        card = self._card(form, title="Playlist", subtitle="Control archive and ordering for multi-item downloads.")
-        pv.addWidget(card)
-
-        self.enable_archive.toggled.connect(lambda en: self.archive_path_input.setEnabled(en))
-        return page
-
-    def _page_post(self) -> QtWidgets.QWidget:
-        page = QtWidgets.QWidget()
-        pv = QtWidgets.QVBoxLayout(page)
-        pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(8)
-
-        form = QtWidgets.QWidget()
-        fl = QtWidgets.QVBoxLayout(form)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(6)
-
-        self.audio_normalize = UISwitch("")
-        self._tweak_toggle(self.audio_normalize)
-        self.audio_normalize.setAccessibleName("Normalize audio volume")
-        self.audio_normalize.setEnabled(True)
-        fl.addWidget(self._form_row("Audio Normalize", self.audio_normalize, "Adjust Volume to A Consistent Level"))
-
-        self.add_metadata = UISwitch("")
-        self._tweak_toggle(self.add_metadata)
-        self.add_metadata.setAccessibleName("Add metadata to files")
-        self.add_metadata.setEnabled(True)
-        fl.addWidget(self._form_row("Metadata", self.add_metadata, "Write Tags (Title, Artist, Album) Into Files"))
-
-        self.crop_covers = UISwitch("")
-        self._tweak_toggle(self.crop_covers)
-        self.crop_covers.setAccessibleName("Crop audio covers to square")
-        self.crop_covers.setEnabled(True)
-        fl.addWidget(self._form_row("Audio Covers", self.crop_covers, "Crop Artwork to A 1:1 Aspect Ratio"))
-        
-        self.video_format_combo = QtWidgets.QComboBox()
-        self.video_format_combo.setObjectName("combo")
-        self.video_format_combo.addItems([".mkv", ".mp4", ".webm"])
-        self.video_format_combo.setAccessibleName("Preferred video format")
-        fl.addWidget(self._form_row("Video Format", self.video_format_combo, "Choose Output Container"))
-
-        self.custom_ffmpeg = self._line_edit(
-            placeholder="-c:v libx265 -crf 23",
-            tip="Advanced FFmpeg args (optional)",
+        self.convert_subs = self._bind_check(
+            "CONVERT_SUBS_TO_SRT", ui.check("Convert subtitles to SRT")
         )
-        self.custom_ffmpeg.setAccessibleName("Custom FFmpeg arguments")
-        fl.addWidget(self._form_row("Custom FFmpeg args", self.custom_ffmpeg))
 
-        self.extra_ytdlp_args = self._line_edit(
-            placeholder="--sleep-interval 5 --max-sleep-interval 15",
-            tip="Extra raw yt-dlp CLI args, appended to every download (optional)",
-        )
-        self.extra_ytdlp_args.setAccessibleName("Extra yt-dlp arguments")
-        fl.addWidget(self._form_row("Extra yt-dlp Args", self.extra_ytdlp_args))
+        self.subs_enabled.toggled.connect(self._on_subs_toggled)
 
-        self.youtube_player_client_combo = QtWidgets.QComboBox()
-        self.youtube_player_client_combo.setObjectName("combo")
-        self.youtube_player_client_combo.addItems(list(YOUTUBE_PLAYER_CLIENTS.keys()))
-        self.youtube_player_client_combo.setAccessibleName("YouTube player client")
-        fl.addWidget(
-            self._form_row(
-                "YouTube Player Client",
-                self.youtube_player_client_combo,
-                "Force a specific yt-dlp extraction client if the default one is broken for you",
+        return self._page(
+            ui.card(
+                self._column(
+                    self._row("Subtitles", self.subs_enabled, "Fetch subtitle tracks when available"),
+                    self._row("Languages", self.sub_langs),
+                    self._row("", self.auto_subs),
+                    self._row("", self.convert_subs),
+                ),
+                title="Subtitles",
             )
         )
 
-        # ─────────── Thumbnail toggles ───────────
-        self.write_thumbnail = UISwitch("")
-        self._tweak_toggle(self.write_thumbnail)
-        self.write_thumbnail.setAccessibleName("Download thumbnails")
-        fl.addWidget(
-            self._form_row(
-                "Thumbnail",
-                self.write_thumbnail,
-                "Save the Original Thumbnail File Alongside the Audio/Video",
+    def _on_subs_toggled(self, enabled: bool) -> None:
+        for widget in (self.sub_langs, self.auto_subs, self.convert_subs):
+            widget.setEnabled(enabled)
+
+    # -- Playlist ------------------------------------------------------
+
+    def _page_playlist(self) -> QWidget:
+        self.archive_enabled = self._bind_switch(
+            "ENABLE_ARCHIVE", ui.switch("Use a download archive")
+        )
+        self.archive_path = self._bind_text(
+            "ARCHIVE_PATH",
+            ui.line_edit("Path to archive.txt", "Records what has been downloaded", "Archive file"),
+        )
+        archive_row = ui.picker_row(self.archive_path, "Browse\u2026", self._browse_archive)
+
+        self.playlist_reverse = self._bind_switch(
+            "PLAYLIST_REVERSE", ui.switch("Reverse playlist order")
+        )
+        self.playlist_items = self._bind_text(
+            "PLAYLIST_ITEMS",
+            ui.line_edit("e.g. 1,5-10,15", "Indices and ranges", "Playlist items"),
+        )
+
+        self.archive_enabled.toggled.connect(self.archive_path.setEnabled)
+
+        return self._page(
+            ui.card(
+                self._column(
+                    self._row("Archive", self.archive_enabled, "Skip items already downloaded"),
+                    self._row("Archive file", archive_row),
+                    self._row("Order", self.playlist_reverse, "Download from last to first"),
+                    self._row("Items", self.playlist_items),
+                ),
+                title="Playlists",
             )
         )
 
-        self.convert_thumbnails = UISwitch("")
-        self._tweak_toggle(self.convert_thumbnails)
-        self.convert_thumbnails.setAccessibleName("Convert thumbnails")
-        fl.addWidget(
-            self._form_row(
-                "Convert Thumbnail",
-                self.convert_thumbnails,
-                "Convert Downloaded Thumbnail to PNG",
-            )
+    # -- Output --------------------------------------------------------
+
+    def _page_output(self) -> QWidget:
+        self.downloads_dir = self._bind_text(
+            "DOWNLOADS_DIR",
+            ui.line_edit("Download folder", "Where finished files are written", "Download folder"),
+        )
+        downloads_row = ui.picker_row(self.downloads_dir, "Browse\u2026", self._browse_downloads)
+
+        self.filename_combo = self._bind_combo_mapped(
+            "FILENAME_FORMAT", ui.combo([], "Filename format"), FILENAME_CHOICES, "default"
+        )
+        self.filename_preview = QLabel()
+        self.filename_preview.setObjectName("helpBoxExample")
+        self.filename_preview.setTextFormat(Qt.RichText)
+        self.filename_preview.setWordWrap(True)
+
+        self.custom_filename = self._bind_text(
+            "CUSTOM_FILENAME_TEMPLATE",
+            ui.line_edit(
+                "%(artist)s - %(title)s",
+                "A yt-dlp field template with no path or extension",
+                "Custom filename template",
+            ),
+        )
+        self.custom_filename_row = self._row("Custom template", self.custom_filename)
+        self.filename_help = self._build_filename_help()
+
+        self.filename_combo.currentIndexChanged.connect(self._on_filename_changed)
+
+        self.organize_uploader = self._bind_switch(
+            "ORGANIZE_BY_UPLOADER", ui.switch("Group by uploader")
+        )
+        self.video_container = self._bind_combo_text(
+            "VIDEO_FORMAT", ui.combo(VIDEO_CONTAINERS, "Video container")
         )
 
-        self.embed_thumbnail = UISwitch("")
-        self._tweak_toggle(self.embed_thumbnail)
-        self.embed_thumbnail.setAccessibleName("Embed thumbnail")
-        fl.addWidget(
-            self._form_row(
-                "Embed Thumbnail",
-                self.embed_thumbnail,
-                "Embed the Thumbnail Into the Video’s Metadata",
-            )
+        self.date_after = self._bind_text(
+            "DATEAFTER", ui.line_edit("YYYYMMDD", "Only items uploaded on or after", "Upload date filter")
         )
-        # ───────────────────────────────────────────
+        date_row = ui.picker_row(self.date_after, "Pick\u2026", self._pick_date)
 
-        card = self._card(form, title="Post-processing", subtitle="Fine-tune audio, metadata, and FFmpeg options.")
-        pv.addWidget(card)
-        return page
+        return self._page(
+            ui.card(
+                self._column(
+                    self._row("Folder", downloads_row),
+                    self._row("Grouping", self.organize_uploader, "Create one folder per uploader"),
+                    self._row("Video container", self.video_container, "Used for video downloads"),
+                    self._row("Only after", date_row),
+                ),
+                title="Destination",
+            ),
+            ui.card(
+                self._column(
+                    self._row("Naming", self.filename_combo, "How files are named on disk"),
+                    self.filename_preview,
+                    self.custom_filename_row,
+                    self.filename_help,
+                ),
+                title="File names",
+            ),
+        )
 
-    def _build_filename_help(self) -> QtWidgets.QFrame:
-        """
-        Compact, categorized reference for the custom filename template fields.
-        Shown only while 'Custom template…' is selected in the Filename combo.
-        """
-        box = QtWidgets.QFrame()
+    def _build_filename_help(self) -> QWidget:
+        box = QWidget()
         box.setObjectName("helpBox")
-        v = QtWidgets.QVBoxLayout(box)
-        v.setContentsMargins(12, 10, 12, 10)
-        v.setSpacing(8)
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
 
-        title = QtWidgets.QLabel("Available fields")
-        title.setObjectName("helpBoxTitle")
-        v.addWidget(title)
+        heading = QLabel("Available fields")
+        heading.setObjectName("helpBoxTitle")
+        layout.addWidget(heading)
 
-        categories: List[Tuple[str, List[Tuple[str, str]]]] = [
-            ("Title & media", [
-                ("title", "song/video title"),
+        groups: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
+            ("TITLE & MEDIA", (
+                ("title", "song or video title"),
                 ("ext", "file extension"),
                 ("duration_string", "length"),
                 ("resolution", "e.g. 1920x1080"),
-            ]),
-            ("People", [
+            )),
+            ("PEOPLE", (
                 ("artist", "track artist"),
-                ("uploader", "channel/uploader name"),
+                ("uploader", "uploader name"),
                 ("channel", "channel name"),
-            ]),
-            ("Album & playlist", [
+            )),
+            ("ALBUM & PLAYLIST", (
                 ("album", "album name"),
-                ("track_number", "track # in album"),
+                ("track_number", "track number"),
                 ("playlist_title", "playlist name"),
                 ("playlist_index", "position in playlist"),
-            ]),
-            ("Other", [
-                ("id", "unique video/track ID"),
+            )),
+            ("OTHER", (
+                ("id", "unique ID"),
                 ("upload_date", "YYYYMMDD"),
                 ("release_year", "release year"),
-                ("autonumber", "download sequence #"),
-            ]),
-        ]
+                ("autonumber", "download sequence"),
+            )),
+        )
 
-        grid = QtWidgets.QGridLayout()
+        grid = QGridLayout()
         grid.setHorizontalSpacing(20)
         grid.setVerticalSpacing(4)
-        for col, (cat_name, fields) in enumerate(categories):
-            cat_lbl = QtWidgets.QLabel(cat_name.upper())
-            cat_lbl.setObjectName("helpBoxCategory")
-            grid.addWidget(cat_lbl, 0, col)
+        for column, (name, fields) in enumerate(groups):
+            heading_label = QLabel(name)
+            heading_label.setObjectName("helpBoxCategory")
+            grid.addWidget(heading_label, 0, column)
 
-            rows_html = "<br>".join(
-                f"<code>%({name})s</code> &nbsp;<span style='opacity:0.8;'>{desc}</span>"
-                for name, desc in fields
+            body = "<br>".join(
+                f"<code>%({field})s</code> &nbsp;"
+                f"<span style='opacity:0.8;'>{description}</span>"
+                for field, description in fields
             )
-            tokens_lbl = QtWidgets.QLabel(rows_html)
-            tokens_lbl.setObjectName("helpBoxTokens")
-            tokens_lbl.setTextFormat(QtCore.Qt.RichText)
-            tokens_lbl.setWordWrap(True)
-            tokens_lbl.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-            grid.addWidget(tokens_lbl, 1, col, QtCore.Qt.AlignTop)
+            tokens = QLabel(body)
+            tokens.setObjectName("helpBoxTokens")
+            tokens.setTextFormat(Qt.RichText)
+            tokens.setWordWrap(True)
+            tokens.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            grid.addWidget(tokens, 1, column, Qt.AlignTop)
+            grid.setColumnStretch(column, 1)
+        layout.addLayout(grid)
 
-            grid.setColumnStretch(col, 1)
-        v.addLayout(grid)
-
-        v.addWidget(self._divider())
-
-        example = QtWidgets.QLabel(
-            "Example: <code>%(artist)s - %(title)s</code> → <i>Tony Ann - Icarus.mp3</i>"
+        example = QLabel(
+            "Example: <code>%(artist)s - %(title)s</code> "
+            "\u2192 <i>Tony Ann - Icarus.mp3</i>"
         )
         example.setObjectName("helpBoxExample")
-        example.setTextFormat(QtCore.Qt.RichText)
-        example.setWordWrap(True)
-        v.addWidget(example)
-
+        example.setTextFormat(Qt.RichText)
+        layout.addWidget(example)
         return box
 
-    def _page_output(self) -> QtWidgets.QWidget:
-        page = QtWidgets.QWidget()
-        pv = QtWidgets.QVBoxLayout(page)
-        pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(8)
+    def _on_filename_changed(self, _index: int = 0) -> None:
+        value = self._filename_value()
+        custom = value == "custom"
+        self.custom_filename_row.setVisible(custom)
+        self.filename_help.setVisible(custom)
+        self.custom_filename.setEnabled(custom)
 
-        form = QtWidgets.QWidget()
-        fl = QtWidgets.QVBoxLayout(form)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(6)
+        if value == "default":
+            self.filename_preview.setText(
+                "<i>Uses the smart default for each download type.</i>"
+            )
+            self.filename_preview.setVisible(True)
+        elif custom:
+            self.filename_preview.setVisible(False)
+        else:
+            template = FILENAME_FORMAT_PRESETS.get(value, "")
+            text = f"Template: <code>{template}.%(ext)s</code>"
+            if value in ("track_title", "album_track_title"):
+                text += (
+                    " <i>The track number comes from the playlist position, so "
+                    "single downloads show \u201cUnknown\u201d.</i>"
+                )
+            self.filename_preview.setText(text)
+            self.filename_preview.setVisible(True)
+        self._validate()
 
-        self.filename_format_combo = QtWidgets.QComboBox()
-        self.filename_format_combo.setObjectName("combo")
-        self.filename_format_combo.setAccessibleName("Filename naming format")
-        for label, _value in self._FILENAME_FORMAT_ITEMS:
-            self.filename_format_combo.addItem(label)
-        fl.addWidget(
-            self._form_row(
-                "Filename",
-                self.filename_format_combo,
-                "Choose how downloaded files are named on disk",
+    def _filename_value(self) -> str:
+        index = self.filename_combo.currentIndex()
+        if 0 <= index < len(FILENAME_CHOICES):
+            return FILENAME_CHOICES[index][1]
+        return "default"
+
+    # -- Processing ----------------------------------------------------
+
+    def _page_processing(self) -> QWidget:
+        self.add_metadata = self._bind_switch("ADD_METADATA", ui.switch("Write metadata tags"))
+        self.audio_normalize = self._bind_switch(
+            "AUDIO_NORMALIZE", ui.switch("Normalise loudness")
+        )
+        self.crop_covers = self._bind_switch(
+            "CROP_AUDIO_COVERS", ui.switch("Crop album art to a square")
+        )
+        self.yt_music = self._bind_switch(
+            "YT_MUSIC_METADATA", ui.switch("Enhanced YouTube Music metadata")
+        )
+        self.live_from_start = self._bind_switch(
+            "LIVE_FROM_START", ui.switch("Record live streams from the start")
+        )
+
+        self.chapters_combo = self._bind_combo_mapped(
+            "CHAPTERS_MODE", ui.combo([], "Chapter handling"), CHAPTER_CHOICES, "embed"
+        )
+
+        self.custom_ffmpeg = self._bind_text(
+            "CUSTOM_FFMPEG_ARGS",
+            ui.line_edit("-c:v libx265 -crf 23", "Extra ffmpeg arguments", "ffmpeg arguments"),
+        )
+
+        return self._page(
+            ui.card(
+                self._column(
+                    self._row("Metadata", self.add_metadata, "Title, artist and album tags"),
+                    self._row(
+                        "Loudness",
+                        self.audio_normalize,
+                        "Apply EBU R128 normalisation to \u221214 LUFS",
+                    ),
+                    self._row("Album art", self.crop_covers, "Centre-crop covers to 1:1 after the queue"),
+                    self._row("Chapters", self.chapters_combo),
+                ),
+                title="Post-processing",
+            ),
+            ui.card(
+                self._column(
+                    self._row(
+                        "YouTube Music",
+                        self.yt_music,
+                        "Better artist and album detection for music.youtube.com",
+                    ),
+                    self._row("Live streams", self.live_from_start, "Rewind to the beginning"),
+                    self._row("ffmpeg arguments", self.custom_ffmpeg),
+                ),
+                title="Extras",
+                subtitle="These are experimental and may change between releases.",
+            ),
+        )
+
+    # -- Thumbnails ----------------------------------------------------
+
+    def _page_thumbnails(self) -> QWidget:
+        self.embed_thumbnail = self._bind_switch(
+            "EMBED_THUMBNAIL", ui.switch("Embed the thumbnail")
+        )
+        self.write_thumbnail = self._bind_switch(
+            "WRITE_THUMBNAIL", ui.switch("Keep the thumbnail file")
+        )
+        self.convert_thumbnails = self._bind_switch(
+            "CONVERT_THUMBNAILS", ui.switch("Convert thumbnails")
+        )
+        self.thumbnail_format = self._bind_combo_text(
+            "THUMBNAIL_FORMAT", ui.combo(THUMBNAIL_FORMATS, "Thumbnail format")
+        )
+        self.convert_thumbnails.toggled.connect(self.thumbnail_format.setEnabled)
+
+        return self._page(
+            ui.card(
+                self._column(
+                    self._row("Embed", self.embed_thumbnail, "Store the cover inside the media file"),
+                    self._row("Keep file", self.write_thumbnail, "Save the image alongside the download"),
+                    self._row("Convert", self.convert_thumbnails, "WebP thumbnails are not universally supported"),
+                    self._row("Format", self.thumbnail_format),
+                ),
+                title="Thumbnails",
             )
         )
 
-        self.filename_preview_label = QtWidgets.QLabel("")
-        self.filename_preview_label.setObjectName("helpBoxExample")
-        self.filename_preview_label.setTextFormat(QtCore.Qt.RichText)
-        self.filename_preview_label.setWordWrap(True)
-        self.filename_preview_label.setContentsMargins(0, 0, 0, 4)
-        fl.addWidget(self.filename_preview_label)
+    # -- Advanced ------------------------------------------------------
 
-        self.custom_filename_input = self._line_edit(
-            placeholder="%(title)s",
-            tip="yt-dlp field template, no extension or path. e.g. %(artist)s - %(title)s. "
-                "Allowed fields include title, artist, album, uploader, playlist_index, track_number, id.",
+    def _page_advanced(self) -> QWidget:
+        self.player_client = self._bind_combo_mapped(
+            "YOUTUBE_PLAYER_CLIENT",
+            ui.combo([], "YouTube player client"),
+            tuple(YOUTUBE_PLAYER_CLIENTS.items()),
+            "auto",
         )
-        self.custom_filename_input.setAccessibleName("Custom filename template")
-        self.custom_filename_row = self._form_row(
-            "Custom template",
-            self.custom_filename_input,
-            "Advanced: raw yt-dlp filename template, no extension",
+        self.extra_args = self._bind_text(
+            "EXTRA_YTDLP_ARGS",
+            ui.line_edit(
+                "--sleep-interval 15 --max-sleep-interval 20",
+                "Appended to every yt-dlp command, after all other flags",
+                "Extra yt-dlp arguments",
+            ),
         )
-        fl.addWidget(self.custom_filename_row)
 
-        self.filename_help_box = self._build_filename_help()
-        fl.addWidget(self.filename_help_box)
-
-        self.filename_format_combo.currentIndexChanged.connect(self._on_filename_format_changed)
-
-        self.organize_uploader = UISwitch("")
-        self._tweak_toggle(self.organize_uploader)
-        self.organize_uploader.setAccessibleName("Organize output by uploader")
-        fl.addWidget(self._form_row("Folders", self.organize_uploader, "Place downloads into uploader-named folders"))
-
-        self.date_after = self._line_edit(placeholder="YYYYMMDD", tip="Download only items uploaded on/after this date")
-        self.date_after.setAccessibleName("Only download after date")
-        self.btn_date_picker = QtWidgets.QPushButton("Select date…")
-        self.btn_date_picker.setMinimumHeight(36)
-        self.btn_date_picker.clicked.connect(self._pick_date)
-        dr = QtWidgets.QWidget()
-        dh = QtWidgets.QHBoxLayout(dr)
-        dh.setContentsMargins(0, 0, 0, 0)
-        dh.setSpacing(6)
-        dh.addWidget(self.date_after, 1)
-        dh.addWidget(self.btn_date_picker, 0)
-        fl.addWidget(self._form_row("Only download after", dr))
-
-        card = self._card(form, title="Output", subtitle="Name your files, organize your library, and restrict by upload date.")
-        pv.addWidget(card)
-        self._on_filename_format_changed(self.filename_format_combo.currentIndex())
-        return page
-
-    def _on_filename_format_changed(self, index: int) -> None:
-        try:
-            _, value = self._FILENAME_FORMAT_ITEMS[index]
-        except (IndexError, TypeError):
-            value = "default"
-        is_custom = value == "custom"
-        self.custom_filename_input.setEnabled(is_custom)
-        self.custom_filename_row.setVisible(is_custom)
-        if hasattr(self, "filename_help_box"):
-            self.filename_help_box.setVisible(is_custom)
-
-        if hasattr(self, "filename_preview_label"):
-            if value == "default":
-                self.filename_preview_label.setText(
-                    "<i>Uses each download's existing smart default naming.</i>"
-                )
-                self.filename_preview_label.setVisible(True)
-            elif value == "custom":
-                self.filename_preview_label.setVisible(False)
-            else:
-                tmpl = FILENAME_FORMAT_PRESETS.get(value, "")
-                self.filename_preview_label.setText(f"Template: <code>{tmpl}.%(ext)s</code>")
-                self.filename_preview_label.setVisible(True)
-                if value in ("track_title", "album_track_title"):
-                    self.filename_preview_label.setText(
-                        self.filename_preview_label.text()
-                        + " <i>Track # comes from position in a playlist "
-                          "(single-video downloads will show \"Unknown\").</i>"
-                    )
-
-    def _filename_format_value_to_index(self, value: str) -> int:
-        for i, (_label, v) in enumerate(self._FILENAME_FORMAT_ITEMS):
-            if v == value:
-                return i
-        return 0
-
-    def _filename_format_index_to_value(self, index: int) -> str:
-        try:
-            return self._FILENAME_FORMAT_ITEMS[index][1]
-        except IndexError:
-            return "default"
-
-    def _page_experimental(self) -> QtWidgets.QWidget:
-        page = QtWidgets.QWidget()
-        pv = QtWidgets.QVBoxLayout(page)
-        pv.setContentsMargins(0, 0, 0, 0)
-        pv.setSpacing(8)
-
-        form = QtWidgets.QWidget()
-        fl = QtWidgets.QVBoxLayout(form)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(6)
-
-        self.live_stream = UISwitch("")
-        self._tweak_toggle(self.live_stream)
-        self.live_stream.setAccessibleName("Record live streams from start")
-        self.live_stream.setEnabled(True)
-        fl.addWidget(self._form_row("Live streams", self.live_stream, "Record live content from the beginning"))
-
-        self.yt_music = UISwitch("")
-        self._tweak_toggle(self.yt_music)
-        self.yt_music.setAccessibleName("Enhanced YouTube Music metadata")
-        self.yt_music.setEnabled(True)
-        fl.addWidget(self._form_row("Music metadata", self.yt_music, "Prefer richer metadata for YouTube Music"))
-
-        card = self._card(form, title="Experimental", subtitle="Early features. Behavior may change.")
-        pv.addWidget(card)
-        return page
-
-    # ---------- Styling ----------
-    def _apply_styles(self) -> None:
-        base = ""
-        try:
-            base = getattr(AppStyles, "DIALOG", "") or ""
-        except Exception:
-            base = ""
-
-        # Glassmorphism palette
-        page_bg   = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0a0e1a, stop:0.3 #15102e, stop:0.6 #1e1b4b, stop:1 #0c1733)"
-        rail_bg   = "rgba(10, 10, 25, 180)"
-        card_bg   = "rgba(255, 255, 255, 15)"
-        card_hover = "rgba(255, 255, 255, 25)"
-        field_bg  = "rgba(255, 255, 255, 15)"
-        field_hover = "rgba(255, 255, 255, 22)"
-        strong_text  = "#F4F4F8"
-        muted_text   = "rgba(255, 255, 255, 150)"
-        section_text = "rgba(255, 255, 255, 180)"
-        border_c  = "rgba(255, 255, 255, 30)"
-        divider_c = "rgba(255, 255, 255, 20)"
-        highlight = "#00E5FF"
-        accent2   = "#7C4DFF"
-        error_border = "#F87171"
-        error_bg  = "rgba(248, 113, 113, 25)"
-        good = "#22D3A5"
-        warn = "#FBBF24"
-
-        css = f"""
-        QDialog {{
-            background: {page_bg};
-        }}
-
-        #header {{
-            background: transparent;
-        }}
-        #brandIcon {{
-            border-radius: 12px;
-            font-size: 18px;
-            font-weight: 700;
-            color: #ffffff;
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 {highlight}, stop:1 {accent2});
-            border: 1px solid rgba(255, 255, 255, 40);
-        }}
-        #dlgTitle {{
-            font-size: 21px;
-            font-weight: 800;
-            letter-spacing: 0.1px;
-            color: {strong_text};
-        }}
-        #dlgSubtitle {{
-            font-size: 12.5px;
-            color: {muted_text};
-        }}
-
-        QListWidget#sidebar {{
-            background: {rail_bg};
-            border: 1px solid {border_c};
-            border-radius: 16px;
-            padding: 6px 6px;
-            outline: 0;
-        }}
-        QListWidget#sidebar::item {{
-            padding: 7px 10px 7px 12px;
-            margin: 1px 2px;
-            border-radius: 11px;
-            color: {muted_text};
-            font-size: 13px;
-            font-weight: 500;
-            border: 1px solid transparent;
-        }}
-        QListWidget#sidebar::item:hover {{
-            background: rgba(255, 255, 255, 15);
-            color: {strong_text};
-        }}
-        QListWidget#sidebar::item:selected {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 rgba(0, 229, 255, 40),
-                stop:1 rgba(124, 77, 255, 25));
-            border: 1px solid rgba(0, 229, 255, 60);
-            color: {strong_text};
-            font-weight: 700;
-        }}
-        QComboBox#sectionCombo {{
-            min-height: 30px;
-            border: 1px solid {border_c};
-            border-radius: 11px;
-            padding: 4px 10px;
-            background: {card_bg};
-            color: {strong_text};
-            font-weight: 600;
-        }}
-
-        QScrollArea#scrollArea {{
-            background: transparent;
-            border: none;
-        }}
-        QScrollArea#scrollArea > QWidget#qt_scrollarea_viewport {{
-            background: transparent;
-        }}
-        QScrollBar:vertical {{
-            background: transparent;
-            width: 8px;
-            margin: 2px;
-        }}
-        QScrollBar::handle:vertical {{
-            background: rgba(255, 255, 255, 40);
-            border-radius: 4px;
-            min-height: 30px;
-        }}
-        QScrollBar::handle:vertical:hover {{
-            background: rgba(255, 255, 255, 70);
-        }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-            height: 0px;
-        }}
-
-        QFrame#card {{
-            background: {card_bg};
-            border: 1px solid {border_c};
-            border-radius: 16px;
-        }}
-        QFrame#card:hover {{
-            border: 1px solid rgba(255, 255, 255, 50);
-            background: {card_hover};
-        }}
-        QLabel#cardTitle {{
-            font-size: 14.5px;
-            font-weight: 700;
-            color: {strong_text};
-            background: transparent;
-        }}
-        QLabel#cardSubtitle {{
-            font-size: 12px;
-            color: {muted_text};
-            background: transparent;
-        }}
-
-        #sectionLabel {{
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.6px;
-            color: {highlight};
-        }}
-        #formLabel {{
-            font-size: 12.5px;
-            color: {muted_text};
-            background: transparent;
-        }}
-        #formDescription {{
-            font-size: 12px;
-            color: {muted_text};
-            background: transparent;
-        }}
-
-        QFrame#helpBox {{
-            background: rgba(0, 229, 255, 8);
-            border: 1px dashed rgba(0, 229, 255, 40);
-            border-radius: 12px;
-        }}
-        QLabel#helpBoxTitle {{
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: {highlight};
-            background: transparent;
-        }}
-        QLabel#helpBoxCategory {{
-            font-size: 11px;
-            font-weight: 700;
-            color: {muted_text};
-            background: transparent;
-        }}
-        QLabel#helpBoxTokens {{
-            font-size: 12px;
-            color: {strong_text};
-            background: transparent;
-        }}
-        QLabel#helpBoxExample {{
-            font-size: 11px;
-            color: {muted_text};
-            background: transparent;
-        }}
-
-        QLineEdit#input, QComboBox#combo, QSpinBox#spin {{
-            background: {field_bg};
-            color: {strong_text};
-            border: 1px solid {border_c};
-            border-radius: 10px;
-            padding: 6px 10px;
-            selection-background-color: {highlight};
-            selection-color: #0a0e1a;
-            font-size: 13px;
-        }}
-        QLineEdit#input:hover, QComboBox#combo:hover, QSpinBox#spin:hover {{
-            background: {field_hover};
-            border: 1px solid rgba(255, 255, 255, 50);
-        }}
-        QLineEdit#input:focus, QComboBox#combo:focus, QSpinBox#spin:focus {{
-            border: 1px solid {highlight};
-            background: rgba(0, 229, 255, 10);
-        }}
-        QLineEdit#input[state="error"] {{
-            border: 1px solid {error_border};
-            background: {error_bg};
-        }}
-        QComboBox#combo::drop-down, QComboBox#sectionCombo::drop-down {{
-            border: none;
-            width: 26px;
-        }}
-
-        QCheckBox#check, QRadioButton#radio {{
-            color: {strong_text};
-            font-size: 13px;
-            spacing: 8px;
-            background: transparent;
-        }}
-        QCheckBox#check::indicator, QRadioButton#radio::indicator {{
-            width: 17px;
-            height: 17px;
-            border-radius: 5px;
-            border: 1px solid {border_c};
-            background: {field_bg};
-        }}
-        QRadioButton#radio::indicator {{
-            border-radius: 9px;
-        }}
-        QCheckBox#check::indicator:hover, QRadioButton#radio::indicator:hover {{
-            border: 1px solid rgba(255, 255, 255, 60);
-        }}
-        QCheckBox#check::indicator:checked, QRadioButton#radio::indicator:checked {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 {highlight}, stop:1 {accent2});
-            border: 1px solid {highlight};
-        }}
-
-        #divider {{
-            background: {divider_c};
-            min-height: 1px;
-            max-height: 1px;
-            border: none;
-        }}
-
-        #footer {{
-            background: transparent;
-        }}
-        #status {{
-            color: {muted_text};
-            font-size: 12.5px;
-            font-weight: 600;
-            background: transparent;
-        }}
-        #status[state="dirty"] {{
-            color: {warn};
-        }}
-        #status[state="clean"] {{
-            color: {good};
-        }}
-        QDialogButtonBox QPushButton {{
-            border-radius: 10px;
-            padding: 7px 16px;
-            font-weight: 700;
-            font-size: 13px;
-            min-width: 84px;
-        }}
-        QDialogButtonBox QPushButton:default {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 {highlight}, stop:1 {accent2});
-            color: #ffffff;
-            border: none;
-        }}
-        QDialogButtonBox QPushButton:default:hover {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #33EEFF, stop:1 #9C6DFF);
-        }}
-        QDialogButtonBox QPushButton:!default {{
-            background: {field_bg};
-            color: {strong_text};
-            border: 1px solid {border_c};
-        }}
-        QDialogButtonBox QPushButton:!default:hover {{
-            border: 1px solid rgba(255, 255, 255, 50);
-            background: {field_hover};
-        }}
-        QDialogButtonBox QPushButton:disabled {{
-            color: rgba(255, 255, 255, 60);
-            background: rgba(255, 255, 255, 8);
-            border: 1px solid rgba(255, 255, 255, 15);
-        }}
-        """
-        self.setStyleSheet((base + "\n" + css).strip())
-
-    # ---------- Behavior helpers ----------
-    def _on_cookies_source_changed(self, browser: str) -> None:
-        use_browser = bool(browser.strip())
-        self.cookies_path_input.setEnabled(not use_browser)
-
-    def _on_subtitles_toggled(self, enabled: bool) -> None:
-        self.languages_input.setEnabled(enabled)
-        self.auto_subs.setEnabled(enabled)
-        self.convert_subs.setEnabled(enabled)
-
-    def _on_archive_toggled(self, enabled: bool) -> None:
-        self.archive_path_input.setEnabled(enabled)
-
-    def _browse_cookies(self) -> None:
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            "Select Cookies File",
-            str(self.settings.BASE_DIR),
-            "Cookies (*.txt *.json);;All Files (*)",
+        self.prefer_hls = self._bind_switch("PREFER_HLS", ui.switch("Prefer HLS streams"))
+        self.hls_domains = self._register(
+            "HLS_PREFERRED_DOMAINS",
+            ui.line_edit(
+                "example.com, cdn.example.net",
+                "Comma-separated hosts. YouTube is always excluded.",
+                "HLS domains",
+            ),
+            lambda: [
+                part.strip().lower()
+                for part in self.hls_domains.text().split(",")
+                if part.strip()
+            ],
+            lambda value: self.hls_domains.setText(", ".join(value or [])),
         )
-        if path:
-            self.cookies_path_input.setText(path)
+        self.prefer_hls.toggled.connect(self.hls_domains.setEnabled)
 
-    def _browse_ca_cert(self) -> None:
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            "Select Custom CA Certificate",
-            str(self.settings.BASE_DIR),
-            "Certificates (*.crt *.pem *.cer);;All Files (*)",
+        self.max_log_lines = self._bind_spin(
+            "MAX_LOG_LINES", ui.spin(100, 50_000, "Console history", " lines")
         )
-        if path:
-            self.custom_ca_cert_input.setText(path)
+        self.log_thumbnails = self._bind_check(
+            "LOG_THUMBNAILS", ui.check("Log thumbnail failures")
+        )
+        self.confirm_quit = self._bind_check(
+            "CONFIRM_ON_QUIT", ui.check("Ask before quitting during a download")
+        )
 
-    def _on_import_cookies(self) -> None:
-        browser = self.import_cookies_combo.currentText().strip() or self.cookies_browser_combo.currentText().strip()
-        if not browser:
-            QtWidgets.QMessageBox.information(self, "Select browser", "Please choose a browser profile to import from.")
-            return
+        return self._page(
+            ui.card(
+                self._column(
+                    self._row(
+                        "Player client",
+                        self.player_client,
+                        "Override the extraction client when the default one breaks",
+                    ),
+                    self._row("Extra arguments", self.extra_args),
+                ),
+                title="yt-dlp",
+                subtitle="These override the application's own flags.",
+            ),
+            ui.card(
+                self._column(
+                    self._row(
+                        "Prefer HLS",
+                        self.prefer_hls,
+                        "Only for sites that do not offer usable DASH streams. "
+                        "Forcing HLS elsewhere lowers the maximum resolution.",
+                    ),
+                    self._row("Domains", self.hls_domains),
+                ),
+                title="Streaming protocol",
+            ),
+            ui.card(
+                self._column(
+                    self._row("Console history", self.max_log_lines),
+                    self._row("", self.log_thumbnails),
+                    self._row("", self.confirm_quit),
+                ),
+                title="Interface",
+            ),
+        )
 
-        out = Path(self.settings.BASE_DIR) / "cookies.txt"
-        ok, msg = CookieManager.export_for_browser(browser, out)   
-        if ok:
-            self.cookies_path_input.setText(str(out))
+    # ==================================================================
+    # Load / save
+    # ==================================================================
 
-            # Use a timestamp label for last import
-            from datetime import datetime
-            ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-            label_text = f"Last imported: {out.name} ({ts})"
-            self.cookies_last_label.setText(label_text)
-
-            # Update running settings and persist immediately
+    def _load(self) -> None:
+        for binding in self._bindings:
+            value = getattr(self.settings, binding.key, None)
+            if isinstance(value, Path):
+                value = str(value)
+            blocker = QSignalBlocker(binding.widget)
             try:
-                # Keep stored metadata in settings in a stable form
-                if hasattr(self.settings, "COOKIES_LAST_IMPORTED"):
-                    # store the timestamped label (human readable)
-                    self.settings.COOKIES_LAST_IMPORTED = label_text.replace("Last imported: ", "")
-                if hasattr(self.settings, "COOKIES_PATH"):
-                    # keep settings.COOKIES_PATH in sync with exported file
-                    self.settings.COOKIES_PATH = out
-                if hasattr(self.settings, "save_config"):
-                    self.settings.save_config()
-            except Exception:
-                pass
+                binding.set(value)
+            except Exception:  # noqa: BLE001 - a bad stored value must not block the dialog
+                log.debug("Could not load %s", binding.key, exc_info=True)
+            finally:
+                del blocker
 
-            QtWidgets.QMessageBox.information(self, "Imported cookies", msg)                       
-        else:
-            QtWidgets.QMessageBox.warning(self, "Import failed", msg)
+        selected = set(getattr(self.settings, "SPONSORBLOCK_CATEGORIES", []) or [])
+        for code, box in self._sponsor_checks.items():
+            box.setChecked(code in selected)
 
-    def _browse_archive(self) -> None:
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self,
-            "Select Archive File",
-            str(self.settings.BASE_DIR),
-            "Text Files (*.txt);;All Files (*)",
+        last = getattr(self.settings, "COOKIES_LAST_IMPORTED", "")
+        self.cookies_status.setText(f"Last imported: {last}" if last else "")
+
+        self._on_subs_toggled(self.subs_enabled.isChecked())
+        self.archive_path.setEnabled(self.archive_enabled.isChecked())
+        self.thumbnail_format.setEnabled(self.convert_thumbnails.isChecked())
+        self.hls_domains.setEnabled(self.prefer_hls.isChecked())
+        self._on_filename_changed()
+        self._snapshot = self.get_settings()
+
+    def get_settings(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
+        for binding in self._bindings:
+            try:
+                data[binding.key] = binding.get()
+            except Exception:  # noqa: BLE001
+                log.debug("Could not read %s", binding.key, exc_info=True)
+
+        data["SPONSORBLOCK_CATEGORIES"] = [
+            code for code, box in self._sponsor_checks.items() if box.isChecked()
+        ]
+        data["COOKIES_LAST_IMPORTED"] = getattr(
+            self.settings, "COOKIES_LAST_IMPORTED", ""
         )
-        if path:
-            self.archive_path_input.setText(path)
 
-    def _pick_date(self) -> None:
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle("Select Date")
+        # Empty path fields fall back to the current value rather than being
+        # written as "", which Path() turns into "." -- that produced
+        # `--cookies .` and `--download-archive .` on every invocation.
+        for key, fallback in (
+            ("COOKIES_PATH", self.settings.COOKIES_PATH),
+            ("ARCHIVE_PATH", self.settings.ARCHIVE_PATH),
+            ("DOWNLOADS_DIR", self.settings.DOWNLOADS_DIR),
+        ):
+            text = str(data.get(key) or "").strip()
+            data[key] = Path(text) if text else Path(fallback)
+
+        return data
+
+    def apply(self) -> None:
+        """Write the form into settings. Called by MainWindow on accept."""
+        self.settings.apply(self.get_settings())
         try:
-            dlg.setStyleSheet(getattr(AppStyles, "DIALOG", "") or "")
-        except Exception:
-            pass
+            self.spotdl_tab.apply(self.settings.SPOTDL)
+            self.settings.SPOTDL.normalise()
+        except Exception:  # noqa: BLE001
+            log.exception("Could not apply SpotDL preferences")
+        self._snapshot = self.get_settings()
+        self._set_dirty(False)
 
-        v = QtWidgets.QVBoxLayout(dlg)
-        cal = QtWidgets.QCalendarWidget()
-        cal.setGridVisible(True)
+    def _reset(self) -> None:
+        if not self._snapshot:
+            return
+        for binding in self._bindings:
+            if binding.key not in self._snapshot:
+                continue
+            value = self._snapshot[binding.key]
+            if isinstance(value, Path):
+                value = str(value)
+            blocker = QSignalBlocker(binding.widget)
+            try:
+                binding.set(value)
+            finally:
+                del blocker
 
-        try:
-            txt = self.date_after.text().strip()
-            if txt:
-                dt = datetime.datetime.strptime(txt, "%Y%m%d").date()
-                cal.setSelectedDate(QDate(dt.year, dt.month, dt.day))
-        except Exception:
-            pass
+        selected = set(self._snapshot.get("SPONSORBLOCK_CATEGORIES", []))
+        for code, box in self._sponsor_checks.items():
+            box.setChecked(code in selected)
 
-        v.addWidget(cal)
-        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
-        v.addWidget(bb)
-        bb.accepted.connect(dlg.accept)
-        bb.rejected.connect(dlg.reject)
+        self._on_filename_changed()
+        self._set_dirty(False)
+        self._validate()
 
-        if dlg.exec():
-            qd = cal.selectedDate()
-            self.date_after.setText(qd.toString("yyyyMMdd"))
+    # ==================================================================
+    # Dirty tracking
+    # ==================================================================
 
-    # ---------- Validation ----------
-    def _wire_validation(self) -> None:
-        self._rx_rate = _RX_RATE
-        self._rx_langs = _RX_LANGS
-        self._rx_items = _RX_ITEMS
-        self._rx_date = _RX_DATE
+    def _wire(self) -> None:
+        watched: List[QWidget] = [b.widget for b in self._bindings]
+        watched.extend(self._sponsor_checks.values())
 
-        self.limit_rate_input.setValidator(QtGui.QRegularExpressionValidator(self._rx_rate, self))
-        self.languages_input.setValidator(QtGui.QRegularExpressionValidator(self._rx_langs, self))
-        self.playlist_items.setValidator(QtGui.QRegularExpressionValidator(self._rx_items, self))
-        self.date_after.setValidator(QtGui.QRegularExpressionValidator(self._rx_date, self))
+        for widget in watched:
+            if isinstance(widget, QLineEdit):
+                widget.textChanged.connect(self._on_changed)
+            elif isinstance(widget, QComboBox):
+                widget.currentIndexChanged.connect(self._on_changed)
+            elif isinstance(widget, QSpinBox):
+                widget.valueChanged.connect(self._on_changed)
+            elif isinstance(widget, (QCheckBox, UISwitch, QRadioButton)):
+                widget.toggled.connect(self._on_changed)
 
-        for w in (
+        for widget in (
             self.proxy_input,
-            self.cookies_path_input,
-            self.limit_rate_input,
-            self.languages_input,
+            self.ca_cert_input,
+            self.limit_rate,
+            self.sub_langs,
             self.playlist_items,
             self.date_after,
-            self.custom_filename_input,
+            self.custom_filename,
+            self.downloads_dir,
         ):
-            w.textChanged.connect(self._validate_all)
+            widget.textChanged.connect(self._validate)
 
-        self.filename_format_combo.currentIndexChanged.connect(self._validate_all)
-        self.retries_spin.valueChanged.connect(self._validate_all)
-        self.cookies_browser_combo.currentTextChanged.connect(self._validate_all)
-        self.subtitles_enabled.toggled.connect(self._validate_all)
-        self.enable_archive.toggled.connect(self._validate_all)
+        self.subs_enabled.toggled.connect(self._validate)
+        self.filename_combo.currentIndexChanged.connect(self._validate)
 
-    def _mark_error(self, w: QtWidgets.QWidget, has_error: bool, tip: Optional[str] = None) -> None:
-        w.setProperty("state", "error" if has_error else "")
-        w.style().unpolish(w)
-        w.style().polish(w)
-        if has_error and tip:
-            w.setToolTip(tip)
-        elif w in self._base_tips:
-            w.setToolTip(self._base_tips[w])
-
-        # Inline adorner for QLineEdit
-        if isinstance(w, QtWidgets.QLineEdit):
-            self._set_line_adorn(w, not has_error)
-
-    def _set_line_adorn(self, le: QtWidgets.QLineEdit, ok: bool) -> None:
-        
-        if le in self._validation_actions:
-            act = self._validation_actions.pop(le)
-            le.removeAction(act)
-
-        icon = self.style().standardIcon(
-            QtWidgets.QStyle.SP_DialogApplyButton if ok or not le.text().strip() else QtWidgets.QStyle.SP_MessageBoxWarning
-        )
-        # Only show on error or when non-empty and ok
-        show = (not ok) or (ok and bool(le.text().strip()))
-        if not show:
-            return
-        act = le.addAction(icon, QtWidgets.QLineEdit.TrailingPosition)
-        self._validation_actions[le] = act
-
-    def _validate_filename_template(self, text: str) -> Tuple[bool, str]:
-        """
-        Validate a custom yt-dlp filename template (no extension, no path).
-        Returns (is_ok, error_message).
-        """
-        raw = text.strip()
-        if not raw:
-            return False, "Enter a template, e.g. %(title)s"
-
-        # Strip escaped percent signs first so they don't confuse placeholder scanning
-        working = raw.replace("%%", "\u0000")
-
-        # Remove every valid placeholder, checking its field name(s) against the whitelist
-        pos = 0
-        found_placeholder = False
-        literal_chunks: List[str] = []
-        for m in _TEMPLATE_PLACEHOLDER_RE.finditer(working):
-            found_placeholder = True
-            literal_chunks.append(working[pos:m.start()])
-            fields = m.group("fields").split(",")
-            for f in fields:
-                if f not in _ALLOWED_TEMPLATE_FIELDS:
-                    return False, f"Unknown field: %({f})s"
-            pos = m.end()
-        literal_chunks.append(working[pos:])
-        remainder = "".join(literal_chunks)
-
-        # Any leftover "%" means a malformed/unsupported placeholder
-        if "%" in remainder:
-            return False, "Invalid placeholder syntax, use %(field)s"
-
-        # Restore escaped percents for the illegal-character check
-        remainder = remainder.replace("\u0000", "%")
-        if _TEMPLATE_ILLEGAL_LITERAL_RE.search(remainder):
-            return False, 'Cannot contain \\ / : * ? " < > | or control characters'
-
-        if raw != raw.strip(" .") :
-            return False, "Cannot start or end with a space or a period"
-
-        if not found_placeholder:
-            return False, "Include at least one field, e.g. %(title)s"
-
-        if len(raw) > 180:
-            return False, "Template is too long (max 180 characters)"
-
-        return True, ""
-
-    def _validate_all(self) -> None:
-        proxy = self.proxy_input.text().strip()
-        proxy_ok = (proxy == "") or proxy.startswith(("http://", "https://", "socks5://"))
-
-        ca_cert_txt = self.custom_ca_cert_input.text().strip()
-        ca_cert_ok = (ca_cert_txt == "") or Path(ca_cert_txt).is_file()
-
-        # Cookies: ok if browser chosen; if not, file path can be empty
-        cookies_ok = True
-
-        rate_ok = self._rx_rate.match(self.limit_rate_input.text()).hasMatch()
-        langs_ok = (not self.subtitles_enabled.isChecked()) or (
-            self._rx_langs.match(self.languages_input.text()).hasMatch()
-            and bool(self.languages_input.text().strip())
-        )
-        items_ok = self._rx_items.match(self.playlist_items.text()).hasMatch()
-
-        date_txt = self.date_after.text().strip()
-        date_ok = self._rx_date.match(date_txt).hasMatch()
-        if date_ok and date_txt:
-            try:
-                datetime.datetime.strptime(date_txt, "%Y%m%d")
-            except ValueError:
-                date_ok = False
-
-        # Archive path optional even if enabled
-        archive_ok = True
-
-        # Custom filename template only needs to be valid when actually selected
-        is_custom_filename = self._filename_format_index_to_value(self.filename_format_combo.currentIndex()) == "custom"
-        if is_custom_filename:
-            filename_ok, filename_err = self._validate_filename_template(self.custom_filename_input.text())
-        else:
-            filename_ok, filename_err = True, ""
-
-        self._mark_error(self.proxy_input, not proxy_ok, "Must start with http://, https://, or socks5://")
-        self._mark_error(self.custom_ca_cert_input, not ca_cert_ok, "File does not exist")
-        self._mark_error(self.limit_rate_input, not rate_ok, "Use a number with K, M, or G (e.g., 500K, 5M, 1G)")
-        self._mark_error(
-            self.languages_input,
-            not langs_ok and self.subtitles_enabled.isChecked(),
-            "Provide 2–3 letter codes, e.g., en, es, fra",
-        )
-        self._mark_error(self.playlist_items, not items_ok, "Use indices or ranges: 1,5-10,15")
-        self._mark_error(self.date_after, not date_ok, "Must be YYYYMMDD (e.g., 20240101)")
-        self._mark_error(self.custom_filename_input, is_custom_filename and not filename_ok, filename_err or None)
-
-        all_ok = proxy_ok and ca_cert_ok and cookies_ok and rate_ok and langs_ok and items_ok and date_ok and archive_ok and filename_ok
-        self._set_save_enabled(all_ok)
-
-    def _set_save_enabled(self, enabled: bool) -> None:
-        btn = self.buttons.button(QtWidgets.QDialogButtonBox.Save)
-        if btn:
-            btn.setEnabled(enabled)
-            if enabled:
-                btn.setDefault(True)
-            btn.setToolTip("Save changes" if enabled else "Fix highlighted fields to enable Save")
-
-    # ---------- Dirty tracking ----------
-    def _wire_dirty_tracking(self) -> None:
-        def watch(w: QtCore.QObject):
-            if isinstance(w, QtWidgets.QLineEdit):
-                w.textChanged.connect(self._on_any_changed)
-            elif isinstance(w, QtWidgets.QComboBox):
-                w.currentTextChanged.connect(self._on_any_changed)
-            elif isinstance(w, QtWidgets.QSpinBox):
-                w.valueChanged.connect(self._on_any_changed)
-            elif isinstance(w, (QtWidgets.QCheckBox, UISwitch, QtWidgets.QRadioButton)):
-                w.toggled.connect(self._on_any_changed)
-
-        for w in (
-            # Network
-            self.proxy_input,
-            self.custom_ca_cert_input,
-            self.cookies_path_input,
-            self.cookies_browser_combo,
-            self.import_cookies_combo,
-            self.cookies_auto_refresh,
-            self.cookies_last_label,
-            self.limit_rate_input,
-            self.retries_spin,
-            # SponsorBlock
-            *self.category_cb.values(),
-            # Chapters
-            self.chapters_none,
-            self.chapters_embed,
-            self.chapters_split,
-            # Subtitles
-            self.subtitles_enabled,
-            self.languages_input,
-            self.auto_subs,
-            self.convert_subs,
-            # Playlist
-            self.enable_archive,
-            self.archive_path_input,
-            self.playlist_reverse,
-            self.playlist_items,
-            # Post
-            self.audio_normalize,
-            self.add_metadata,
-            self.crop_covers,
-            self.custom_ffmpeg,
-            self.extra_ytdlp_args,
-            self.youtube_player_client_combo,
-            self.video_format_combo,
-            self.write_thumbnail,
-            self.convert_thumbnails,
-            self.embed_thumbnail,
-            # Output
-            self.organize_uploader,
-            self.date_after,
-            self.filename_format_combo,
-            self.custom_filename_input,
-            # Experimental
-            self.live_stream,
-            self.yt_music,
-        ):
-            watch(w)
-
-        # Baseline snapshot
-        self._initial_snapshot = self.get_settings()
-
-    def _on_any_changed(self, *args) -> None:
+    def _on_changed(self, *_args) -> None:
         self._set_dirty(True)
 
     def _set_dirty(self, dirty: bool) -> None:
         self._dirty = dirty
-        self._update_status()
-
-    def _update_status(self) -> None:
-        self.status_lbl.setText(
-            "●  Unsaved changes — press Ctrl+S to save" if self._dirty else "●  All changes saved"
+        self.status_label.setText(
+            "\u25cf Unsaved changes \u2014 press Ctrl+S to save"
+            if dirty
+            else "\u2713 All changes saved"
         )
-        self.status_lbl.setProperty("state", "dirty" if self._dirty else "clean")
-        self.status_lbl.style().unpolish(self.status_lbl)
-        self.status_lbl.style().polish(self.status_lbl)
-        self.reset_btn.setEnabled(self._dirty)
+        self.status_label.setProperty("state", "dirty" if dirty else "clean")
+        style = self.status_label.style()
+        style.unpolish(self.status_label)
+        style.polish(self.status_label)
+        self.reset_button.setEnabled(dirty)
 
-    def _on_reset(self) -> None:
-        if not self._initial_snapshot:
+    # ==================================================================
+    # Validation
+    # ==================================================================
+
+    def validate_filename_template(self, text: str) -> Tuple[bool, str]:
+        raw = text.strip()
+        if not raw:
+            return False, "Enter a template, e.g. %(title)s"
+        if len(raw) > 180:
+            return False, "Template is too long (180 characters maximum)"
+        if raw != raw.strip(" ."):
+            return False, "Cannot start or end with a space or a period"
+
+        # Mask escaped percent signs so they cannot be mistaken for a
+        # malformed placeholder.
+        working = raw.replace("%%", "\u0000")
+
+        found = False
+        literals: List[str] = []
+        position = 0
+        for match in _PLACEHOLDER_RE.finditer(working):
+            found = True
+            literals.append(working[position : match.start()])
+            for field in match.group("fields").split(","):
+                if field not in ALLOWED_TEMPLATE_FIELDS:
+                    return False, f"Unknown field: %({field})s"
+            position = match.end()
+        literals.append(working[position:])
+
+        remainder = "".join(literals)
+        if "%" in remainder:
+            return False, "Malformed placeholder \u2014 use %(field)s"
+        if _ILLEGAL_LITERAL_RE.search(remainder.replace("\u0000", "%")):
+            return False, "Cannot contain \\ / : * ? \" < > | or control characters"
+        if not found:
+            return False, "Include at least one field, e.g. %(title)s"
+        return True, ""
+
+    def _validate(self) -> None:
+        proxy_ok = is_valid_proxy(self.proxy_input.text())
+        ui.set_error(
+            self.proxy_input, not proxy_ok,
+            "Use http://, https://, socks4:// or socks5://",
+        )
+
+        ca_text = self.ca_cert_input.text().strip()
+        ca_ok = not ca_text or Path(ca_text).is_file()
+        ui.set_error(self.ca_cert_input, not ca_ok, "That file does not exist")
+
+        rate_ok = is_valid_rate_limit(self.limit_rate.text())
+        ui.set_error(self.limit_rate, not rate_ok, "Use a number with K, M or G")
+
+        langs_needed = self.subs_enabled.isChecked()
+        langs_text = self.sub_langs.text().strip()
+        langs_ok = (not langs_needed) or (
+            bool(langs_text) and is_valid_sub_langs(langs_text)
+        )
+        ui.set_error(
+            self.sub_langs, not langs_ok, "Two or three letter codes, e.g. en, es, fra"
+        )
+
+        items_ok = is_valid_playlist_items(self.playlist_items.text())
+        ui.set_error(self.playlist_items, not items_ok, "Use indices and ranges: 1,5-10,15")
+
+        date_ok = is_valid_dateafter(self.date_after.text())
+        ui.set_error(self.date_after, not date_ok, "Use YYYYMMDD, e.g. 20240101")
+
+        folder_text = self.downloads_dir.text().strip()
+        folder_ok = not folder_text or not Path(folder_text).is_file()
+        ui.set_error(self.downloads_dir, not folder_ok, "That is a file, not a folder")
+
+        if self._filename_value() == "custom":
+            name_ok, name_error = self.validate_filename_template(
+                self.custom_filename.text()
+            )
+        else:
+            name_ok, name_error = True, ""
+        ui.set_error(self.custom_filename, not name_ok, name_error)
+
+        valid = all(
+            (proxy_ok, ca_ok, rate_ok, langs_ok, items_ok, date_ok, folder_ok, name_ok)
+        )
+        save = self.buttons.button(QDialogButtonBox.Save)
+        if save is not None:
+            save.setEnabled(valid)
+            save.setDefault(valid)
+            save.setToolTip(
+                "Save changes" if valid else "Fix the highlighted fields to save"
+            )
+
+    def _first_invalid(self) -> Optional[QWidget]:
+        for binding in self._bindings:
+            if (binding.widget.property("state") or "") == "error":
+                return binding.widget
+        return None
+
+    # ==================================================================
+    # Pickers
+    # ==================================================================
+
+    def _browse_cookies(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Cookies File", str(self.settings.BASE_DIR),
+            "Cookies (*.txt *.json);;All Files (*)",
+        )
+        if path:
+            self.cookies_path.setText(path)
+
+    def _browse_ca(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select CA Certificate", str(self.settings.BASE_DIR),
+            "Certificates (*.crt *.pem *.cer);;All Files (*)",
+        )
+        if path:
+            self.ca_cert_input.setText(path)
+
+    def _browse_archive(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Select Archive File", str(self.settings.ARCHIVE_PATH),
+            "Text Files (*.txt);;All Files (*)",
+        )
+        if path:
+            self.archive_path.setText(path)
+
+    def _browse_downloads(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Download Folder", str(self.settings.DOWNLOADS_DIR)
+        )
+        if path:
+            self.downloads_dir.setText(path)
+
+    def _pick_date(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Date")
+        dialog.setStyleSheet(ui.dialog_qss())
+        layout = QVBoxLayout(dialog)
+
+        calendar = QCalendarWidget()
+        calendar.setGridVisible(True)
+        current = self.date_after.text().strip()
+        if current:
+            try:
+                parsed = datetime.datetime.strptime(current, "%Y%m%d").date()
+                calendar.setSelectedDate(QDate(parsed.year, parsed.month, parsed.day))
+            except ValueError:
+                pass
+        layout.addWidget(calendar)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec():
+            self.date_after.setText(calendar.selectedDate().toString("yyyyMMdd"))
+
+    def _import_cookies(self) -> None:
+        browser = self.cookies_browser.currentText().strip()
+        if not browser:
+            QMessageBox.information(
+                self, "Choose a browser",
+                "Select a browser to import cookies from first.",
+            )
             return
-        self._apply_snapshot(self._initial_snapshot)
-        self._set_dirty(False)
-        self._validate_all()
 
-    # ---------- Navigation helpers ----------
-    def _nav_next(self) -> None:
-        idx = self.sidebar.currentRow()
-        count = self.sidebar.count()
-        if count == 0:
-            return
-        self.sidebar.setCurrentRow((idx + 1) % count)
-
-    def _nav_prev(self) -> None:
-        idx = self.sidebar.currentRow()
-        count = self.sidebar.count()
-        if count == 0:
-            return
-        self.sidebar.setCurrentRow((idx - 1) % count)
-
-    def _focus_first_in_current_page(self) -> None:
-        # Current page is wrapped in a QScrollArea
-        sa = self.stack.currentWidget()
-        if not isinstance(sa, QtWidgets.QScrollArea):
-            return
-        page = sa.widget()
-        if not page:
-            return
-        # Preferred order of focusable widgets
-        candidates: List[QtWidgets.QWidget] = []
-        for t in (QtWidgets.QLineEdit, QtWidgets.QComboBox, QtWidgets.QSpinBox, UISwitch, QtWidgets.QCheckBox, QtWidgets.QRadioButton):
-            candidates.extend(page.findChildren(t))
-        for w in candidates:
-            if w.isVisible() and w.isEnabled() and w.focusPolicy() != QtCore.Qt.NoFocus:
-                w.setFocus(QtCore.Qt.OtherFocusReason)
-                self._ensure_widget_visible(w)
-                break
-
-    def _ensure_widget_visible(self, w: QtWidgets.QWidget) -> None:
-        # Find containing QScrollArea
-        parent = w.parent()
-        sa: Optional[QtWidgets.QScrollArea] = None
-        while parent:
-            if isinstance(parent, QtWidgets.QScrollArea):
-                sa = parent
-                break
-            parent = parent.parent()
-
-        if not isinstance(sa, QtWidgets.QScrollArea):
-            return
-
+        target = Path(self.settings.BASE_DIR) / "cookies.txt"
+        self.import_button.setEnabled(False)
         try:
-            sa.ensureWidgetVisible(w, 24, 24)  # margins
-            return
-        except Exception:
-            pass
+            ok, message = cookie_manager.export_for_browser(browser, target)
+        finally:
+            self.import_button.setEnabled(True)
 
-        # Fallback: compute position in viewport and adjust scroll bars
-        vp = sa.viewport()
-        top_left = w.mapTo(vp, QtCore.QPoint(0, 0))
-        # Keep a small margin
-        margin_x, margin_y = 24, 24
-
-        hbar = sa.horizontalScrollBar()
-        vbar = sa.verticalScrollBar()
-
-        # Horizontal
-        x = top_left.x()
-        if x < hbar.value() + margin_x:
-            hbar.setValue(max(0, x - margin_x))
-        else:
-            right = x + w.width()
-            view_right = hbar.value() + vp.width() - margin_x
-            if right > view_right:
-                hbar.setValue(min(hbar.maximum(), right - vp.width() + margin_x))
-
-        # Vertical
-        y = top_left.y()
-        if y < vbar.value() + margin_y:
-            vbar.setValue(max(0, y - margin_y))
-        else:
-            bottom = y + w.height()
-            view_bottom = vbar.value() + vp.height() - margin_y
-            if bottom > view_bottom:
-                vbar.setValue(min(vbar.maximum(), bottom - vp.height() + margin_y))
-
-    # ---------- Accept / Reject ----------
-    def _on_accept(self) -> None:
-        btn = self.buttons.button(QtWidgets.QDialogButtonBox.Save)
-        if btn and not btn.isEnabled():
-            err = self._first_error_widget()
-            if err:
-                err.setFocus(QtCore.Qt.OtherFocusReason)
-                self._ensure_widget_visible(err)
-                QtWidgets.QToolTip.showText(err.mapToGlobal(err.rect().bottomLeft()), err.toolTip(), err)
+        if not ok:
+            QMessageBox.warning(self, "Import failed", message)
             return
 
-        self.apply()
-        self._initial_snapshot = self.get_settings()
-        self._set_dirty(False)
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+        self.cookies_path.setText(str(target))
+        self.cookies_status.setText(f"Last imported: {target.name} ({stamp})")
+        self.settings.COOKIES_LAST_IMPORTED = f"{target.name} ({stamp})"
+        self.settings.COOKIES_PATH = target
+        self.settings.save_config()
+        QMessageBox.information(self, "Cookies imported", message)
+
+    # ==================================================================
+    # Navigation / events
+    # ==================================================================
+
+    def _step(self, delta: int) -> None:
+        count = self.sidebar.count()
+        if count:
+            self.sidebar.setCurrentRow((self.sidebar.currentRow() + delta) % count)
+
+    def _sync_navigation(self, index: int) -> None:
+        if not 0 <= index < self.stack.count():
+            return
+        if self.sidebar.currentRow() != index:
+            blocker = QSignalBlocker(self.sidebar)
+            self.sidebar.setCurrentRow(index)
+            del blocker
+        if self.section_combo.currentIndex() != index:
+            blocker = QSignalBlocker(self.section_combo)
+            self.section_combo.setCurrentIndex(index)
+            del blocker
+
+    def _update_responsive(self) -> None:
+        narrow = self.width() < self.NARROW_WIDTH
+        self.sidebar.setVisible(not narrow)
+        self.section_combo.setVisible(narrow)
+        self._sync_navigation(self.stack.currentIndex())
+
+        available = max(0, self.stack.width() - 64)
+        if available >= 900:
+            columns = 4
+        elif available >= 700:
+            columns = 3
+        elif available >= 460:
+            columns = 2
+        else:
+            columns = 1
+        self._layout_sponsorblock(columns)
+
+    def _align_labels(self) -> None:
+        metrics = self.fontMetrics()
+        width = max(
+            (metrics.horizontalAdvance(label.text()) for label in self._labels),
+            default=0,
+        )
+        for label in self._labels:
+            label.setMinimumWidth(width + 8)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_responsive()
+
+    def _accept(self) -> None:
+        self._validate()
+        save = self.buttons.button(QDialogButtonBox.Save)
+        if save is not None and not save.isEnabled():
+            invalid = self._first_invalid()
+            if invalid is not None:
+                invalid.setFocus(Qt.OtherFocusReason)
+                QToolTip.showText(
+                    invalid.mapToGlobal(invalid.rect().bottomLeft()),
+                    invalid.toolTip(),
+                    invalid,
+                )
+            return
         self.accept()
 
-    def _on_reject(self) -> None:
+    def _reject(self) -> None:
         if self._dirty:
-            resp = QtWidgets.QMessageBox.question(
+            answer = QMessageBox.question(
                 self,
                 "Discard changes?",
                 "You have unsaved changes. Discard them and close?",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                QtWidgets.QMessageBox.No,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
             )
-            if resp != QtWidgets.QMessageBox.Yes:
+            if answer != QMessageBox.Yes:
                 return
         self.reject()
-
-    # ---------- Data I/O ----------
-    def _load_from_settings(self) -> None:
-        # Network
-        self.proxy_input.setText(getattr(self.settings, "PROXY_URL", "") or "")
-        self.cookies_path_input.setText(str(getattr(self.settings, "COOKIES_PATH", "") or ""))
-        self.cookies_browser_combo.setCurrentText(getattr(self.settings, "COOKIES_FROM_BROWSER", "") or "")
-        self.cookies_auto_refresh.setChecked(bool(getattr(self.settings, "COOKIES_AUTO_REFRESH", False)))
-        self.ignore_ssl_errors.setChecked(self.settings.IGNORE_SSL_ERRORS)
-        self.custom_ca_cert_input.setText(getattr(self.settings, "CUSTOM_CA_CERT", "") or "")
-        last = getattr(self.settings, "COOKIES_LAST_IMPORTED", "")
-        self.cookies_last_label.setText(f"Last imported: {last}" if last else "")        
-        self.retries_spin.setValue(int(getattr(self.settings, "RETRIES", 3)))
-        self.limit_rate_input.setText(getattr(self.settings, "LIMIT_RATE", "") or "")
-
-        # SponsorBlock
-        selected = set(getattr(self.settings, "SPONSORBLOCK_CATEGORIES", []) or [])
-        for code, cb in self.category_cb.items():
-            cb.setChecked(code in selected)
-
-        # Chapters
-        mode = getattr(self.settings, "CHAPTERS_MODE", "none")
-        if mode == "embed":
-            self.chapters_embed.setChecked(True)
-        elif mode == "split":
-            self.chapters_split.setChecked(True)
-        else:
-            self.chapters_none.setChecked(True)
-
-        # Subtitles
-        self.subtitles_enabled.setChecked(bool(getattr(self.settings, "WRITE_SUBS", False)))
-        self.languages_input.setText(getattr(self.settings, "SUB_LANGS", "") or "")
-        self.auto_subs.setChecked(bool(getattr(self.settings, "WRITE_AUTO_SUBS", False)))
-        self.convert_subs.setChecked(bool(getattr(self.settings, "CONVERT_SUBS_TO_SRT", False)))
-        self._on_subtitles_toggled(self.subtitles_enabled.isChecked())
-
-        # Playlist
-        self.enable_archive.setChecked(bool(getattr(self.settings, "ENABLE_ARCHIVE", False)))
-        self.archive_path_input.setText(str(getattr(self.settings, "ARCHIVE_PATH", "") or ""))
-        self._on_archive_toggled(self.enable_archive.isChecked())
-        self.playlist_reverse.setChecked(bool(getattr(self.settings, "PLAYLIST_REVERSE", False)))
-        self.playlist_items.setText(getattr(self.settings, "PLAYLIST_ITEMS", "") or "")
-
-        # Post-processing
-        self.audio_normalize.setChecked(bool(getattr(self.settings, "AUDIO_NORMALIZE", False)))
-        self.add_metadata.setChecked(bool(getattr(self.settings, "ADD_METADATA", False)))
-        self.crop_covers.setChecked(bool(getattr(self.settings, "CROP_AUDIO_COVERS", False)))
-        self.custom_ffmpeg.setText(getattr(self.settings, "CUSTOM_FFMPEG_ARGS", "") or "")
-        self.extra_ytdlp_args.setText(getattr(self.settings, "EXTRA_YTDLP_ARGS", "") or "")
-        vf = getattr(self.settings, "VIDEO_FORMAT", ".mkv") or ".mkv"
-        if vf not in (".mkv", ".mp4", ".webm"):
-            vf = ".mkv"
-        
-        # ─────────── Thumbnail state ───────────
-        self.write_thumbnail.setChecked(bool(getattr(self.settings, "WRITE_THUMBNAIL", False)))
-        self.convert_thumbnails.setChecked(bool(getattr(self.settings, "CONVERT_THUMBNAILS", True)))
-        self.embed_thumbnail.setChecked(bool(getattr(self.settings, "EMBED_THUMBNAIL", True)))
-        # ─────────────────────────────────────────
-       
-        self.video_format_combo.setCurrentText(vf)
-
-        cur_client = getattr(self.settings, "YOUTUBE_PLAYER_CLIENT", "auto") or "auto"
-        client_label = next(
-            (lbl for lbl, val in YOUTUBE_PLAYER_CLIENTS.items() if val == cur_client),
-            "Auto (yt-dlp default)",
-        )
-        self.youtube_player_client_combo.setCurrentText(client_label)
-
-        # Output
-        self.organize_uploader.setChecked(bool(getattr(self.settings, "ORGANIZE_BY_UPLOADER", False)))
-        self.date_after.setText(getattr(self.settings, "DATEAFTER", "") or "")
-        fmt = getattr(self.settings, "FILENAME_FORMAT", "default") or "default"
-        block = QtCore.QSignalBlocker(self.filename_format_combo)
-        self.filename_format_combo.setCurrentIndex(self._filename_format_value_to_index(fmt))
-        del block
-        self.custom_filename_input.setText(getattr(self.settings, "CUSTOM_FILENAME_TEMPLATE", "") or "")
-        self._on_filename_format_changed(self.filename_format_combo.currentIndex())
-
-        # Experimental
-        self.live_stream.setChecked(bool(getattr(self.settings, "LIVE_FROM_START", False)))
-        self.yt_music.setChecked(bool(getattr(self.settings, "YT_MUSIC_METADATA", False)))
-
-    def _apply_snapshot(self, data: dict) -> None:
-        # Network
-        self.proxy_input.setText(data.get("PROXY_URL", ""))
-        self.ignore_ssl_errors.setChecked(bool(data.get("IGNORE_SSL_ERRORS", False)))
-        self.custom_ca_cert_input.setText(data.get("CUSTOM_CA_CERT", ""))
-        self.cookies_browser_combo.setCurrentText(data.get("COOKIES_FROM_BROWSER", ""))
-        self.cookies_path_input.setText(str(data.get("COOKIES_PATH", "") or ""))
-        self.cookies_auto_refresh.setChecked(bool(data.get("COOKIES_AUTO_REFRESH", False)))
-        last = data.get("COOKIES_LAST_IMPORTED", "")
-        self.cookies_last_label.setText(f"Last imported: {last}" if last else "")
-        self.limit_rate_input.setText(data.get("LIMIT_RATE", ""))
-        self.retries_spin.setValue(int(data.get("RETRIES", self.retries_spin.value())))
-
-        # SponsorBlock
-        sel = set(data.get("SPONSORBLOCK_CATEGORIES", []))
-        for code, cb in self.category_cb.items():
-            cb.setChecked(code in sel)
-
-        # Chapters
-        ch = data.get("CHAPTERS_MODE", "none")
-        if ch == "embed":
-            self.chapters_embed.setChecked(True)
-        elif ch == "split":
-            self.chapters_split.setChecked(True)
-        else:
-            self.chapters_none.setChecked(True)
-
-        # Subtitles
-        self.subtitles_enabled.setChecked(bool(data.get("WRITE_SUBS", False)))
-        self.languages_input.setText(data.get("SUB_LANGS", ""))
-        self.auto_subs.setChecked(bool(data.get("WRITE_AUTO_SUBS", False)))
-        self.convert_subs.setChecked(bool(data.get("CONVERT_SUBS_TO_SRT", False)))
-        self._on_subtitles_toggled(self.subtitles_enabled.isChecked())
-
-        # Playlist
-        self.enable_archive.setChecked(bool(data.get("ENABLE_ARCHIVE", False)))
-        self.archive_path_input.setText(str(data.get("ARCHIVE_PATH", "") or ""))
-        self._on_archive_toggled(self.enable_archive.isChecked())
-        self.playlist_reverse.setChecked(bool(data.get("PLAYLIST_REVERSE", False)))
-        self.playlist_items.setText(data.get("PLAYLIST_ITEMS", ""))
-
-        # Post-processing
-        self.audio_normalize.setChecked(bool(data.get("AUDIO_NORMALIZE", False)))
-        self.add_metadata.setChecked(bool(data.get("ADD_METADATA", False)))
-        self.crop_covers.setChecked(bool(data.get("CROP_AUDIO_COVERS", False)))
-        self.custom_ffmpeg.setText(data.get("CUSTOM_FFMPEG_ARGS", ""))
-        self.extra_ytdlp_args.setText(data.get("EXTRA_YTDLP_ARGS", ""))
-        vf = data.get("VIDEO_FORMAT", ".mkv") or ".mkv"
-        if vf not in (".mkv", ".mp4", ".webm"):
-            vf = ".mkv"
-
-        # Thumbnail flags
-        self.write_thumbnail.setChecked(bool(data.get("WRITE_THUMBNAIL", False)))
-        self.convert_thumbnails.setChecked(bool(data.get("CONVERT_THUMBNAILS", True)))
-        self.embed_thumbnail.setChecked(bool(data.get("EMBED_THUMBNAIL", True)))
-
-        self.video_format_combo.setCurrentText(vf)
-
-        cur_client = data.get("YOUTUBE_PLAYER_CLIENT", "auto") or "auto"
-        client_label = next(
-            (lbl for lbl, val in YOUTUBE_PLAYER_CLIENTS.items() if val == cur_client),
-            "Auto (yt-dlp default)",
-        )
-        self.youtube_player_client_combo.setCurrentText(client_label)
-
-        # Output
-        self.organize_uploader.setChecked(bool(data.get("ORGANIZE_BY_UPLOADER", False)))
-        self.date_after.setText(data.get("DATEAFTER", ""))
-        fmt = data.get("FILENAME_FORMAT", "default") or "default"
-        block = QtCore.QSignalBlocker(self.filename_format_combo)
-        self.filename_format_combo.setCurrentIndex(self._filename_format_value_to_index(fmt))
-        del block
-        self.custom_filename_input.setText(data.get("CUSTOM_FILENAME_TEMPLATE", ""))
-        self._on_filename_format_changed(self.filename_format_combo.currentIndex())
-
-        # Experimental
-        self.live_stream.setChecked(bool(data.get("LIVE_FROM_START", False)))
-        self.yt_music.setChecked(bool(data.get("YT_MUSIC_METADATA", False)))
-
-    def get_settings(self) -> dict:
-        # Chapters mode
-        if self.chapters_embed.isChecked():
-            ch_mode = "embed"
-        elif self.chapters_split.isChecked():
-            ch_mode = "split"
-        else:
-            ch_mode = "none"
-
-        sb = [code for code, cb in self.category_cb.items() if cb.isChecked()]
-
-        return {
-            "PROXY_URL": self.proxy_input.text().strip(),
-            "IGNORE_SSL_ERRORS": self.ignore_ssl_errors.isChecked(),
-            "CUSTOM_CA_CERT": self.custom_ca_cert_input.text().strip(),
-            "COOKIES_PATH": Path(self.cookies_path_input.text().strip()) if self.cookies_path_input.text().strip() else Path(""),
-            "COOKIES_FROM_BROWSER": self.cookies_browser_combo.currentText().strip(),
-            "COOKIES_AUTO_REFRESH": self.cookies_auto_refresh.isChecked(),
-            "COOKIES_LAST_IMPORTED": self.cookies_last_label.text().replace("Last imported: ", "") if self.cookies_last_label.text() else "",
-            "SPONSORBLOCK_CATEGORIES": sb,
-            "CHAPTERS_MODE": ch_mode,
-            "WRITE_SUBS": self.subtitles_enabled.isChecked(),
-            "SUB_LANGS": self.languages_input.text().strip(),
-            "WRITE_AUTO_SUBS": self.auto_subs.isChecked(),
-            "CONVERT_SUBS_TO_SRT": self.convert_subs.isChecked(),
-            "ENABLE_ARCHIVE": self.enable_archive.isChecked(),
-            "ARCHIVE_PATH": Path(self.archive_path_input.text().strip()) if self.archive_path_input.text().strip() else Path(""),
-            "PLAYLIST_REVERSE": self.playlist_reverse.isChecked(),
-            "PLAYLIST_ITEMS": self.playlist_items.text().strip(),
-            "AUDIO_NORMALIZE": self.audio_normalize.isChecked(),
-            "ADD_METADATA": self.add_metadata.isChecked(),
-            "CROP_AUDIO_COVERS": self.crop_covers.isChecked(),
-            "CUSTOM_FFMPEG_ARGS": self.custom_ffmpeg.text().strip(),
-            "EXTRA_YTDLP_ARGS": self.extra_ytdlp_args.text().strip(),
-            "YOUTUBE_PLAYER_CLIENT": YOUTUBE_PLAYER_CLIENTS.get(
-                self.youtube_player_client_combo.currentText(), "auto"
-            ),
-            # ─────────── Thumbnail flags ───────────
-            "WRITE_THUMBNAIL":    self.write_thumbnail.isChecked(),
-            "CONVERT_THUMBNAILS": self.convert_thumbnails.isChecked(),
-            "EMBED_THUMBNAIL":    self.embed_thumbnail.isChecked(),
-            # ─────────────────────────────────────────
-            "VIDEO_FORMAT": self.video_format_combo.currentText(),
-            "ORGANIZE_BY_UPLOADER": self.organize_uploader.isChecked(),
-            "FILENAME_FORMAT": self._filename_format_index_to_value(self.filename_format_combo.currentIndex()),
-            "CUSTOM_FILENAME_TEMPLATE": self.custom_filename_input.text().strip(),
-            "DATEAFTER": self.date_after.text().strip(),
-            "LIVE_FROM_START": self.live_stream.isChecked(),
-            "YT_MUSIC_METADATA": self.yt_music.isChecked(),
-            "LIMIT_RATE": self.limit_rate_input.text().strip(),
-            "RETRIES": self.retries_spin.value(),
-        }
-
-    def apply(self) -> None:
-        """
-        Applies current form values to self.settings (preferred integration point for MainWindow).
-        """
-        data = self.get_settings()
-        for k, v in data.items():
-            if hasattr(self.settings, k):
-                try:
-                    setattr(self.settings, k, v)
-                except Exception:
-                    # Ignore non-writable attributes
-                    pass
-        # Apply SpotDL tab settings
-        try:
-            if hasattr(self, "spotdl_tab"):
-                self.spotdl_tab.apply(self.settings.SPOTDL)
-        except Exception:
-            pass                    
-        try:
-            # Persist settings so choices like COOKIES_FROM_BROWSER and COOKIES_AUTO_REFRESH
-            # are saved immediately to disk (config.json)
-            if hasattr(self.settings, "save_config"):
-                self.settings.save_config()
-        except Exception:
-            # Swallow persistence errors to avoid blocking the UI
-            pass
-
-    def validate_and_accept(self) -> None:
-        self._validate_all()
-        btn = self.buttons.button(QtWidgets.QDialogButtonBox.Save)
-        if btn and btn.isEnabled():
-            self.apply()
-            self.accept()
-
-    # ---------- Events ----------
-    def showEvent(self, event: QtGui.QShowEvent) -> None:
-        super().showEvent(event)
-        if not self._filters_installed:
-            self._filters_installed = True
-            for le in self._line_edits_for_filters():
-                le.installEventFilter(self)
-        self._update_responsive_layout()
-
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._update_responsive_layout()
-
-    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
-        # Intercept Enter/Return in any QLineEdit to trigger Save via Ctrl+Enter or ⌘+Enter
-        if event.type() == QtCore.QEvent.KeyPress and isinstance(obj, QtWidgets.QLineEdit):
-            ke = event  # already a QKeyEvent for KeyPress events; avoid an extra copy-construction
-            mods = ke.modifiers()
-            # On Windows/Linux use Ctrl, on macOS use Meta (⌘)
-            if (mods & (QtCore.Qt.ControlModifier | QtCore.Qt.MetaModifier)) and \
-               ke.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
-
-                save_btn = self.buttons.button(QtWidgets.QDialogButtonBox.Save)
-                # If Save is disabled, focus first invalid field and show tooltip
-                if save_btn and not save_btn.isEnabled():
-                    err = self._first_error_widget()
-                    if err:
-                        err.setFocus(QtCore.Qt.OtherFocusReason)
-                        self._ensure_widget_visible(err)
-                        QtWidgets.QToolTip.showText(
-                            err.mapToGlobal(err.rect().bottomLeft()),
-                            err.toolTip(),
-                            err
-                        )
-                else:
-                    # If Save is enabled, accept the dialog
-                    save_btn.click()
-                return True
-
-        return super().eventFilter(obj, event)
-
-    # ---------- Utilities ----------
-    def _line_edits_for_filters(self) -> List[QtWidgets.QLineEdit]:
-        fields: List[QtWidgets.QLineEdit] = []
-        for w in (
-            getattr(self, "proxy_input", None),
-            getattr(self, "custom_ca_cert_input", None),
-            getattr(self, "cookies_path_input", None),
-            getattr(self, "limit_rate_input", None),
-            getattr(self, "languages_input", None),
-            getattr(self, "playlist_items", None),
-            getattr(self, "date_after", None),
-            getattr(self, "custom_ffmpeg", None),
-            getattr(self, "extra_ytdlp_args", None),
-            getattr(self, "archive_path_input", None),
-            getattr(self, "custom_filename_input", None),
-        ):
-            if isinstance(w, QtWidgets.QLineEdit):
-                fields.append(w)
-        return fields
-
-    def _first_error_widget(self) -> Optional[QtWidgets.QWidget]:
-        for w in (self.proxy_input, self.custom_ca_cert_input, self.limit_rate_input, self.languages_input, self.playlist_items, self.date_after, self.custom_filename_input):
-            if (w.property("state") or "") == "error":
-                return w
-        return None
-
-    # ---------- Responsive helpers ----------
-    def _update_responsive_layout(self) -> None:
-        is_narrow = self.width() < self.MIN_WIDE_LAYOUT
-        # Toggle sidebar and top section combo for narrow widths
-        self.sidebar.setVisible(not is_narrow)
-        self.section_combo.setVisible(is_narrow)
-
-        # Keep selections in sync when toggling views
-        idx = self.stack.currentIndex()
-        if self.section_combo.currentIndex() != idx:
-            block = QtCore.QSignalBlocker(self.section_combo)
-            self.section_combo.setCurrentIndex(idx)
-        if self.sidebar.currentRow() != idx:
-            block = QtCore.QSignalBlocker(self.sidebar)
-            self.sidebar.setCurrentRow(idx)
-
-        # Responsive SponsorBlock grid reflow (1–4 columns)
-        try:
-            if hasattr(self, "_sb_gridw") and self._sb_gridw:
-                avail = max(0, self.stack.width() - 64)
-                cols = 1
-                if avail >= 900:
-                    cols = 4
-                elif avail >= 700:
-                    cols = 3
-                elif avail >= 480:
-                    cols = 2
-                if getattr(self, "_sb_cols", None) != cols:
-                    self._sb_cols = cols
-                    self._layout_sponsorblock(cols)
-        except Exception:
-            pass
-
-    def _sync_nav_selection(self, index: int) -> None:
-        # Sync both nav controls without causing loops
-        if 0 <= index < self.stack.count():
-            if self.sidebar.currentRow() != index:
-                block1 = QtCore.QSignalBlocker(self.sidebar)
-                self.sidebar.setCurrentRow(index)
-            if self.section_combo.currentIndex() != index:
-                block2 = QtCore.QSignalBlocker(self.section_combo)
-                self.section_combo.setCurrentIndex(index)
-
-    # ---------- Label alignment pass ----------
-    def _finalize_label_column(self) -> None:
-        """
-        Measure widest label and set a uniform minimum width, so every form row
-        aligns perfectly across all pages. Keeps toggles snapped to the right.
-        """
-        max_w = 0
-        fm = self.fontMetrics()
-        for lbl in self._label_refs:
-            max_w = max(max_w, fm.horizontalAdvance(lbl.text()) + 8)
-        for lbl in self._label_refs:
-            lbl.setMinimumWidth(max_w)
