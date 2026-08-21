@@ -571,18 +571,19 @@ class MainWindow(QMainWindow):
         if level not in _LOG_LEVELS:
             level = "Info"
 
+        added: List[Tuple[str, str, str]] = []
         for raw in str(text).splitlines():
             line = " ".join(raw.split()).strip()
-            if not line:
-                continue
-            self._log_entries.append((line, colour, level))
+            if line:
+                added.append((line, colour, level))
+        self._log_entries.extend(added)
 
         cap = max(100, int(self.settings.MAX_LOG_LINES))
         if len(self._log_entries) > cap:
             del self._log_entries[: len(self._log_entries) - cap]
 
         selected = self.filter_box.currentText()
-        for line, line_colour, line_level in self._log_entries[-len(str(text).splitlines()) :]:
+        for line, line_colour, line_level in added:
             if selected in ("All", line_level):
                 self._queue_console_line(line, line_colour)
 
