@@ -1,162 +1,50 @@
 # File: ytget_gui/dialogs/spotdl_preferences_tab.py
+"""Spotify / SpotDL preferences panel.
 
-"""
-SpotDL preferences tab — drop this widget into your PreferencesDialog
-as a tab called "Spotify / SpotDL".
-
-Usage inside PreferencesDialog
--------------------------------
-    from ytget_gui.dialogs.spotdl_preferences_tab import SpotDLPreferencesTab
-
-    tab = SpotDLPreferencesTab(spotdl_settings)
-    tab_widget.addTab(tab, "🎸 Spotify")
-
-    # On dialog accept:
-    tab.apply(spotdl_settings)     # writes values back into the object
-
-Visual notes
-------------
-This widget deliberately reuses the same object names as PreferencesDialog
-(#card, #cardTitle, #cardSubtitle, #sectionLabel, #formLabel, #input,
-#combo, #spin, #check, #divider) so that when it's embedded inside the
-dialog's QStackedWidget it automatically inherits the dialog's QSS
-(Qt stylesheets cascade to descendants regardless of which widget applied
-them). No styling logic lives in this file except for the small
-multi-select list, which isn't covered by the dialog's stylesheet.
+Embedded in PreferencesDialog's stack. Reuses the shared dialog object names
+(#card, #input, #combo, #spin, #check) so it inherits the dialog stylesheet.
 """
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional, Sequence
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
+    QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QComboBox,
-    QCheckBox,
-    QSpinBox,
     QListWidget,
     QListWidgetItem,
-    QFrame,
     QScrollArea,
     QSizePolicy,
-    QGraphicsDropShadowEffect,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtGui import QColor
 
+from ytget_gui.dialogs import common as ui
 from ytget_gui.spotdl_settings import (
-    SpotDLSettings,
-    SPOTDL_FORMATS,
-    SPOTDL_LYRICS_PROVIDERS,
+    DEFAULT_OUTPUT_TEMPLATE,
+    MAX_THREADS,
     SPOTDL_AUDIO_PROVIDERS,
     SPOTDL_BITRATES,
-    SPOTDL_OVERWRITE_MODES,
+    SPOTDL_FORMATS,
+    SPOTDL_LYRICS_PROVIDERS,
     SPOTDL_OUTPUT_TOKENS,
+    SPOTDL_OVERWRITE_MODES,
+    SpotDLSettings,
 )
 
 
-# ---------------------------------------------------------------------------
-#  Small helpers
-# ---------------------------------------------------------------------------
+class OrderedMultiSelect(QListWidget):
+    """Checkable list. Check order is preserved, because spotdl tries providers
+    in the order given and the previous implementation always returned them in
+    display order, silently discarding the user's priority."""
 
-def _g(settings: SpotDLSettings, name: str, default):
-    """getattr with a default, so a settings object saved by an older
-    version of the app (missing a newly-added field) doesn't raise
-    AttributeError and take the whole preferences dialog down with it."""
-    return getattr(settings, name, default)
-
-
-def _label(text: str, tooltip: str = "") -> QLabel:
-    lbl = QLabel(text)
-    lbl.setObjectName("formLabel")
-    if tooltip:
-        lbl.setToolTip(tooltip)
-        lbl.setCursor(Qt.WhatsThisCursor)
-    return lbl
-
-
-def _sep() -> QFrame:
-    f = QFrame()
-    f.setObjectName("divider")
-    f.setFrameShape(QFrame.HLine)
-    f.setFrameShadow(QFrame.Plain)
-    return f
-
-
-def _combo(items: List[str]) -> QComboBox:
-    cb = QComboBox()
-    cb.setObjectName("combo")
-    cb.addItems(items)
-    return cb
-
-
-def _line(text: str = "", placeholder: str = "") -> QLineEdit:
-    le = QLineEdit(text)
-    le.setObjectName("input")
-    if placeholder:
-        le.setPlaceholderText(placeholder)
-    return le
-
-
-def _spin(lo: int, hi: int, val: int) -> QSpinBox:
-    sb = QSpinBox()
-    sb.setObjectName("spin")
-    sb.setRange(lo, hi)
-    sb.setValue(val)
-    return sb
-
-
-def _check(text: str, checked: bool, tooltip: str = "") -> QCheckBox:
-    cb = QCheckBox(text)
-    cb.setObjectName("check")
-    cb.setChecked(checked)
-    if tooltip:
-        cb.setToolTip(tooltip)
-    return cb
-
-
-def _card(title: str, subtitle: str = "") -> tuple[QFrame, QVBoxLayout]:
-    card = QFrame()
-    card.setObjectName("card")
-    v = QVBoxLayout(card)
-    v.setContentsMargins(12, 10, 12, 10)
-    v.setSpacing(7)
-
-    head = QVBoxLayout()
-    head.setContentsMargins(0, 0, 0, 0)
-    head.setSpacing(2)
-    tl = QLabel(title)
-    tl.setObjectName("cardTitle")
-    head.addWidget(tl)
-    if subtitle:
-        st = QLabel(subtitle)
-        st.setObjectName("cardSubtitle")
-        st.setWordWrap(True)
-        head.addWidget(st)
-    v.addLayout(head)
-
-    eff = QGraphicsDropShadowEffect(card)
-    eff.setBlurRadius(20)
-    eff.setColor(QColor(0, 0, 0, 80))
-    eff.setOffset(0, 6)
-    card.setGraphicsEffect(eff)
-
-    return card, v
-
-
-# ---------------------------------------------------------------------------
-#  Multi-select list widget (for lyrics providers, audio providers)
-# ---------------------------------------------------------------------------
-
-class _MultiSelectList(QListWidget):
-    """Checkable list; checked items are the "selected" ones."""
-
-    def __init__(self, choices: List[str], selected: List[str], parent=None):
+    def __init__(
+        self, choices: Sequence[str], selected: Sequence[str], parent=None
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("multiList")
         self.setSelectionMode(QListWidget.NoSelection)
@@ -164,12 +52,20 @@ class _MultiSelectList(QListWidget):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFrameShape(QFrame.NoFrame)
         self.setSpacing(1)
-        for c in choices:
-            item = QListWidgetItem(c)
+
+        self._order: List[str] = [c for c in selected if c in choices]
+
+        # Checked entries first, in their configured order, so the priority is
+        # visible rather than implied.
+        ordered = self._order + [c for c in choices if c not in self._order]
+        for choice in ordered:
+            item = QListWidgetItem(choice)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked if c in selected else Qt.Unchecked)
+            item.setCheckState(Qt.Checked if choice in self._order else Qt.Unchecked)
             self.addItem(item)
-        self.setStyleSheet("""
+
+        self.setStyleSheet(
+            """
             QListWidget#multiList {
                 background: rgba(255, 255, 255, 10);
                 border: 1px solid rgba(255, 255, 255, 20);
@@ -180,11 +76,9 @@ class _MultiSelectList(QListWidget):
             QListWidget#multiList::item {
                 padding: 4px 6px;
                 border-radius: 6px;
-                color: rgba(255, 255, 255, 180);
+                color: rgba(255, 255, 255, 185);
             }
-            QListWidget#multiList::item:hover {
-                background: rgba(255, 255, 255, 25);
-            }
+            QListWidget#multiList::item:hover { background: rgba(255, 255, 255, 25); }
             QListWidget#multiList::indicator {
                 width: 16px;
                 height: 16px;
@@ -197,38 +91,37 @@ class _MultiSelectList(QListWidget):
                     stop:0 #00E5FF, stop:1 #7C4DFF);
                 border: 1px solid #00E5FF;
             }
-        """)
-        self._fit_to_contents()
+            """
+        )
 
-    def _fit_to_contents(self) -> None:
-        """Grow the widget's fixed height to show every row with no scrollbar."""
+        self.itemChanged.connect(self._track_order)
+        self._fit()
+
+    def _track_order(self, item: QListWidgetItem) -> None:
+        text = item.text()
+        if item.checkState() == Qt.Checked:
+            if text not in self._order:
+                self._order.append(text)
+        elif text in self._order:
+            self._order.remove(text)
+
+    def _fit(self) -> None:
         rows = self.count()
-        row_h = self.sizeHintForRow(0) if rows else 18
-        total = row_h * rows + 2 * self.frameWidth() + 4
-        self.setFixedHeight(max(total, row_h + 4))
+        row_height = self.sizeHintForRow(0) if rows else 18
+        self.setFixedHeight(max(row_height + 8, row_height * rows + 2 * self.frameWidth() + 8))
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
-    def get_checked(self) -> List[str]:
-        result = []
-        for i in range(self.count()):
-            item = self.item(i)
-            if item.checkState() == Qt.Checked:
-                result.append(item.text())
-        return result
+    def checked(self) -> List[str]:
+        present = {
+            self.item(i).text()
+            for i in range(self.count())
+            if self.item(i).checkState() == Qt.Checked
+        }
+        return [c for c in self._order if c in present]
 
-
-# ---------------------------------------------------------------------------
-#  Main tab widget
-# ---------------------------------------------------------------------------
 
 class SpotDLPreferencesTab(QScrollArea):
-    """
-    A scrollable preferences panel for SpotDL options.
-    Instantiate with the current SpotDLSettings object.
-    Call .apply(settings) to write values back.
-    """
-
-    def __init__(self, settings: SpotDLSettings, parent=None):
+    def __init__(self, settings: SpotDLSettings, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("scrollArea")
         self.setWidgetResizable(True)
@@ -237,204 +130,211 @@ class SpotDLPreferencesTab(QScrollArea):
 
         container = QWidget()
         outer = QVBoxLayout(container)
-        outer.setSpacing(8)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
 
-        # Two-column layout: fits everything without vertical scrolling on
-        # typical dialog heights, instead of one long stacked column.
-        cols = QHBoxLayout()
-        cols.setSpacing(10)
+        columns = QHBoxLayout()
+        columns.setSpacing(10)
         left = QVBoxLayout()
         left.setSpacing(8)
         right = QVBoxLayout()
         right.setSpacing(8)
-        cols.addLayout(left, 1)
-        cols.addLayout(right, 1)
-        outer.addLayout(cols)
+        columns.addLayout(left, 1)
+        columns.addLayout(right, 1)
+        outer.addLayout(columns)
 
-        # ── Section: Output + Performance ──────────────────────────────
-        card_output, g_lay = _card("Output", "Format, bitrate, threads, and filename template")
-        g = QGridLayout()
-        g.setContentsMargins(0, 0, 0, 0)
-        g.setHorizontalSpacing(10)
-        g.setVerticalSpacing(6)
-        g.setColumnStretch(1, 1)
-
-        g.addWidget(_label("Format", "Audio format for downloaded tracks"), 0, 0)
-        self.fmt_combo = _combo(SPOTDL_FORMATS)
-        idx = SPOTDL_FORMATS.index(_g(settings, "SPOTDL_FORMAT", "")) if _g(settings, "SPOTDL_FORMAT", "") in SPOTDL_FORMATS else 0
-        self.fmt_combo.setCurrentIndex(idx)
-        g.addWidget(self.fmt_combo, 0, 1)
-
-        g.addWidget(_label("Bitrate", "Target bitrate (auto = let spotdl decide)"), 1, 0)
-        self.bitrate_combo = _combo(SPOTDL_BITRATES)
-        br_idx = SPOTDL_BITRATES.index(_g(settings, "SPOTDL_BITRATE", "")) if _g(settings, "SPOTDL_BITRATE", "") in SPOTDL_BITRATES else 0
-        self.bitrate_combo.setCurrentIndex(br_idx)
-        g.addWidget(self.bitrate_combo, 1, 1)
-
-        g.addWidget(_label("Download threads", "Parallel download threads (1–32)"), 2, 0)
-        self.threads_spin = _spin(1, 32, _g(settings, "SPOTDL_THREADS", 4))
-        g.addWidget(self.threads_spin, 2, 1)
-
-        g.addWidget(_label(
-            "Output template",
-            "Filename template. Tokens: " + "  ".join(SPOTDL_OUTPUT_TOKENS[:8]) + " …"
-        ), 3, 0)
-        self.output_edit = _line(_g(settings, "SPOTDL_OUTPUT", ""), "{artists} - {title} - {year}.{output-ext}")
-        self.output_edit.setToolTip("Available tokens:\n" + "\n".join(SPOTDL_OUTPUT_TOKENS))
-        g.addWidget(self.output_edit, 3, 1)
-
-        g_lay.addLayout(g)
-        left.addWidget(card_output)
-
-        # ── Section: Lyrics & Audio providers (side by side lists) ──────
-        card_prov, prov_lay = _card("Providers", "Lyrics and audio sources spotdl will use")
-        prov_cols = QHBoxLayout()
-        prov_cols.setSpacing(10)
-
-        lyr = QVBoxLayout()
-        lyr.setSpacing(4)
-        lyr.addWidget(_label("Lyrics (order matters)", "spotdl tries providers left-to-right"))
-        self.lyrics_list = _MultiSelectList(SPOTDL_LYRICS_PROVIDERS, _g(settings, "SPOTDL_LYRICS", []))
-        lyr.addWidget(self.lyrics_list)
-        self.lrc_check = _check(
-            "Generate .lrc sidecar files", _g(settings, "SPOTDL_GENERATE_LRC", False),
-            "Write synced lyrics as separate .lrc files next to each track"
-        )
-        lyr.addWidget(self.lrc_check)
-        prov_cols.addLayout(lyr, 1)
-
-        au = QVBoxLayout()
-        au.setSpacing(4)
-        au.addWidget(_label("Audio sources", "youtube-music gives best metadata"))
-        self.audio_list = _MultiSelectList(SPOTDL_AUDIO_PROVIDERS, _g(settings, "SPOTDL_AUDIO_PROVIDERS", []))
-        au.addWidget(self.audio_list)
-        au.addStretch(1)
-        prov_cols.addLayout(au, 1)
-
-        prov_lay.addLayout(prov_cols)
-        left.addWidget(card_prov)
+        left.addWidget(self._output_card(settings))
+        left.addWidget(self._providers_card(settings))
         left.addStretch(1)
 
-        # ── Section: yt-dlp / ffmpeg passthrough ─────────────────────────
-        card_ytdlp, yt_lay = _card("yt-dlp & ffmpeg passthrough")
-        yt = QGridLayout()
-        yt.setContentsMargins(0, 0, 0, 0)
-        yt.setHorizontalSpacing(10)
-        yt.setVerticalSpacing(6)
-        yt.setColumnStretch(1, 1)
-
-        yt.addWidget(_label(
-            "Extra yt-dlp args",
-            "Passed directly to yt-dlp via --yt-dlp-args. "
-            "Default: --sleep-interval 1 --max-sleep-interval 2"
-        ), 0, 0)
-        self.ytdlp_args_edit = _line(_g(settings, "SPOTDL_YT_DLP_ARGS", ""), "--sleep-interval 1 --max-sleep-interval 2")
-        yt.addWidget(self.ytdlp_args_edit, 0, 1)
-
-        yt.addWidget(_label("Extra ffmpeg args", "Passed via --ffmpeg-args"), 1, 0)
-        self.ffmpeg_args_edit = _line(_g(settings, "SPOTDL_FFMPEG_ARGS", ""), "-b:a 320k")
-        yt.addWidget(self.ffmpeg_args_edit, 1, 1)
-
-        yt_lay.addLayout(yt)
-        right.addWidget(card_ytdlp)
-
-        # ── Section: Behaviour ───────────────────────────────────────────
-        card_beh, beh_lay = _card("Behaviour")
-        beh = QGridLayout()
-        beh.setContentsMargins(0, 0, 0, 0)
-        beh.setHorizontalSpacing(10)
-        beh.setVerticalSpacing(4)
-        beh.setColumnStretch(1, 1)
-
-        beh.addWidget(_label("Overwrite mode", "What to do when a file already exists"), 0, 0)
-        self.overwrite_combo = _combo(SPOTDL_OVERWRITE_MODES)
-        ow_idx = SPOTDL_OVERWRITE_MODES.index(_g(settings, "SPOTDL_OVERWRITE", "")) \
-            if _g(settings, "SPOTDL_OVERWRITE", "") in SPOTDL_OVERWRITE_MODES else 0
-        self.overwrite_combo.setCurrentIndex(ow_idx)
-        beh.addWidget(self.overwrite_combo, 0, 1)
-
-        self.playlist_num_check = _check("Add playlist numbering to filenames", _g(settings, "SPOTDL_PLAYLIST_NUMBERING", False))
-        beh.addWidget(self.playlist_num_check, 1, 0, 1, 2)
-
-        self.skip_explicit_check = _check("Skip explicit tracks", _g(settings, "SPOTDL_SKIP_EXPLICIT", False))
-        beh.addWidget(self.skip_explicit_check, 2, 0, 1, 2)
-
-        self.sponsor_block_check = _check(
-            "Enable SponsorBlock", _g(settings, "SPOTDL_SPONSOR_BLOCK", False),
-            "Remove sponsored segments from tracks (via yt-dlp SponsorBlock)"
-        )
-        beh.addWidget(self.sponsor_block_check, 3, 0, 1, 2)
-
-        self.add_unavailable_check = _check(
-            "Add unavailable tracks as empty placeholder files", _g(settings, "SPOTDL_ADD_UNAVAILABLE", False)
-        )
-        beh.addWidget(self.add_unavailable_check, 4, 0, 1, 2)
-
-        beh_lay.addLayout(beh)
-        right.addWidget(card_beh)
-
-        # ── Section: Proxy ───────────────────────────────────────────────
-        card_proxy, pr_lay = _card("Proxy")
-        pr = QGridLayout()
-        pr.setContentsMargins(0, 0, 0, 0)
-        pr.setHorizontalSpacing(10)
-        pr.setVerticalSpacing(6)
-        pr.setColumnStretch(1, 1)
-
-        self.use_main_proxy_check = _check(
-            "Use the same proxy as the main downloader", _g(settings, "SPOTDL_USE_MAIN_PROXY", False)
-        )
-        self.use_main_proxy_check.toggled.connect(self._on_proxy_toggle)
-        pr.addWidget(self.use_main_proxy_check, 0, 0, 1, 2)
-
-        pr.addWidget(_label("Override proxy URL", "Only used when 'Use main proxy' is unchecked"), 1, 0)
-        self.proxy_edit = _line(_g(settings, "SPOTDL_PROXY", ""), "http://user:pass@host:port")
-        self.proxy_edit.setEnabled(not _g(settings, "SPOTDL_USE_MAIN_PROXY", False))
-        pr.addWidget(self.proxy_edit, 1, 1)
-
-        pr_lay.addLayout(pr)
-        right.addWidget(card_proxy)
+        right.addWidget(self._behaviour_card(settings))
+        right.addWidget(self._passthrough_card(settings))
+        right.addWidget(self._proxy_card(settings))
         right.addStretch(1)
 
-        # ── Info banner ──────────────────────────────────────────────────
-        info_card = QFrame()
-        info_card.setObjectName("helpBox")
-        info_v = QVBoxLayout(info_card)
-        info_v.setContentsMargins(12, 6, 12, 6)
+        note = QWidget()
+        note.setObjectName("helpBox")
+        note_layout = QVBoxLayout(note)
+        note_layout.setContentsMargins(12, 8, 12, 8)
         info = QLabel(
-            "spotdl must be placed in the program folder or installed via "
-            "<code>pip install spotdl</code>. "
-            "It requires ffmpeg and deno (both already supported by YTGet)."
+            "spotdl must sit next to the application or be installed with "
+            "<code>pip install spotdl</code>. It needs ffmpeg and deno, both of "
+            "which YTGet already manages."
         )
         info.setObjectName("helpBoxExample")
         info.setWordWrap(True)
         info.setAlignment(Qt.AlignCenter)
-        info_v.addWidget(info)
-        outer.addWidget(info_card)
+        note_layout.addWidget(info)
+        outer.addWidget(note)
 
         self.setWidget(container)
 
     # ------------------------------------------------------------------
-    def _on_proxy_toggle(self, checked: bool):
-        self.proxy_edit.setEnabled(not checked)
+
+    @staticmethod
+    def _grid() -> tuple[QWidget, QGridLayout]:
+        holder = QWidget()
+        grid = QGridLayout(holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(6)
+        grid.setColumnStretch(1, 1)
+        return holder, grid
+
+    def _output_card(self, s: SpotDLSettings) -> QWidget:
+        holder, grid = self._grid()
+
+        self.format_combo = ui.combo(SPOTDL_FORMATS, "Audio format")
+        self.format_combo.setCurrentText(s.SPOTDL_FORMAT)
+        grid.addWidget(ui.form_label("Format", "Container for downloaded tracks"), 0, 0)
+        grid.addWidget(self.format_combo, 0, 1)
+
+        self.bitrate_combo = ui.combo(SPOTDL_BITRATES, "Bitrate")
+        self.bitrate_combo.setCurrentText(s.SPOTDL_BITRATE)
+        grid.addWidget(ui.form_label("Bitrate", "auto lets spotdl decide"), 1, 0)
+        grid.addWidget(self.bitrate_combo, 1, 1)
+
+        self.threads_spin = ui.spin(1, MAX_THREADS, "Download threads")
+        self.threads_spin.setValue(s.SPOTDL_THREADS)
+        grid.addWidget(
+            ui.form_label("Threads", f"Parallel downloads (1\u2013{MAX_THREADS})"), 2, 0
+        )
+        grid.addWidget(self.threads_spin, 2, 1)
+
+        self.output_edit = ui.line_edit(DEFAULT_OUTPUT_TEMPLATE, "", "Output template")
+        self.output_edit.setText(s.SPOTDL_OUTPUT)
+        self.output_edit.setToolTip("Available tokens:\n" + "\n".join(SPOTDL_OUTPUT_TOKENS))
+        grid.addWidget(ui.form_label("Template", "Filename pattern"), 3, 0)
+        grid.addWidget(self.output_edit, 3, 1)
+
+        return ui.card(
+            holder, title="Output", subtitle="Format, quality and file naming."
+        )
+
+    def _providers_card(self, s: SpotDLSettings) -> QWidget:
+        holder = QWidget()
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        lyrics_column = QVBoxLayout()
+        lyrics_column.setSpacing(4)
+        lyrics_column.addWidget(
+            ui.form_label("Lyrics", "Tried in the order you check them")
+        )
+        self.lyrics_list = OrderedMultiSelect(SPOTDL_LYRICS_PROVIDERS, s.SPOTDL_LYRICS)
+        lyrics_column.addWidget(self.lyrics_list)
+        self.lrc_check = ui.check(
+            "Write .lrc sidecar files", "Synced lyrics beside each track"
+        )
+        self.lrc_check.setChecked(s.SPOTDL_GENERATE_LRC)
+        lyrics_column.addWidget(self.lrc_check)
+        lyrics_column.addStretch(1)
+        layout.addLayout(lyrics_column, 1)
+
+        audio_column = QVBoxLayout()
+        audio_column.setSpacing(4)
+        audio_column.addWidget(
+            ui.form_label("Audio sources", "youtube-music gives the best matches")
+        )
+        self.audio_list = OrderedMultiSelect(
+            SPOTDL_AUDIO_PROVIDERS, s.SPOTDL_AUDIO_PROVIDERS
+        )
+        audio_column.addWidget(self.audio_list)
+        audio_column.addStretch(1)
+        layout.addLayout(audio_column, 1)
+
+        return ui.card(
+            holder,
+            title="Providers",
+            subtitle="Each extra source adds lookup time per track.",
+        )
+
+    def _behaviour_card(self, s: SpotDLSettings) -> QWidget:
+        holder, grid = self._grid()
+
+        self.overwrite_combo = ui.combo(SPOTDL_OVERWRITE_MODES, "Overwrite mode")
+        self.overwrite_combo.setCurrentText(s.SPOTDL_OVERWRITE)
+        grid.addWidget(ui.form_label("Existing files", "What to do on a collision"), 0, 0)
+        grid.addWidget(self.overwrite_combo, 0, 1)
+
+        self.numbering_check = ui.check("Number playlist tracks")
+        self.numbering_check.setChecked(s.SPOTDL_PLAYLIST_NUMBERING)
+        grid.addWidget(self.numbering_check, 1, 0, 1, 2)
+
+        self.explicit_check = ui.check("Skip explicit tracks")
+        self.explicit_check.setChecked(s.SPOTDL_SKIP_EXPLICIT)
+        grid.addWidget(self.explicit_check, 2, 0, 1, 2)
+
+        self.sponsor_check = ui.check(
+            "Remove sponsored segments", "Uses SponsorBlock via yt-dlp"
+        )
+        self.sponsor_check.setChecked(s.SPOTDL_SPONSOR_BLOCK)
+        grid.addWidget(self.sponsor_check, 3, 0, 1, 2)
+
+        self.unavailable_check = ui.check(
+            "Create placeholders for unavailable tracks"
+        )
+        self.unavailable_check.setChecked(s.SPOTDL_ADD_UNAVAILABLE)
+        grid.addWidget(self.unavailable_check, 4, 0, 1, 2)
+
+        return ui.card(holder, title="Behaviour")
+
+    def _passthrough_card(self, s: SpotDLSettings) -> QWidget:
+        holder, grid = self._grid()
+
+        self.ytdlp_args = ui.line_edit(
+            "--sleep-interval 1 --max-sleep-interval 2", "", "yt-dlp arguments"
+        )
+        self.ytdlp_args.setText(s.SPOTDL_YT_DLP_ARGS)
+        grid.addWidget(ui.form_label("yt-dlp", "Passed via --yt-dlp-args"), 0, 0)
+        grid.addWidget(self.ytdlp_args, 0, 1)
+
+        self.ffmpeg_args = ui.line_edit("-b:a 320k", "", "ffmpeg arguments")
+        self.ffmpeg_args.setText(s.SPOTDL_FFMPEG_ARGS)
+        grid.addWidget(ui.form_label("ffmpeg", "Passed via --ffmpeg-args"), 1, 0)
+        grid.addWidget(self.ffmpeg_args, 1, 1)
+
+        return ui.card(holder, title="Passthrough")
+
+    def _proxy_card(self, s: SpotDLSettings) -> QWidget:
+        holder, grid = self._grid()
+
+        self.use_main_proxy = ui.check("Use the main proxy setting")
+        self.use_main_proxy.setChecked(s.SPOTDL_USE_MAIN_PROXY)
+        self.use_main_proxy.toggled.connect(
+            lambda checked: self.proxy_edit.setEnabled(not checked)
+        )
+        grid.addWidget(self.use_main_proxy, 0, 0, 1, 2)
+
+        self.proxy_edit = ui.line_edit("http://host:port", "", "SpotDL proxy")
+        self.proxy_edit.setText(s.SPOTDL_PROXY)
+        self.proxy_edit.setEnabled(not s.SPOTDL_USE_MAIN_PROXY)
+        grid.addWidget(ui.form_label("Override", "Used when the box above is clear"), 1, 0)
+        grid.addWidget(self.proxy_edit, 1, 1)
+
+        return ui.card(holder, title="Proxy")
 
     # ------------------------------------------------------------------
-    def apply(self, settings: SpotDLSettings):
-        """Write UI values back into *settings* (mutates in-place)."""
-        settings.SPOTDL_FORMAT = self.fmt_combo.currentText()
+
+    def apply(self, settings: SpotDLSettings) -> None:
+        """Write the form into `settings`, mutating it in place."""
+        settings.SPOTDL_FORMAT = self.format_combo.currentText()
         settings.SPOTDL_BITRATE = self.bitrate_combo.currentText()
-        settings.SPOTDL_OUTPUT = self.output_edit.text().strip() or "{artists} - {title} - {year}.{output-ext}"
         settings.SPOTDL_THREADS = self.threads_spin.value()
-        settings.SPOTDL_LYRICS = self.lyrics_list.get_checked()
+        settings.SPOTDL_OUTPUT = (
+            self.output_edit.text().strip() or DEFAULT_OUTPUT_TEMPLATE
+        )
+        settings.SPOTDL_LYRICS = self.lyrics_list.checked()
         settings.SPOTDL_GENERATE_LRC = self.lrc_check.isChecked()
-        settings.SPOTDL_AUDIO_PROVIDERS = self.audio_list.get_checked()
-        settings.SPOTDL_YT_DLP_ARGS = self.ytdlp_args_edit.text().strip()
-        settings.SPOTDL_FFMPEG_ARGS = self.ffmpeg_args_edit.text().strip()
+        settings.SPOTDL_AUDIO_PROVIDERS = self.audio_list.checked()
         settings.SPOTDL_OVERWRITE = self.overwrite_combo.currentText()
-        settings.SPOTDL_PLAYLIST_NUMBERING = self.playlist_num_check.isChecked()
-        settings.SPOTDL_SKIP_EXPLICIT = self.skip_explicit_check.isChecked()
-        settings.SPOTDL_SPONSOR_BLOCK = self.sponsor_block_check.isChecked()
-        settings.SPOTDL_ADD_UNAVAILABLE = self.add_unavailable_check.isChecked()
-        settings.SPOTDL_USE_MAIN_PROXY = self.use_main_proxy_check.isChecked()
+        settings.SPOTDL_PLAYLIST_NUMBERING = self.numbering_check.isChecked()
+        settings.SPOTDL_SKIP_EXPLICIT = self.explicit_check.isChecked()
+        settings.SPOTDL_SPONSOR_BLOCK = self.sponsor_check.isChecked()
+        settings.SPOTDL_ADD_UNAVAILABLE = self.unavailable_check.isChecked()
+        settings.SPOTDL_YT_DLP_ARGS = self.ytdlp_args.text().strip()
+        settings.SPOTDL_FFMPEG_ARGS = self.ffmpeg_args.text().strip()
+        settings.SPOTDL_USE_MAIN_PROXY = self.use_main_proxy.isChecked()
         settings.SPOTDL_PROXY = self.proxy_edit.text().strip()
+        settings.normalise()

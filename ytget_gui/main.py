@@ -1,105 +1,15 @@
 # File: main.py
+"""Launcher shim.
+
+Kept so `python main.py` still works and so PyInstaller has a stable entry
+script. The implementation lives in ytget_gui/app.py.
+"""
+
 from __future__ import annotations
 
 import sys
-from pathlib import Path
-from platform import system
 
-__version__ = "2.7.9"
-
-# --- Windows taskbar icon: set AppUserModelID before QApplication is created ---
-if system() == "Windows":
-    import ctypes
-    myappid = f"YTGet.{__version__}"
-    try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-    except Exception:
-        pass
-
-from PySide6.QtWidgets import QApplication, QStyleFactory
-from PySide6.QtGui import QIcon, QPalette, QColor
-
-from ytget_gui.main_window import MainWindow
-from ytget_gui.styles import refresh_styles
-
-
-def make_dark_palette() -> QPalette:
-    """
-    Build a Fusion-style dark palette covering all common roles.
-    Tuned for the glassmorphism theme — deep indigo base with cyan accents.
-    """
-    pal = QPalette()
-
-    # Core colors — deep space indigo for the glass backdrop
-    dark_bg    = QColor("#0a0e1a")
-    dark_alt   = QColor("#15102e")
-    light_txt  = QColor("#F4F4F8")
-    highlight  = QColor("#00E5FF")
-
-    # Window / widget backgrounds
-    pal.setColor(QPalette.Window,         dark_bg)
-    pal.setColor(QPalette.Base,           dark_bg)
-    pal.setColor(QPalette.AlternateBase,  dark_alt)
-    pal.setColor(QPalette.ToolTipBase,    dark_bg)
-    pal.setColor(QPalette.ToolTipText,    light_txt)
-
-    # Text
-    pal.setColor(QPalette.WindowText,     light_txt)
-    pal.setColor(QPalette.Text,           light_txt)
-    pal.setColor(QPalette.Button,         dark_bg)
-    pal.setColor(QPalette.ButtonText,     light_txt)
-
-    # Selection
-    pal.setColor(QPalette.Highlight,      highlight)
-    pal.setColor(QPalette.HighlightedText, QColor("#0a0e1a"))
-
-    return pal
-
-
-def main():
-    # Handle --version flag
-    if "--version" in sys.argv:
-        print(f"YTGet version {__version__}")
-        sys.exit(0)
-
-    # 1) Create the QApplication before any QWidget
-    app = QApplication(sys.argv)
-
-    # 2) Force Qt Fusion style and install our dark palette globally
-    app.setStyle(QStyleFactory.create("Fusion"))
-    app.setPalette(make_dark_palette())
-
-    # 2b) Now that QApplication + primary screen exist, recompute the
-    #     DPI-scaled QSS in AppStyles (it was a placeholder at import time).
-    refresh_styles()
-
-    # 3) Application metadata
-    app.setApplicationName("YTGet")
-    app.setOrganizationName("YTGet")
-    app.setOrganizationDomain("ytget_gui.local")
-
-    # 4) Load the appropriate icon for each platform
-    icon_dir = Path(__file__).parent
-    if system() == "Darwin":
-        icns = icon_dir / "icon.icns"
-        if icns.exists():
-            app.setWindowIcon(QIcon(str(icns)))
-        else:
-            ico = icon_dir / "icon.ico"
-            if ico.exists():
-                app.setWindowIcon(QIcon(str(ico)))
-    else:
-        ico = icon_dir / "icon.ico"
-        if ico.exists():
-            app.setWindowIcon(QIcon(str(ico)))
-
-    # 5) Instantiate and show the main window
-    w = MainWindow()
-    w.show()
-
-    # 6) Enter Qt event loop
-    sys.exit(app.exec())
-
+from ytget_gui.app import main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

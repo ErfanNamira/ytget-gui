@@ -1,2 +1,6 @@
-# File: ytget_gui/__init__.py
-__all__ = []
+# File: ytget_gui/utils/__init__.py
+"""Pure helpers with no Qt dependency, so they stay unit-testable."""
+
+from __future__ import annotations
+
+__all__ = ["paths", "text", "validators"]

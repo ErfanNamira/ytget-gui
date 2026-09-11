@@ -1,240 +1,210 @@
 # File: ytget_gui/workers/title_fetch_manager.py
+"""Serial metadata-fetch queue running in its own thread."""
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import threading
 from collections import deque
-from typing import Deque, List, Optional, Set
+from typing import Deque, Iterable, List, Optional, Set
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from ytget_gui.settings import AppSettings
-from ytget_gui.workers import fetch_core
+from ytget_gui.workers import fetch_core, proc
+
+log = logging.getLogger(__name__)
 
 
 class TitleFetchQueue(QObject):
-    """
-    Serial queue that fetches titles one-by-one in its own thread.
-    Signals are forwarded to UI.
+    """Fetches metadata one URL at a time, cancellable mid-flight.
+
+    Serial by design: yt-dlp metadata extraction is the operation most likely
+    to trip YouTube's bot detection, and firing several in parallel when a user
+    drops twenty URLs is what gets an IP rate-limited.
     """
 
-    # Forwarded signals
-    metadata_fetched = Signal(str, str, str, str, bool)  # url, title, video_id, thumb_url, is_playlist
-    title_fetched = Signal(str, str)                     # url, title (legacy)
-    error = Signal(str, str)                              # url, message
-
-    # Optional signals for status/UX
-    started_one = Signal(str)     # url
-    finished_one = Signal(str)    # url
+    metadata_fetched = Signal(str, str, str, str, bool)
+    title_fetched = Signal(str, str)
+    error = Signal(str, str)
+    started_one = Signal(str)
+    finished_one = Signal(str)
     idle = Signal()
 
-    def __init__(self, settings: AppSettings):
-        super().__init__()
+    def __init__(self, settings, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
         self.settings = settings
+
         self._queue: Deque[str] = deque()
         self._pending: Set[str] = set()
-        self._running = False
+        self._cancelled: Set[str] = set()
+        self._draining = False
         self._stopping = False
         self._current_url: Optional[str] = None
-        self._cancelled_urls: Set[str] = set()
 
-        # Guards _current_proc, which is written from this object's own
-        # thread (when a fetch launches) and read/killed from whichever
-        # thread calls stop() (normally the GUI thread). Without this,
-        # stop() could previously only set a flag that was checked *between*
-        # queued items - an in-flight yt-dlp call (up to
-        # fetch_core.DEFAULT_TIMEOUT_SECS = 120s) could not be interrupted,
-        # which is why stopping the queue or closing the app while a title
-        # was mid-fetch would hang until that call finished/timed out.
-        self._proc_lock = threading.Lock()
+        # Guards _current_proc and _cancel_event. _current_proc is written from
+        # this object's thread when a fetch launches and read/killed from
+        # whichever thread calls stop()/cancel() -- normally the GUI thread.
+        # Without a cross-thread kill, stop() could only set a flag checked
+        # *between* items, so an in-flight fetch blocked shutdown for up to
+        # DEFAULT_TIMEOUT_SECS.
+        self._lock = threading.Lock()
         self._current_proc: Optional[subprocess.Popen] = None
-
-        # Companion to _current_proc, but for the cookie-refresh step that
-        # can run *before* any yt-dlp subprocess exists. browser_cookie3
-        # talks to OS cookie stores/keychains in-process, so there's no
-        # Popen to kill there - instead we hand fetch_core a
-        # threading.Event it polls while waiting on that step, and set()
-        # it here (guarded by the same lock) so stop()/cancel() can unstick
-        # a fetch that's stuck refreshing cookies, not just one stuck in
-        # the yt-dlp subprocess. Cleared at the start of each new fetch.
+        # Companion for the cookie-refresh step, which runs before any
+        # subprocess exists and has no PID to signal.
         self._cancel_event = threading.Event()
 
+    # ------------------------------------------------------------------
+    # Enqueue
+    # ------------------------------------------------------------------
+
     @Slot(str)
-    def enqueue(self, url: str):
-        if not url or url in self._pending:
-            return
-        self._queue.append(url)
-        self._pending.add(url)
-        if not self._running:
-            self._process_next()
+    def enqueue(self, url: str) -> None:
+        self.enqueue_many([url])
 
     @Slot(list)
-    def enqueue_many(self, urls: List[str]):
+    def enqueue_many(self, urls: Iterable[str]) -> None:
         added = False
-        for u in urls:
-            if u and u not in self._pending:
-                self._queue.append(u)
-                self._pending.add(u)
-                added = True
-        if added and not self._running:
-            self._process_next()
+        for url in urls:
+            if not url or url in self._pending:
+                continue
+            self._queue.append(url)
+            self._pending.add(url)
+            self._cancelled.discard(url)
+            added = True
+        if added and not self._draining:
+            self._drain()
+
+    # ------------------------------------------------------------------
+    # Cancellation
+    # ------------------------------------------------------------------
 
     @Slot()
-    def stop(self):        # Drop everything still queued, and kill whatever fetch is currently
-        # in flight (if any) so we don't sit blocked inside subprocess
-        # I/O for up to fetch_core.DEFAULT_TIMEOUT_SECS before honoring
-        # the stop. Safe to call from any thread.
+    def stop(self) -> None:
+        """Drop the backlog and abort the in-flight fetch. Any thread."""
         self._stopping = True
-        with self._proc_lock:
-            proc = self._current_proc
+        self._queue.clear()
+        with self._lock:
             self._cancel_event.set()
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            process = self._current_proc
+        proc.terminate_tree(process)
 
     @Slot(str)
-    def cancel(self, url: str):
-        """
-        Remove a single URL from the queue without touching the rest.
+    def cancel(self, url: str) -> None:
+        """Remove one URL without disturbing the rest.
 
-        If it hasn't started yet, it's just dropped from the deque. If it's
-        the one currently in flight, its subprocess is killed so the fetch
-        aborts immediately instead of running to completion/timeout and
-        (previously) silently re-adding itself once done - which is what
-        happened when a card was removed from the UI while its title fetch
-        was still running: nothing told the backend queue about it, so the
-        fetch kept going and re-inserted the card on success. Safe to call
-        from any thread.
+        If it is the in-flight fetch, its subprocess is killed so the fetch
+        aborts now. Previously nothing told this queue that a card had been
+        removed from the UI, so the fetch ran to completion and its success
+        handler re-inserted the card the user had just deleted.
         """
         if not url:
             return
+
         try:
             while url in self._queue:
                 self._queue.remove(url)
-        except Exception:
+        except ValueError:
             pass
         self._pending.discard(url)
 
-        if self._current_url == url:
-            self._cancelled_urls.add(url)
-            with self._proc_lock:
-                proc = self._current_proc
-                self._cancel_event.set()
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-
-    def _process_next(self):
-        # Iterative drain loop (not recursive): a recursive version here
-        # grows the call stack by one frame per queued URL and can raise
-        # RecursionError on large batches/playlists.
-        if self._running:
+        if self._current_url != url:
             return
-        self._running = True
+
+        self._cancelled.add(url)
+        with self._lock:
+            self._cancel_event.set()
+            process = self._current_proc
+        proc.terminate_tree(process)
+
+    # ------------------------------------------------------------------
+    # Draining
+    # ------------------------------------------------------------------
+
+    def _drain(self) -> None:
+        """Iterative, not recursive: recursing per URL grew the stack one frame
+        per item and raised RecursionError on large playlist batches."""
+        if self._draining:
+            return
+        self._draining = True
+        # Reset here, not in stop(): leaving _stopping latched meant every
+        # later enqueue() wiped the queue immediately and the worker was dead
+        # for the remainder of the process lifetime.
+        self._stopping = False
         try:
-            # BUGFIX: previously `_stopping` was never reset once stop() was
-            # called, so every subsequent enqueue() would immediately wipe
-            # the queue forever and the worker was permanently dead for the
-            # rest of the object's life. Reset it at the start of each drain
-            # so a fresh enqueue after stop() actually restarts the queue.
-            self._stopping = False
-
-            while True:
-                if self._stopping:
-                    self._queue.clear()
-                    self._pending.clear()
-                    break
-
-                if not self._queue:
-                    break
-
+            while self._queue and not self._stopping:
                 url = self._queue.popleft()
                 self.started_one.emit(url)
                 try:
                     self._fetch_one(url)
+                except Exception:  # noqa: BLE001 - one bad URL must not stop the queue
+                    log.exception("Title fetch crashed for %s", url)
+                    self.error.emit(url, "Unexpected error while fetching metadata")
                 finally:
                     self._pending.discard(url)
                     self.finished_one.emit(url)
+
+            if self._stopping:
+                self._queue.clear()
+                self._pending.clear()
         finally:
-            self._running = False
+            self._draining = False
             self.idle.emit()
 
-    def _register_current_proc(self, proc: subprocess.Popen) -> None:
-        """Called by fetch_core the instant the yt-dlp subprocess launches,
-        so stop() (running on another thread) has something to kill."""
-        with self._proc_lock:
-            self._current_proc = proc
-        if self._stopping:
-            # stop() may have run in the tiny window before this callback
-            # fired and found nothing to kill yet - handle that race here.
-            try:
-                proc.kill()
-            except Exception:
-                pass
+    def _register_proc(self, process: subprocess.Popen) -> None:
+        """Called the instant the subprocess launches, so stop() has a target."""
+        with self._lock:
+            self._current_proc = process
+            already_cancelling = self._stopping or self._cancel_event.is_set()
+        if already_cancelling:
+            # stop()/cancel() may have run in the window before this fired and
+            # found nothing to kill.
+            proc.terminate_tree(process)
 
-    def _fetch_one(self, url: str):
-        """
-        Inline version of TitleFetcher.run(), but without extra per-job QThread.
-        Runs in this worker thread. Emits the same signals expected by MainWindow.
-        """
+    def _fetch_one(self, url: str) -> None:
         self._current_url = url
-        with self._proc_lock:
-            # Fresh per fetch - otherwise a stop()/cancel() from a *previous*
-            # url could leave this set and make the very next fetch's cookie
-            # refresh return "Cancelled" before it even starts.
+        with self._lock:
+            # Fresh per fetch: a stale set event from a previous URL would make
+            # the next fetch report Cancelled before it began.
             self._cancel_event = threading.Event()
+            cancel_event = self._cancel_event
+
         try:
-            if fetch_core.is_spotify_url(url):
-                if url in self._cancelled_urls:
-                    self._cancelled_urls.discard(url)
-                    return
-                title = fetch_core.spotify_placeholder_title(url)
-                self.metadata_fetched.emit(url, title, "", "", False)
-                self.title_fetched.emit(url, title)
-                return
-
-            try:
-                metadata, err, updated_cookies_path, refresh_warning = fetch_core.fetch_metadata(
-                    url=url,
-                    yt_dlp_path=self.settings.YT_DLP_PATH,
-                    ffmpeg_dir=self.settings.FFMPEG_PATH.parent,
-                    cookies_path=self.settings.COOKIES_PATH,
-                    proxy_url=self.settings.PROXY_URL or "",
-                    settings=self.settings,
-                    cookies_from_browser=getattr(self.settings, "COOKIES_FROM_BROWSER", "") or "",
-                    on_process_started=self._register_current_proc,
-                    cancel_event=self._cancel_event,
-                )
-            finally:
-                with self._proc_lock:
-                    self._current_proc = None
-
-            # If cancel(url) fired while this fetch was running, its
-            # subprocess was killed above and the result (if any) is stale
-            # from the user's point of view - drop it instead of emitting
-            # metadata_fetched/error for something that was already removed
-            # from the UI.
-            if url in self._cancelled_urls:
-                self._cancelled_urls.discard(url)
-                return
-
-            if updated_cookies_path is not None:
-                self.settings.COOKIES_PATH = updated_cookies_path
-            if refresh_warning:
-                self.error.emit(url, refresh_warning)
-
-            if err is not None:
-                self.error.emit(url, err)
-                return
-
-            self.metadata_fetched.emit(
-                url, metadata.title, metadata.video_id, metadata.thumb_url, metadata.is_playlist
+            result = fetch_core.fetch_metadata(
+                url=url,
+                yt_dlp_path=self.settings.YT_DLP_PATH,
+                ffmpeg_dir=self.settings.FFMPEG_PATH.parent,
+                cookies_path=self.settings.COOKIES_PATH,
+                proxy_url=self.settings.PROXY_URL or "",
+                settings=self.settings,
+                cookies_from_browser=getattr(self.settings, "COOKIES_FROM_BROWSER", "")
+                or "",
+                on_process_started=self._register_proc,
+                cancel_event=cancel_event,
             )
-            self.title_fetched.emit(url, metadata.title)
         finally:
+            with self._lock:
+                self._current_proc = None
             self._current_url = None
+
+        # A result for a cancelled URL is stale from the user's point of view.
+        if url in self._cancelled:
+            self._cancelled.discard(url)
+            return
+        if result.cancelled:
+            return
+
+        if result.cookies_path is not None:
+            self.settings.COOKIES_PATH = result.cookies_path
+        if result.warning:
+            self.error.emit(url, result.warning)
+
+        if not result.ok:
+            self.error.emit(url, result.error or "Unknown error")
+            return
+
+        md = result.metadata
+        self.metadata_fetched.emit(
+            url, md.title, md.video_id, md.thumb_url, md.is_playlist
+        )
+        self.title_fetched.emit(url, md.title)
