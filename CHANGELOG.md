@@ -1,3 +1,90 @@
+### v 2.8.0
+#### Architecture
+
+- Added `ytget_gui/_version.py` as the single source for app name, organization, repository, and version.
+- Added `ytget_gui/app.py` for CLI parsing, Qt bootstrap, palette setup, icon discovery, application identity, and single-instance handling.
+- Reduced `ytget_gui/main.py` and `ytget_gui/__main__.py` to compatibility entry points into the new bootstrap.
+- Added `ytget_gui/queue/model.py` and `queue/controller.py`.
+- Moved `QueueItem` out of `download_worker.py` into the queue model.
+- Added `workers/base.py`, `workers/log_buffer.py`, and `workers/proc.py` as shared infrastructure.
+- Added `formats.py`, `theme.py`, dialog helpers, UI switch, CLI-argument parsing, text helpers, and cross-platform open/reveal helpers.
+- Removed duplicated queue, worker, style, dialog, and format-selection responsibilities from the main window and settings classes.
+
+#### Queue model and controller
+
+- Added typed statuses: Pending, Downloading, Completed, Error, and Cancelled.
+- Added persistent fields for stage, uploader, duration, queue attempts, last error, add time, output path, and output count.
+- Added O(1) URL lookup, identity-safe indexing, deterministic sorting, block moves, visual reorder, retry reset, and completed-item clearing.
+- Added atomic `queue.json` persistence with `fsync` and `os.replace`.
+- Added recovery of interrupted jobs and legacy statuses.
+- Added separate controller signals for item changes, structural changes, overall progress, run state, logging, and completion.
+- Added explicit pause, skip, stop, retry, cancellation, shutdown, and finish-once semantics.
+
+#### Download worker
+
+- Replaced direct worker `run()` orchestration with timer-driven startup and shared base-worker behavior.
+- Added a machine-readable progress sentinel and parser.
+- Added playlist-entry and multi-stream progress weighting.
+- Added structured output-file discovery and extension-change fallback.
+- Added domain-aware referers and HLS preference controls.
+- Added explicit groups for selection, output, runtime, network, subtitle, thumbnail, audio, video, and post-processing flags.
+- Added interruptible browser-cookie refresh.
+- Added delayed transient retries with cancellation polling.
+- Fixed an uninitialized flat-playlist directory path affecting YouTube Music mixes/radios.
+- Added playlist track-number writing and candidate renaming paths.
+
+#### SpotDL worker
+
+- Migrated to shared base-worker, process, environment, cancellation, log, and progress behavior.
+- Improved process output parsing and cleanup.
+- Normalized executable discovery and settings snapshots.
+
+#### Metadata, titles, and thumbnails
+
+- Added a structured `FetchResult` and cancellable fetch flow.
+- Improved best-thumbnail ranking and condensed user-facing fetch errors.
+- Metadata failure is non-fatal: the queued item remains downloadable.
+- Added explicit cancellation of title and thumbnail fetches when queue items are removed.
+- Reworked title-queue draining and process registration.
+- Added cache-safe filenames, canonical YouTube watch URLs, AVIF support, and multiple thumbnail fallback paths.
+
+#### Settings
+
+- Replaced scattered serialization with declared plain/path key lists and validator maps.
+- Added schema/version metadata to saved configuration.
+- Added atomic writes and corrupt-file quarantine.
+- Added helper binary discovery through environment, PATH, and bundled locations.
+- Added safe defaults and normalization for paths, retries, formats, browsers, proxy, archive, HLS, and SpotDL.
+- Extracted format construction from settings.
+
+#### UI and styling
+
+- Rebuilt main-window layout and menus.
+- Reworked queue cards to update from `QueueItem`, show richer metadata/stage/progress, and expose output actions.
+- Added responsive dialog layout, shared cards/dividers/forms, and centralized QSS.
+- Added `Palette`, DPI scaling, typography helpers, and reusable component styles.
+- Rebuilt Preferences, Advanced Options, About, and Update Manager on shared UI primitives.
+
+#### Utilities and security
+
+- Added safe non-shell CLI argument splitting and blocked app-owned yt-dlp flags that could conflict with worker control.
+- Added cross-platform process-tree termination and hidden-console handling.
+- Added safe path resolution, writable-directory checks, filename sanitization, and platform labels.
+- Hardened URL and proxy validation.
+- Hardened cookies as credentials with pruning, atomic writes, and restrictive permissions.
+- Hardened updater downloads and Deno archive extraction.
+
+#### Packaging and automation
+
+- Bumped application metadata in `pyproject.toml`, `Info.plist`, and `version_info.txt` to 2.8.0.
+- Added the new `queue` package to setuptools package data.
+- Added a Windows debug PyInstaller workflow.
+- Removed the Nuitka workflow.
+- Removed the old test workflow.
+- Removed the bundled Windows Inno Setup installer directory and dependency-download PowerShell script.
+- Updated the PyPI workflow file minimally.
+- Source comparison totals: **53 changed paths**, **11,189 insertions**, and **11,486 deletions**.
+
 ### v 2.7.8
 - Queue progress bar no longer stuck at 0% during downloads. The worker's
   progress updates (e.g. "45% ETA 00:12") were being misread as a status
