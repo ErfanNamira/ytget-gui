@@ -27,7 +27,7 @@ dependencies = [
     "requests",
     "mutagen",
     "Pillow",
-    "packaging"
+    "packaging",
 	"spotdl"
 ]
 
