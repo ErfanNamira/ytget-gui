@@ -1,4 +1,4 @@
-name: Build YTGet (Windows Test)
+name: Build YTGet (Windows Debug)
 
 on:
   workflow_dispatch:

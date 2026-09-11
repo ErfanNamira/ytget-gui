@@ -730,6 +730,10 @@ class MainWindow(QMainWindow):
     def _paste_url(self) -> None:
         text = QGuiApplication.clipboard().text().strip()
         if text:
+            urls = [line.strip() for line in text.splitlines() if line.strip()]
+            if len(urls) > 1:
+                self.enqueue_urls(urls)
+                return
             self.url_input.setText(text)
             self.url_input.setCursorPosition(len(text))
 
@@ -744,6 +748,8 @@ class MainWindow(QMainWindow):
     def enqueue_urls(self, urls: Sequence[str]) -> int:
         """Add URLs and start metadata fetches. Returns the number added."""
         accepted: List[str] = []
+        items = []
+        seen = set()
         label = self.format_box.currentText()
         code = self.settings.RESOLUTIONS.get(label, "best")
 
@@ -751,7 +757,7 @@ class MainWindow(QMainWindow):
             url = (raw or "").strip()
             if not is_supported_url(url):
                 continue
-            if self.model.contains(url):
+            if self.model.contains(url) or url in seen:
                 self.log(f"Already queued: {short(url, 60)}", AppStyles.INFO_COLOR)
                 continue
 
@@ -766,12 +772,14 @@ class MainWindow(QMainWindow):
                 format_code=code,
                 format_label=label,
             )
-            if self.controller.add_item(item):
-                accepted.append(url)
+            items.append(item)
+            seen.add(url)
+            accepted.append(url)
 
         if not accepted:
             return 0
 
+        self.controller.add_items(items)
         self._pending_fetch.update(accepted)
         self.request_fetch.emit(accepted)
         for url in accepted:
@@ -1243,15 +1251,23 @@ class MainWindow(QMainWindow):
             self.log("Could not save the queue.", AppStyles.ERROR_COLOR, "Error")
 
     def _import_queue(self) -> None:
+        if self.controller.is_busy:
+            QMessageBox.information(self, "Queue busy", "Stop the current download before importing a queue.")
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Queue", str(self.settings.QUEUE_PATH.parent), "JSON (*.json)"
         )
         if not path:
             return
-        count, error = self.model.load(Path(path))
+        incoming = QueueModel()
+        count, error = incoming.load(Path(path))
         if error:
             self.log(error, AppStyles.ERROR_COLOR, "Error")
             return
+        if self._title_queue is not None:
+            for item in self.model:
+                self._title_queue.cancel(item.url)
+        self.model.replace_all(incoming.items)
         self.model.save()
         self._rebuild_queue_list()
         self.log(f"\U0001f4e5 Loaded {count} item(s) from {path}", AppStyles.SUCCESS_COLOR)
@@ -1322,6 +1338,9 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.close)
             return
 
+        if any(item.status is not Status.COMPLETED for item in self.model):
+            self.log("Power action cancelled: the queue contains failed, cancelled or unfinished items.", AppStyles.WARNING_COLOR)
+            return
         command = self._post_action_command(action)
         if not command:
             self.log(
@@ -1453,4 +1472,13 @@ class MainWindow(QMainWindow):
                 thread.quit()
                 thread.wait(remaining_ms())
 
+        live = [t for t in (self.controller.thread, self._title_thread, self._cover_thread)
+                if t is not None and t.isRunning()]
+        if live:
+            event.ignore()
+            self.settings.CONFIRM_ON_QUIT = False
+            self.setEnabled(False)
+            self.setWindowTitle("YTGet — stopping background work…")
+            QTimer.singleShot(200, self.close)
+            return
         super().closeEvent(event)

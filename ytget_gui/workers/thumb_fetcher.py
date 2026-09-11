@@ -357,6 +357,11 @@ class ThumbFetcher(QObject):
         _verify, ssl_args, _env = ssl_utils.resolve_ssl_config(self.settings)
         cmd = [
             str(binary),
+            # Matches fetch_core: a user-level yt-dlp config file must never
+            # influence an internal metadata probe. Without this, options such
+            # as --exec or an output template in ~/.config/yt-dlp/config apply
+            # to thumbnail fetches too.
+            "--ignore-config",
             "--no-warnings",
             "--skip-download",
             "--ignore-errors",

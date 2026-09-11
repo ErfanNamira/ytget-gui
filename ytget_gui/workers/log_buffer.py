@@ -1,104 +1,83 @@
-# File: ytget_gui/workers/log_buffer.py
-"""Coalescing log buffer for worker output.
-
-Workers can emit thousands of lines per second. Emitting a Qt signal per line
-floods the GUI thread's event queue. This batches entries, merges consecutive
-runs of the same colour into one signal, and caps how much is released per
-flush so a burst cannot stall the UI -- the remainder is requeued in order.
-"""
-
+"""Thread-safe bounded log buffering with predictable per-flush work."""
 from __future__ import annotations
-
-from typing import List, Optional, Sequence, Tuple
-
-Entry = Tuple[str, str]  # (text, colour)
-
+from collections import deque
+from threading import RLock
+from typing import Sequence
+Entry = tuple[str, str]
 
 class LogBuffer:
-    def __init__(
-        self,
-        *,
-        max_entries: int = 1500,
-        trim_to: int = 800,
-        max_flush_entries: int = 200,
-        max_flush_bytes: int = 100 * 1024,
-    ) -> None:
-        self._entries: List[Entry] = []
-        self._max_entries = max_entries
-        self._trim_to = trim_to
-        self._max_flush_entries = max_flush_entries
-        self._max_flush_bytes = max_flush_bytes
+    def __init__(self, *, max_entries=1500, trim_to=800, max_flush_entries=200,
+                 max_flush_bytes=100 * 1024):
+        self._entries = deque()
+        self._lock = RLock()
+        self._max_entries = max(1, int(max_entries))
+        self._trim_to = max(1, min(self._max_entries, int(trim_to)))
+        self._max_flush_entries = max(1, int(max_flush_entries))
+        self._max_flush_bytes = max(16, int(max_flush_bytes))
 
-    def __len__(self) -> int:
-        return len(self._entries)
+    def __len__(self):
+        with self._lock:
+            return len(self._entries)
 
-    def __bool__(self) -> bool:
-        return bool(self._entries)
+    def __bool__(self):
+        return len(self) > 0
 
-    def add(self, text: str, colour: str) -> None:
+    @property
+    def flush_threshold(self) -> int:
+        """Entry count above which a producer should flush early.
+
+        Matches the per-flush cap, so the buffer never accumulates a backlog
+        that a single drain cannot clear.
+        """
+        return self._max_flush_entries
+
+    def add(self, text, colour):
         if not text:
             return
-        self._entries.append((text, colour))
-        if len(self._entries) > self._max_entries:
-            # Drop the oldest: under a flood the tail is what matters, and an
-            # unbounded buffer is a slow memory leak on long playlists.
-            del self._entries[: len(self._entries) - self._trim_to]
-
-    def clear(self) -> None:
-        self._entries.clear()
-
-    def drain(self) -> List[Entry]:
-        """Return coalesced entries to emit, requeuing anything over the cap."""
-        if not self._entries:
-            return []
-
-        pending = self._entries
-        self._entries = []
-
-        out: List[Entry] = []
-        run_colour: Optional[str] = None
-        run_parts: List[str] = []
-        emitted_bytes = 0
-        cutoff: Optional[int] = None
-
-        def flush_run() -> int:
-            if run_colour is None or not run_parts:
-                return 0
-            merged = "\n".join(run_parts)
-            out.append((merged, run_colour))
-            return len(merged.encode("utf-8", errors="replace"))
-
-        for index, (text, colour) in enumerate(pending):
-            if len(out) >= self._max_flush_entries or emitted_bytes > self._max_flush_bytes:
-                cutoff = index
-                break
-            if run_colour is None:
-                run_colour, run_parts = colour, [text]
-            elif colour == run_colour:
-                run_parts.append(text)
-            else:
-                emitted_bytes += flush_run()
-                run_colour, run_parts = colour, [text]
-
-        emitted_bytes += flush_run()
-
-        if cutoff is not None:
-            # Requeue by index, not by value: a value-based search could match
-            # an earlier identical (text, colour) pair and duplicate or drop
-            # output.
-            remainder = pending[cutoff:]
-            if remainder:
-                self._entries[0:0] = remainder
-
-        return out
-
-
-def coalesce(entries: Sequence[Entry]) -> List[Entry]:
-    """Merge consecutive same-colour entries. Used for one-shot flushes."""
-    out: List[Entry] = []
-    for text, colour in entries:
-        if out and out[-1][1] == colour:
-            out[-1] = (out[-1][0] + "\n" + text, colour)
+        text = str(text)
+        # UTF-8 encoding was previously done here *and* again for every entry
+        # in drain(), making it the dominant per-log-line cost. Measure once,
+        # store the size, and skip encoding entirely for lines that cannot
+        # reach the cap (UTF-8 uses at most 4 bytes per character).
+        if len(text) * 4 > self._max_flush_bytes:
+            raw = text.encode("utf-8", errors="replace")
+            size = len(raw)
+            if size > self._max_flush_bytes:
+                text = raw[:self._max_flush_bytes - 4].decode("utf-8", errors="ignore") + "…"
+                size = len(text.encode("utf-8", errors="replace"))
         else:
-            out.append((text, colour))
+            size = len(text)
+        with self._lock:
+            self._entries.append((text, colour, size))
+            if len(self._entries) > self._max_entries:
+                while len(self._entries) > self._trim_to:
+                    self._entries.popleft()
+
+    def clear(self):
+        with self._lock:
+            self._entries.clear()
+
+    def drain(self):
+        batch, size = [], 0
+        with self._lock:
+            while self._entries and len(batch) < self._max_flush_entries:
+                cost = self._entries[0][2] + (1 if batch else 0)
+                if batch and size + cost > self._max_flush_bytes:
+                    break
+                text, colour, _cost = self._entries.popleft()
+                batch.append((text, colour))
+                size += cost
+        return coalesce(batch)
+
+def coalesce(entries: Sequence[Entry]) -> list[Entry]:
+    out = []
+    colour, parts = None, []
+    for text, current in entries:
+        if parts and current != colour:
+            out.append(("\n".join(parts), colour))
+            parts = []
+        colour = current
+        parts.append(text)
+    if parts:
+        out.append(("\n".join(parts), colour))
     return out

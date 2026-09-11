@@ -11,6 +11,11 @@ state being spread across a dozen methods.
 from __future__ import annotations
 
 from ytget_gui.queue.model import QueueItem, QueueModel, Status
-from ytget_gui.queue.controller import QueueController
+def __getattr__(name):
+    if name == "QueueController":
+        from ytget_gui.queue.controller import QueueController
+        return QueueController
+    raise AttributeError(name)
+
 
 __all__ = ["QueueItem", "QueueModel", "Status", "QueueController"]

@@ -31,6 +31,7 @@ from ytget_gui.utils.paths import (
     ensure_dir,
     executable_name,
     get_base_path,
+    get_data_path,
     is_usable_file,
     resolve_tool,
 )
@@ -177,6 +178,7 @@ class AppSettings:
 
     # --- Locations ---
     BASE_DIR: Path = field(default_factory=get_base_path)
+    DATA_DIR: Path = field(default_factory=get_data_path)
     DOWNLOADS_DIR: Path = field(default_factory=default_downloads_dir)
     INTERNAL_DIR: Path = field(init=False)
     CACHE_DIR: Path = field(init=False)
@@ -285,13 +287,14 @@ class AppSettings:
     def __post_init__(self) -> None:
         self.BASE_DIR = Path(self.BASE_DIR).resolve()
         self.INTERNAL_DIR = (self.BASE_DIR / "_internal").resolve()
-        self.CACHE_DIR = (self.BASE_DIR / "cache").resolve()
-        self.CONFIG_PATH = (self.BASE_DIR / "config.json").resolve()
-        self.QUEUE_PATH = (self.BASE_DIR / "queue.json").resolve()
-        self.COOKIES_PATH = (self.BASE_DIR / "cookies.txt").resolve()
-        self.ARCHIVE_PATH = (self.BASE_DIR / "archive.txt").resolve()
+        self.DATA_DIR = Path(self.DATA_DIR).expanduser().resolve()
+        self.CACHE_DIR = self.DATA_DIR / "cache"
+        self.CONFIG_PATH = self.DATA_DIR / "config.json"
+        self.QUEUE_PATH = self.DATA_DIR / "queue.json"
+        self.COOKIES_PATH = self.DATA_DIR / "cookies.txt"
+        self.ARCHIVE_PATH = self.DATA_DIR / "archive.txt"
 
-        for d in (self.DOWNLOADS_DIR, self.INTERNAL_DIR, self.CACHE_DIR):
+        for d in (self.DOWNLOADS_DIR, self.DATA_DIR, self.DATA_DIR / "bin", self.CACHE_DIR):
             try:
                 ensure_dir(d)
             except OSError as exc:
@@ -309,29 +312,38 @@ class AppSettings:
         """
         self.YT_DLP_PATH = resolve_tool(
             "YTGET_YT_DLP_PATH",
-            self.BASE_DIR / executable_name("yt-dlp"),
+            self.DATA_DIR / "bin" / executable_name("yt-dlp"),
             executable_name("yt-dlp"),
         )
         self.FFMPEG_PATH = resolve_tool(
             "YTGET_FFMPEG_PATH",
-            self.BASE_DIR / executable_name("ffmpeg"),
+            self.DATA_DIR / "bin" / executable_name("ffmpeg"),
             executable_name("ffmpeg"),
         )
         self.FFPROBE_PATH = resolve_tool(
             "YTGET_FFPROBE_PATH",
-            self.BASE_DIR / executable_name("ffprobe"),
+            self.DATA_DIR / "bin" / executable_name("ffprobe"),
             executable_name("ffprobe"),
         )
         self.PHANTOMJS_PATH = resolve_tool(
             "YTGET_PHANTOMJS_PATH",
-            self.BASE_DIR / executable_name("phantomjs"),
+            self.DATA_DIR / "bin" / executable_name("phantomjs"),
             executable_name("phantomjs"),
         )
         self.DENO_PATH = resolve_tool(
             "YTGET_DENO_PATH",
-            self.BASE_DIR / executable_name("deno"),
+            self.DATA_DIR / "bin" / executable_name("deno"),
             executable_name("deno"),
         )
+
+        for attr, name in (("YT_DLP_PATH", "yt-dlp"), ("FFMPEG_PATH", "ffmpeg"),
+                           ("FFPROBE_PATH", "ffprobe"), ("DENO_PATH", "deno")):
+            if not Path(getattr(self, attr)).is_file():
+                for root in (self.BASE_DIR, self.INTERNAL_DIR):
+                    candidate = root / executable_name(name)
+                    if candidate.is_file():
+                        setattr(self, attr, candidate)
+                        break
 
     def _refresh_templates(self) -> None:
         self.OUTPUT_TEMPLATE = str(self.DOWNLOADS_DIR / DEFAULT_TITLE_TEMPLATE)
@@ -369,7 +381,7 @@ class AppSettings:
         except OSError as exc:
             log.warning("Archive file unusable (%s): %s", p, exc)
             return None
-        return p
+        return p if p.is_file() else None
 
     def get_format_for_resolution(self, height: int, audio: str = "bestaudio") -> str:
         return video_chain(height, audio=audio)
@@ -400,8 +412,9 @@ class AppSettings:
         Assigning DOWNLOADS_DIR directly leaves OUTPUT_TEMPLATE and
         PLAYLIST_TEMPLATE pointing at the previous folder and skips the mkdir.
         """
-        self.DOWNLOADS_DIR = Path(path).expanduser().resolve()
-        ensure_dir(self.DOWNLOADS_DIR)
+        candidate = Path(path).expanduser().resolve()
+        ensure_dir(candidate)
+        self.DOWNLOADS_DIR = candidate
         self._refresh_templates()
         self.save_config()
 
@@ -438,16 +451,16 @@ class AppSettings:
         for key, validator in _VALIDATORS.items():
             try:
                 setattr(self, key, validator(getattr(self, key)))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
         self.SPOTDL.normalise()
 
         # An empty cookies/archive field must fall back to the canonical
         # location rather than becoming Path(".").
         if str(self.COOKIES_PATH) in ("", "."):
-            self.COOKIES_PATH = self.BASE_DIR / "cookies.txt"
+            self.COOKIES_PATH = self.DATA_DIR / "cookies.txt"
         if str(self.ARCHIVE_PATH) in ("", "."):
-            self.ARCHIVE_PATH = self.BASE_DIR / "archive.txt"
+            self.ARCHIVE_PATH = self.DATA_DIR / "archive.txt"
 
     # ------------------------------------------------------------------
     # Persistence
@@ -577,7 +590,7 @@ def _coerce(value: Any, current: Any) -> Any:
     if isinstance(current, int):
         try:
             return int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return current
     if isinstance(current, list):
         return list(value) if isinstance(value, list) else ([value] if value else [])

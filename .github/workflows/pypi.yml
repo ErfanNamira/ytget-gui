@@ -1,4 +1,4 @@
-name: Publish YTGet package to PyPI
+name: Publish YTGet to PyPI
 
 on:
   workflow_dispatch:

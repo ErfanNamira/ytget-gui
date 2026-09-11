@@ -23,11 +23,7 @@ if sys.platform == "win32":
     except Exception:  # noqa: BLE001 - cosmetic only, never fatal
         pass
 
-from PySide6.QtGui import QColor, QIcon, QPalette
-from PySide6.QtWidgets import QApplication, QStyleFactory
-
 from ytget_gui import _version
-from ytget_gui.styles import Palette, global_font, refresh_styles
 
 log = logging.getLogger("ytget")
 
@@ -38,6 +34,8 @@ def build_dark_palette() -> QPalette:
     Native popups, tooltips and disabled states fall back to the palette
     rather than the stylesheet, so all of them are set explicitly.
     """
+    from PySide6.QtGui import QColor, QPalette
+    from ytget_gui.styles import Palette
     pal = QPalette()
 
     bg = QColor(Palette.WINDOW_BG)
@@ -77,6 +75,7 @@ def build_dark_palette() -> QPalette:
 
 def find_icon() -> QIcon | None:
     """Locate the app icon in both source and frozen layouts."""
+    from PySide6.QtGui import QIcon
     from ytget_gui.utils.paths import get_base_path, get_bundle_path, is_macos
 
     names = (
@@ -95,11 +94,10 @@ def find_icon() -> QIcon | None:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="ytget")
     parser.add_argument("--version", action="store_true", help="print version and exit")
+    parser.add_argument("--doctor", action="store_true", help="check dependencies and storage without opening the GUI")
     parser.add_argument("--verbose", "-v", action="store_true", help="debug logging")
     parser.add_argument("urls", nargs="*", help="URLs to enqueue on startup")
-    # Qt consumes its own flags; ignore unknowns so -platform / -style still work.
-    args, _unknown = parser.parse_known_args(argv)
-    return args
+    return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -109,6 +107,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.version:
         print(f"{_version.APP_NAME} {_version.__version__}")
         return 0
+
+    if args.doctor:
+        from ytget_gui.diagnostics import main as doctor
+        return doctor()
+
+    try:
+        from PySide6.QtWidgets import QApplication, QStyleFactory, QMessageBox
+        from PySide6.QtCore import QLockFile
+        from ytget_gui.styles import global_font, refresh_styles
+    except ImportError as exc:
+        print(f"YTGet cannot open the desktop interface: {exc}\nRun install.py with Python, or python -m pip install .", file=sys.stderr)
+        return 2
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -137,7 +147,21 @@ def main(argv: list[str] | None = None) -> int:
     # whole worker stack.
     from ytget_gui.main_window import MainWindow
 
-    window = MainWindow(app_icon=icon)
+    # A second writer would silently overwrite queue.json and config.json.
+    from ytget_gui.utils.paths import get_data_path
+    data_dir = get_data_path()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(data_dir / "instance.lock"))
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(0):
+        QMessageBox.information(None, "YTGet is already open", "Use the existing window, or a different YTGET_DATA_DIR profile.")
+        return 1
+    try:
+        window = MainWindow(app_icon=icon)
+    except Exception as exc:
+        log.exception("Startup failed")
+        QMessageBox.critical(None, "YTGet could not start", f"{exc}\nRun python -m ytget_gui --doctor for dependency checks.")
+        return 2
     window.show()
 
     if args.urls:

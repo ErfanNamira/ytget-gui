@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import codecs
 import glob
+import json
+import shlex
 import logging
 import os
 import re
@@ -38,19 +40,46 @@ from ytget_gui.workers.base import CANCELLED_EXIT, BaseDownloadWorker
 
 log = logging.getLogger(__name__)
 
+
+def _as_positive_int(raw: Optional[str]) -> int:
+    """Parse a progress-template field into a positive int, else 0.
+
+    yt-dlp renders missing info fields as "NA", and a build that does not
+    expand a key leaves the literal template text in place, so every
+    non-numeric case has to degrade quietly to "unknown".
+    """
+    if not raw:
+        return 0
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
 # Machine-readable progress. Scraping the rendered bar meant guessing which
 # "43%" on a line was the download (vs. a fragment count or a postprocessor),
 # and the ETA was read by string-splitting after the literal "ETA".
 _PROGRESS_SENTINEL = "~~YTG~~"
+# playlist_index/n_entries come from the info dict so the bar can advance
+# across a playlist. Without them yt-dlp only reports per-file percentages,
+# which made the bar run 0->100% once per track and reset for the next one.
 _PROGRESS_TEMPLATE = (
     f"download:{_PROGRESS_SENTINEL}"
     "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s"
+    "|%(info.playlist_index)s|%(info.n_entries)s"
 )
 _PROGRESS_RE = re.compile(
-    re.escape(_PROGRESS_SENTINEL) + r"\s*([\d.]+)%\|([^|]*)\|([^\r\n]*)"
+    re.escape(_PROGRESS_SENTINEL)
+    + r"\s*([\d.]+)%\|([^|]*)\|([^|\r\n]*)(?:\|([^|\r\n]*)\|([^|\r\n]*))?"
 )
 # Fallback for yt-dlp builds that do not honour the template keys.
 _LEGACY_PERCENT_RE = re.compile(r"\[download\]\s+([\d.]+)%")
+# yt-dlp announces each playlist entry before downloading it. This is the
+# fallback source of playlist position for builds whose progress template does
+# not expand the info fields above.
+_PLAYLIST_ITEM_RE = re.compile(
+    r"^\[download\]\s+Downloading item\s+(\d+)\s+of\s+(\d+)", re.IGNORECASE
+)
 
 # yt-dlp's own progress markers, in the order it emits them. Each match
 # supersedes the previous one, so the last hit is the final resting place of
@@ -160,6 +189,12 @@ class DownloadWorker(BaseDownloadWorker):
         self._max_attempts = max(0, int(getattr(settings, "AUTO_RETRY_COUNT", 3) or 0))
         self._started_at = 0.0
 
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.timeout.connect(self._launch)
+        self._cancel_poll = QTimer(self)
+        self._cancel_poll.setInterval(100)
+        self._cancel_poll.timeout.connect(self._check_cancelled_retry)
         self._flat_playlist_dir: Optional[Path] = None
         self._is_audio = False
         self._outputs: List[str] = []
@@ -173,6 +208,13 @@ class DownloadWorker(BaseDownloadWorker):
         self._expected_streams = 1
         self._stream_index = 0
         self._stream_starts_seen = 0
+
+        # Playlist position, so a multi-entry download reports one continuous
+        # 0-100% across the whole playlist rather than restarting per track.
+        # 0 means "not a playlist / position unknown", which keeps the
+        # single-file math a pass-through.
+        self._playlist_index = 0
+        self._playlist_total = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -189,15 +231,15 @@ class DownloadWorker(BaseDownloadWorker):
                 f"yt-dlp not found at {self.settings.YT_DLP_PATH}. "
                 "Install it via Help > Check for Updates."
             )
-            self.emit_finished(CANCELLED_EXIT)
+            self.emit_finished(2)
             return
 
-        self._cmd = self._build_command()
         self._env = proc.tool_env(self.settings)
+        self._cmd = self._build_command()
         self._started_at = time.time()
 
         self.add_log(f"\nStarting Download for: {self.title}", AppStyles.SUCCESS_COLOR)
-        log.debug("yt-dlp command: %s", " ".join(self._cmd))
+        log.debug("Starting yt-dlp subprocess (arguments omitted for privacy)")
         self.flush_now()
 
         self._launch()
@@ -207,21 +249,25 @@ class DownloadWorker(BaseDownloadWorker):
             self.emit_finished(CANCELLED_EXIT)
             return
 
+        self._cancel_poll.stop()
         self._recent_output = ""
         self._line_tail = ""
+        self._decoder.reset()
         self._stream_index = 0
         self._stream_starts_seen = 0
+        self._playlist_index = 0
+        self._playlist_total = 0
         self.reset_progress()
 
         try:
             process = proc.spawn(self._cmd, env=self._env)
         except FileNotFoundError:
             self.error.emit(f"yt-dlp not found at {self._cmd[0]}")
-            self.emit_finished(CANCELLED_EXIT)
+            self.emit_finished(2)
             return
         except OSError as exc:
             self.error.emit(f"Failed to start yt-dlp: {exc}")
-            self.emit_finished(CANCELLED_EXIT)
+            self.emit_finished(2)
             return
 
         with self._proc_lock:
@@ -237,6 +283,12 @@ class DownloadWorker(BaseDownloadWorker):
         )
         self._reader.start()
 
+    def _check_cancelled_retry(self) -> None:
+        if self.cancelled and self._retry_timer.isActive():
+            self._retry_timer.stop()
+            self._cancel_poll.stop()
+            self.emit_finished(CANCELLED_EXIT)
+
     def _do_cancel(self) -> None:
         with self._proc_lock:
             process = self._process
@@ -249,16 +301,10 @@ class DownloadWorker(BaseDownloadWorker):
             and getattr(s, "COOKIES_FROM_BROWSER", "")
         ):
             return
-        try:
-            ok, message = cookie_manager.refresh_before_download(s)
-        except Exception as exc:  # noqa: BLE001
-            self.add_log(f"\u26a0\ufe0f Cookie refresh failed: {exc}", AppStyles.WARNING_COLOR)
-            return
-        if ok:
-            self.add_log(f"\U0001f36a Refreshed cookies: {message}", AppStyles.INFO_COLOR)
-            cookie_manager.record_refresh(s)
-        else:
-            self.add_log(f"\u26a0\ufe0f Cookie refresh: {message}", AppStyles.WARNING_COLOR)
+        _path, warning, _cancelled = fetch_core.maybe_refresh_cookies_interruptible(
+            s, s.COOKIES_PATH, self._cancel_event)
+        if warning:
+            self.add_log(warning, AppStyles.WARNING_COLOR)
 
     # ------------------------------------------------------------------
     # Output handling
@@ -286,7 +332,8 @@ class DownloadWorker(BaseDownloadWorker):
                 code = process.wait()
             except OSError:
                 code = CANCELLED_EXIT
-            self._process_exited.emit(code if code is not None else CANCELLED_EXIT)
+            stream.close()
+            self._process_exited.emit(code if code is not None else 2)
 
     def _on_output(self, data: bytes) -> None:
         text = self._decoder.decode(data)
@@ -320,6 +367,7 @@ class DownloadWorker(BaseDownloadWorker):
             percent = float(match.group(1))
             speed = match.group(2).strip()
             eta = match.group(3).strip()
+            self._note_playlist_position(match.group(4), match.group(5))
             self._emit_weighted_progress(percent)
             parts = [self._stream_label(), f"{percent:.0f}%"]
             if speed and speed not in ("Unknown", "N/A", "--"):
@@ -336,6 +384,27 @@ class DownloadWorker(BaseDownloadWorker):
 
         return False
 
+    def _note_playlist_position(
+        self, raw_index: Optional[str], raw_total: Optional[str]
+    ) -> None:
+        """Record which playlist entry yt-dlp is currently downloading.
+
+        Values arrive as template text, so anything non-numeric ("NA" for a
+        single video, or a literal placeholder on builds that do not expand
+        the info fields) is ignored and leaves the single-file behaviour
+        untouched.
+        """
+        index = _as_positive_int(raw_index)
+        total = _as_positive_int(raw_total)
+        if total:
+            self._playlist_total = total
+        if index and index != self._playlist_index:
+            # New entry: its streams start over, so reset the per-item stream
+            # counters or the second track would begin its bar at 50%.
+            self._playlist_index = index
+            self._stream_index = 0
+            self._stream_starts_seen = 0
+
     def _emit_weighted_progress(self, stream_percent: float) -> None:
         """Fold a single stream's 0-100% into the item's overall 0-100%.
 
@@ -343,11 +412,22 @@ class DownloadWorker(BaseDownloadWorker):
         half of the bar and stream_index 1 the second half, so the bar rises
         continuously instead of completing once per stream. When only one
         stream is expected this is just a pass-through.
+
+        For a playlist the result is then folded again into the playlist's
+        own span: entry 3 of 25 at 50% of its second stream reports
+        ((2 + 0.75) / 25) * 100 = 11%, so the bar advances monotonically to
+        100% across the playlist instead of once per track.
         """
         n = max(1, self._expected_streams)
         stream_percent = max(0.0, min(100.0, stream_percent))
-        overall = (self._stream_index + stream_percent / 100.0) / n * 100.0
-        self.emit_progress(int(overall))
+        fraction = (self._stream_index + stream_percent / 100.0) / n
+
+        total = self._playlist_total
+        index = self._playlist_index
+        if total > 1 and index >= 1:
+            fraction = (min(index, total) - 1 + fraction) / total
+
+        self.emit_progress(int(max(0.0, min(1.0, fraction)) * 100.0))
 
     def _on_stream_start(self) -> None:
         """Called when a new "[download] Destination:" marker appears."""
@@ -370,6 +450,19 @@ class DownloadWorker(BaseDownloadWorker):
     def _log_line(self, line: str) -> None:
         stripped = line.strip()
         if not stripped:
+            return
+        item = _PLAYLIST_ITEM_RE.match(stripped)
+        if item:
+            # Keep the line in the console (it is useful context) but also use
+            # it as the fallback source of playlist position.
+            self._note_playlist_position(item.group(1), item.group(2))
+        if stripped.startswith("~~YTGFILE~~"):
+            try:
+                path = json.loads(stripped[len("~~YTGFILE~~"):])
+                if isinstance(path, str) and path not in self._outputs:
+                    self._outputs.append(path)
+            except (ValueError, TypeError):
+                pass
             return
         self._capture_output(stripped)
         lowered = stripped.lower()
@@ -445,8 +538,10 @@ class DownloadWorker(BaseDownloadWorker):
         with self._proc_lock:
             self._process = None
 
+        self._line_tail += self._decoder.decode(b"", final=True)
         if self._line_tail.strip():
-            self._log_line(self._line_tail)
+            if not self._handle_progress_line(self._line_tail):
+                self._log_line(self._line_tail)
             self._line_tail = ""
         self.flush()
 
@@ -466,7 +561,8 @@ class DownloadWorker(BaseDownloadWorker):
         self.add_log(
             f"\u274c yt-dlp exited with code {code}.", AppStyles.ERROR_COLOR
         )
-        self.emit_finished(code)
+        self.error.emit(fetch_core._condense_error(self._recent_output) or f"yt-dlp exited with code {code}")
+        self.emit_finished(code if code > 0 else 2)
 
     def _on_success(self) -> None:
         self.emit_progress(100)
@@ -491,7 +587,7 @@ class DownloadWorker(BaseDownloadWorker):
 
         final = self._resolve_output()
         if final is not None:
-            self.emit_output(str(final), len(self._outputs))
+            self.emit_output(str(final), sum(Path(v).is_file() for v in self._outputs))
         elif self._flat_playlist_dir is not None and self._flat_playlist_dir.is_dir():
             # A flat playlist produces many files; the folder is the useful
             # thing to open.
@@ -524,7 +620,8 @@ class DownloadWorker(BaseDownloadWorker):
         )
         self.flush_now()
         self._start_log_timer()
-        QTimer.singleShot(int(delay * 1000), self._launch)
+        self._retry_timer.start(int(delay * 1000))
+        self._cancel_poll.start()
 
     # ------------------------------------------------------------------
     # Command construction
@@ -550,7 +647,7 @@ class DownloadWorker(BaseDownloadWorker):
         format_code = s.resolve_format_code(self.item.get("format_code", ""))
         self._is_audio = formats.is_audio_code(format_code)
         self._expected_streams = self._count_expected_streams(format_code)
-        is_playlist = is_playlist_url(url) or format_code in formats.PLAYLIST_FORMAT_CODES
+        is_playlist = bool(self.item.get("is_playlist")) or is_playlist_url(url) or format_code in formats.PLAYLIST_FORMAT_CODES
 
         # Assigned before any branch. Previously this was only bound inside the
         # non-flat-playlist branch yet read unconditionally further down, so the
@@ -564,8 +661,10 @@ class DownloadWorker(BaseDownloadWorker):
 
         cmd: List[str] = [
             str(s.YT_DLP_PATH),
-            "--no-warnings",
+            "--ignore-config",
             "--no-overwrites",
+            "--no-simulate",
+            "--print", "after_move:~~YTGFILE~~%(filepath)j",
             "--newline",
             "--progress",
             "--progress-template", _PROGRESS_TEMPLATE,
@@ -603,10 +702,10 @@ class DownloadWorker(BaseDownloadWorker):
         for name, args in self._pp_args.items():
             if args:
                 prefix = f"{name}:" if name else ""
-                cmd.extend(["--postprocessor-args", prefix + " ".join(args)])
+                cmd.extend(["--postprocessor-args", prefix + shlex.join(args)])
 
         cmd += self._extra_and_client_flags(url)
-        cmd.append(url)
+        cmd.extend(["--", url])
         return [str(part) for part in cmd]
 
     def _add_pp_args(self, postprocessor: str, *args: str) -> None:
@@ -618,7 +717,7 @@ class DownloadWorker(BaseDownloadWorker):
 
         if is_usable_file(s.COOKIES_PATH):
             flags += ["--cookies", str(s.COOKIES_PATH)]
-        if getattr(s, "COOKIES_FROM_BROWSER", ""):
+        elif getattr(s, "COOKIES_FROM_BROWSER", ""):
             flags += ["--cookies-from-browser", s.COOKIES_FROM_BROWSER]
         if getattr(s, "PROXY_URL", ""):
             flags += ["--proxy", s.PROXY_URL]
@@ -651,7 +750,7 @@ class DownloadWorker(BaseDownloadWorker):
             flags.append("--live-from-start")
         if is_playlist:
             # One unavailable entry must not abandon the rest of the playlist.
-            flags.append("--ignore-errors")
+            flags.append("--no-abort-on-error")
         if getattr(s, "PLAYLIST_REVERSE", False):
             flags.append("--playlist-reverse")
         if getattr(s, "PLAYLIST_ITEMS", ""):
@@ -689,6 +788,7 @@ class DownloadWorker(BaseDownloadWorker):
             result = proc.run(
                 [
                     str(self.settings.YT_DLP_PATH),
+                    "--ignore-config",
                     "--flat-playlist",
                     "--playlist-items", "1",
                     "--print", "%(playlist_title)s",
@@ -711,8 +811,17 @@ class DownloadWorker(BaseDownloadWorker):
         s = self.settings
 
         if is_flat:
-            album = safe_stem(self.title or "Playlist") + " Playlist"
+            # Use the fetched title only. self.title falls back to the URL when
+            # metadata has not arrived yet, which named the folder and the album
+            # tag after the web address; 2.7.9 read item["title"] here and fell
+            # back to "Playlist".
+            fetched_title = str(self.item.get("title") or "").strip()
+            album = safe_stem(fetched_title or "Playlist") + " Playlist"
             base = Path(s.DOWNLOADS_DIR) / album
+            # A literal "%" in a title would be parsed by yt-dlp as an output
+            # template field, so escape it for -o while keeping the real name
+            # for the on-disk path and the album tag.
+            template_base = Path(s.DOWNLOADS_DIR) / album.replace("%", "%%")
             stub = self._resolve_name_template("%(album)s - %(title)s")
             filename = f"%(autonumber)03d - {stub}.%(ext)s"
             self._flat_playlist_dir = base
@@ -741,12 +850,15 @@ class DownloadWorker(BaseDownloadWorker):
             ):
                 # No cookies means yt-dlp may resolve a degraded title; prefer
                 # the one already shown in the queue so the file matches the UI.
-                filename = f"{safe_stem(self.title)}.%(ext)s"
+                filename = safe_stem(self.title).replace("%", "%%") + ".%(ext)s"
             else:
                 filename = f"{stub}.%(ext)s"
             self._flat_album_name = ""
+            # base here intentionally contains yt-dlp template fields such as
+            # %(playlist_title)s, so it must not be escaped.
+            template_base = base
 
-        flags = ["-o", str(base / filename)]
+        flags = ["-o", str(template_base / filename)]
         if is_playlist:
             flags.insert(0, "--yes-playlist")
         else:
@@ -760,7 +872,7 @@ class DownloadWorker(BaseDownloadWorker):
         has_cookies = is_usable_file(s.COOKIES_PATH) or bool(
             getattr(s, "COOKIES_FROM_BROWSER", "")
         )
-        return not has_cookies
+        return not has_cookies and bool(self.item.get("title"))
 
     def _resolve_name_template(self, default_template: str) -> str:
         s = self.settings
@@ -788,7 +900,6 @@ class DownloadWorker(BaseDownloadWorker):
             "-f", formats.audio_chain(),
             "--extract-audio",
             "--audio-format", audio_format,
-            "--embed-thumbnail",
         ]
         if getattr(s, "ADD_METADATA", True):
             flags.append("--add-metadata")
@@ -886,11 +997,14 @@ class DownloadWorker(BaseDownloadWorker):
         s = self.settings
         if not getattr(s, "PREFER_HLS", False):
             return False
-        lowered = (url or "").lower()
-        if any(d in lowered for d in _HLS_NEVER_DOMAINS):
+        from urllib.parse import urlsplit
+        host = (urlsplit(url).hostname or "").lower()
+        def matches(domain):
+            domain = str(domain).lower().strip().lstrip(".")
+            return bool(domain) and (host == domain or host.endswith("." + domain))
+        if any(matches(d) for d in _HLS_NEVER_DOMAINS):
             return False
-        domains = getattr(s, "HLS_PREFERRED_DOMAINS", []) or []
-        return any(d and d in lowered for d in domains)
+        return any(matches(d) for d in (s.HLS_PREFERRED_DOMAINS or []))
 
     @staticmethod
     def _referer_for(url: str) -> str:
@@ -945,7 +1059,12 @@ class DownloadWorker(BaseDownloadWorker):
             flags.append("--write-thumbnail")
         if getattr(s, "CONVERT_THUMBNAILS", False):
             flags += ["--convert-thumbnails", getattr(s, "THUMBNAIL_FORMAT", "png") or "png"]
-        if getattr(s, "EMBED_THUMBNAIL", False) and not self._is_audio:
+        # Audio always gets its cover art embedded, matching 2.7.9 where the
+        # audio branch passed --embed-thumbnail unconditionally. The 2.8.x
+        # refactor moved thumbnail handling here but kept only the video
+        # gate, so every extracted MP3/FLAC/Opus silently lost its cover.
+        # EMBED_THUMBNAIL stays the switch for *video* files only.
+        if self._is_audio or getattr(s, "EMBED_THUMBNAIL", False):
             # EmbedThumbnailPP writes mimetype/filename metadata itself. The
             # previous revision also passed those explicitly via
             # --postprocessor-args, which collided with --remux-video and made
@@ -961,7 +1080,7 @@ class DownloadWorker(BaseDownloadWorker):
 
     def _extra_and_client_flags(self, url: str) -> List[str]:
         s = self.settings
-        extra = fetch_core.parse_extra_args(getattr(s, "EXTRA_YTDLP_ARGS", ""))
+        extra = fetch_core.parse_ytdlp_args(getattr(s, "EXTRA_YTDLP_ARGS", ""))
 
         flags: List[str] = []
         player_client = str(getattr(s, "YOUTUBE_PLAYER_CLIENT", "auto") or "auto").strip()
@@ -1032,6 +1151,48 @@ class DownloadWorker(BaseDownloadWorker):
             log.debug("Could not tag %s: %s", path, exc)
             return False
 
+    def _rename_candidates(self, root: Path):
+        """Yield the files worth inspecting for a post-download rename.
+
+        This job already recorded every file it produced, so the directories
+        holding those files are the only places a new audio file can appear.
+        Listing just those directories keeps the cost proportional to this
+        download instead of to the size of the user's whole library, which is
+        what a recursive walk of DOWNLOADS_DIR cost on every single item.
+
+        Falls back to one recursive walk only when no output path was captured
+        (older yt-dlp builds that do not support the print template), so the
+        previous behaviour is preserved rather than silently lost.
+        """
+        dirs: list[Path] = []
+        seen: set[Path] = set()
+
+        def add(candidate: Optional[Path]) -> None:
+            if candidate is None:
+                return
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                resolved = candidate
+            if resolved in seen or not resolved.is_dir():
+                return
+            seen.add(resolved)
+            dirs.append(resolved)
+
+        for raw in self._outputs:
+            add(Path(raw).parent)
+        add(self._flat_playlist_dir)
+
+        if not dirs:
+            yield from root.rglob("*")
+            return
+
+        for directory in dirs:
+            try:
+                yield from directory.iterdir()
+            except OSError as exc:
+                log.debug("Could not list %s: %s", directory, exc)
+
     def _clean_music_video_tags(self) -> int:
         """Strip "(Official Video)"-style noise from freshly downloaded audio.
 
@@ -1047,7 +1208,7 @@ class DownloadWorker(BaseDownloadWorker):
         cutoff = self._started_at - 5  # small slack for clock/fs granularity
         renamed = 0
 
-        for path in root.rglob("*"):
+        for path in self._rename_candidates(root):
             if path.suffix.lower() not in _AUDIO_EXTENSIONS or not path.is_file():
                 continue
             try:

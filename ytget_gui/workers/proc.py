@@ -54,6 +54,7 @@ def spawn(
     keep writing to disk after a cancel.
     """
     kwargs: Dict[str, Any] = dict(hidden_console_kwargs())
+    kwargs["stdin"] = subprocess.DEVNULL
 
     if capture:
         kwargs["stdout"] = subprocess.PIPE
@@ -131,14 +132,25 @@ def terminate_tree(proc: Optional[subprocess.Popen], *, grace: float = 2.0) -> N
             return
 
         pgid = os.getpgid(proc.pid)
+        if pgid != proc.pid:
+            proc.terminate()
+            try:
+                proc.wait(timeout=grace)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                _reap(proc, grace)
+            return
         os.killpg(pgid, signal.SIGTERM)
         try:
             proc.wait(timeout=grace)
-            return
         except subprocess.TimeoutExpired:
+            pass
+        try:
             os.killpg(pgid, signal.SIGKILL)
-            _reap(proc, grace)
-            return
+        except ProcessLookupError:
+            pass
+        _reap(proc, grace)
+        return
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         log.debug("Tree kill failed (%s); falling back to direct kill", exc)
 

@@ -51,6 +51,22 @@ def get_bundle_path() -> Path:
     return get_base_path()
 
 
+def get_data_path() -> Path:
+    """Per-user state. YTGET_DATA_DIR explicitly enables a portable profile."""
+    override = os.environ.get("YTGET_DATA_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    if is_windows():
+        root = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
+        return root / "YTGet"
+    if is_macos():
+        return Path.home() / "Library/Application Support/YTGet"
+    root = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
+    if not root.is_absolute():
+        root = Path.home() / ".local/share"
+    return root / "ytget"
+
+
 def executable_name(base: str) -> str:
     """Append `.exe` on Windows, leave unchanged elsewhere."""
     return f"{base}.exe" if is_windows() else base
@@ -88,16 +104,8 @@ def resolve_tool(
 
 
 def default_downloads_dir() -> Path:
-    """A sensible default download folder.
-
-    Prefers the user's real ~/Downloads; otherwise ./Downloads beside the app
-    (not the process CWD, which for a double-clicked binary can be anywhere,
-    including a read-only location).
-    """
-    home_downloads = Path.home() / "Downloads"
-    if home_downloads.is_dir():
-        return home_downloads
-    return (get_base_path() / "Downloads").resolve()
+    """Always use user-writable storage, even before Downloads exists."""
+    return Path.home() / "Downloads"
 
 
 def is_usable_file(path: Optional[PathLike]) -> bool:
@@ -150,7 +158,7 @@ def safe_stem(name: str, max_len: int = 180) -> str:
         *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }
-    if name.upper() in reserved:
+    if name.split(".", 1)[0].upper() in reserved:
         name += "_"
 
     if len(name) > max_len:

@@ -11,6 +11,9 @@ Checks and installs:
 from __future__ import annotations
 
 import logging
+import html
+import threading
+from urllib.parse import urlsplit
 import os
 import re
 import shutil
@@ -53,7 +56,7 @@ GITHUB_LATEST = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 PYPI_JSON = "https://pypi.org/pypi/{package}/json"
 
 REQUEST_TIMEOUT = 15
-DOWNLOAD_TIMEOUT = 120
+DOWNLOAD_TIMEOUT = (5, 15)
 
 
 @dataclass(frozen=True)
@@ -204,7 +207,8 @@ class UpdateChecker(QThread):
         self._session = requests.Session()
         self._session.headers["User-Agent"] = f"YTGet/{_version.__version__}"
         self._verify, _args, _env = ssl_utils.resolve_ssl_config(settings)
-        ssl_utils.maybe_suppress_insecure_warning(self._verify)
+        if self._verify is False:
+            self._verify = True  # Software update trust cannot be switched off.
         proxy = (getattr(settings, "PROXY_URL", "") or "").strip()
         if proxy:
             # The previous revision ignored the proxy entirely here, so update
@@ -317,10 +321,12 @@ class UpdateInstaller(QThread):
         self.url = url
         self.settings = settings
         self._cancelled = False
+        self._process = None
 
     def cancel(self) -> None:
         self._cancelled = True
         self.requestInterruption()
+        threading.Thread(target=proc.terminate_tree, args=(self._process,), daemon=True).start()
 
     # ------------------------------------------------------------------
 
@@ -328,29 +334,22 @@ class UpdateInstaller(QThread):
         self.message.emit(self.key, text)
 
     def _target_path(self) -> Path:
-        """Prefer the path the app is configured to run.
-
-        Installing to BASE_DIR unconditionally, as before, diverged from the
-        configured path whenever a user pointed YTGet at a binary elsewhere:
-        the update succeeded and the app kept running the old one.
-        """
-        base = self.settings.BASE_DIR
-        if self.key == "yt-dlp":
-            configured = getattr(self.settings, "YT_DLP_PATH", None)
-            return Path(configured) if configured else base / executable_name("yt-dlp")
-        if self.key == "deno":
-            configured = getattr(self.settings, "DENO_PATH", None)
-            return Path(configured) if configured else base / executable_name("deno")
-        if self.key == "spotdl":
-            from ytget_gui.workers.spotdl_worker import _find_spotdl
-
-            found = _find_spotdl(self.settings)
-            return Path(found) if found else base / executable_name("spotdl")
-        return base
+        """Private managed binaries: never replace a system executable."""
+        base = self.settings.DATA_DIR / "bin"
+        base.mkdir(parents=True, exist_ok=True)
+        return base / executable_name(self.key)
 
     def _download(self, url: str, destination: Path) -> bool:
         verify, _args, _env = ssl_utils.resolve_ssl_config(self.settings)
-        ssl_utils.maybe_suppress_insecure_warning(verify)
+        if verify is False:
+            verify = True
+        parsed = urlsplit(url)
+        repos = {"yt-dlp": "/yt-dlp/yt-dlp/", "deno": "/denoland/deno/",
+                 "spotdl": "/spotDL/spotify-downloader/"}
+        if (parsed.scheme != "https" or parsed.hostname != "github.com"
+                or not parsed.path.startswith(repos.get(self.key, "INVALID") + "releases/download/")):
+            self._log("Refusing software download outside the official HTTPS release repository.")
+            return False
         proxies = None
         proxy = (getattr(self.settings, "PROXY_URL", "") or "").strip()
         if proxy:
@@ -374,7 +373,7 @@ class UpdateInstaller(QThread):
                         written += len(chunk)
                         if total:
                             self.progress.emit(self.key, int(written * 100 / total))
-            return written > 0
+            return written > 0 and (not total or written == total) and not self._cancelled
         except requests.RequestException as exc:
             self._log(f"Download failed: {exc}")
             return False
@@ -409,12 +408,12 @@ class UpdateInstaller(QThread):
 
             self._log("Installing\u2026")
             self._make_executable(temp_path)
-            try:
-                os.replace(temp_path, destination)
-            except OSError:
-                # Windows refuses to replace a running executable; shutil.move
-                # via a copy is the usual fallback.
-                shutil.move(str(temp_path), str(destination))
+            if self._cancelled:
+                self.failed.emit(self.key, "Cancelled.")
+                return
+            os.replace(temp_path, destination)
+            if self.key == "yt-dlp":
+                self.settings.YT_DLP_PATH = destination
             temp_path = None
             self._log("Done.")
             self.succeeded.emit(self.key)
@@ -428,7 +427,8 @@ class UpdateInstaller(QThread):
                 temp_path.unlink(missing_ok=True)
 
     def _install_deno(self) -> None:
-        destination_dir = self.settings.BASE_DIR
+        final = self._target_path()
+        destination_dir = final.parent
         self._log("Downloading Deno\u2026")
         handle, temp_name = tempfile.mkstemp(suffix=".zip", dir=str(destination_dir))
         os.close(handle)
@@ -458,8 +458,20 @@ class UpdateInstaller(QThread):
                 if member is None:
                     self.failed.emit(self.key, "No deno binary inside the archive.")
                     return
-                with bundle.open(member) as source, open(final, "wb") as target:
-                    shutil.copyfileobj(source, target)
+                entry = bundle.getinfo(member)
+                if entry.file_size > 512 * 1024 * 1024:
+                    raise OSError("Deno archive exceeds the supported size limit")
+                fd, staged_name = tempfile.mkstemp(dir=destination_dir, prefix=".deno-")
+                staged = Path(staged_name)
+                try:
+                    with os.fdopen(fd, "wb") as target, bundle.open(member) as source:
+                        shutil.copyfileobj(source, target)
+                    self._make_executable(staged)
+                    if self._cancelled:
+                        raise OSError("Cancelled")
+                    os.replace(staged, final)
+                finally:
+                    staged.unlink(missing_ok=True)
 
             self._make_executable(final)
             self.settings.DENO_PATH = final
@@ -490,6 +502,9 @@ class UpdateInstaller(QThread):
                 [sys.executable, "-m", "pip", "install", "--upgrade", "spotdl"],
                 own_process_group=True,
             )
+            self._process = process
+            if self._cancelled:
+                proc.terminate_tree(process)
             assert process.stdout is not None
             for raw in process.stdout:
                 if self._cancelled:
@@ -500,6 +515,8 @@ class UpdateInstaller(QThread):
                 if line:
                     self._log(line)
             code = process.wait()
+            process.stdout.close()
+            self._process = None
         except (OSError, subprocess.SubprocessError) as exc:
             self.failed.emit(self.key, str(exc))
             return
@@ -670,7 +687,8 @@ class UpdateManager(QDialog):
 
     def _log(self, key: str, text: str, colour: str = Palette.TEXT_MUTED) -> None:
         label = self._rows.get(key, {}).get("tool")
-        prefix = f"[{label.label}] " if label else ""
+        prefix = html.escape(f"[{label.label}] " if label else "")
+        text = html.escape(text)
         self.log_view.append(
             f'<span style="color:{Palette.TEXT_FAINT}">{prefix}</span>'
             f'<span style="color:{colour}">{text}</span>'
@@ -690,6 +708,8 @@ class UpdateManager(QDialog):
     # ------------------------------------------------------------------
 
     def _check_all(self) -> None:
+        if (self._checker is not None and self._checker.isRunning()) or any(i.isRunning() for i in self._installers.values()):
+            return
         for key, row in self._rows.items():
             self._set_badge(key, "checking")
             row["button"].setEnabled(False)
@@ -811,19 +831,27 @@ class UpdateManager(QDialog):
 
     # ------------------------------------------------------------------
 
-    def _stop_threads(self) -> None:
-        if self._checker is not None and self._checker.isRunning():
+    def _stop_threads(self) -> bool:
+        threads = list(self._installers.values())
+        if self._checker is not None:
             self._checker.requestInterruption()
-            self._checker.wait(2000)
+            threads.append(self._checker)
         for installer in self._installers.values():
             if installer.isRunning():
                 installer.cancel()
-                installer.wait(3000)
+        return not any(t.isRunning() for t in threads)
 
     def closeEvent(self, event) -> None:
-        self._stop_threads()
+        if not self._stop_threads():
+            event.ignore()
+            self.setEnabled(False)
+            QTimer.singleShot(200, self.close)
+            return
         super().closeEvent(event)
 
     def reject(self) -> None:
-        self._stop_threads()
+        if not self._stop_threads():
+            self.setEnabled(False)
+            QTimer.singleShot(200, self.reject)
+            return
         super().reject()

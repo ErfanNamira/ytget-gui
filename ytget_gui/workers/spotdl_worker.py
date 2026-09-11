@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 def _find_spotdl(settings: AppSettings) -> Optional[Path]:
     """Locate the spotdl binary: beside the app, in _internal, then on PATH."""
     name = executable_name("spotdl")
-    for candidate in (settings.BASE_DIR / name, settings.INTERNAL_DIR / name):
+    for candidate in (settings.DATA_DIR / "bin" / name, settings.BASE_DIR / name, settings.INTERNAL_DIR / name):
         if candidate.is_file():
             return candidate
     found = which("spotdl")
@@ -78,6 +78,7 @@ class SpotDLWorker(BaseDownloadWorker):
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._line_tail = ""
         self._track_errors: List[str] = []
+        self._error_tail = ""
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -93,7 +94,7 @@ class SpotDLWorker(BaseDownloadWorker):
                 "spotdl not found. Place spotdl(.exe) next to the application "
                 "or install it with: pip install spotdl"
             )
-            self.emit_finished(CANCELLED_EXIT)
+            self.emit_finished(2)
             return
 
         cmd = self._build_command(binary)
@@ -102,18 +103,18 @@ class SpotDLWorker(BaseDownloadWorker):
         self.add_log(
             f"\nStarting SpotDL download: {self.title}", AppStyles.SUCCESS_COLOR
         )
-        log.debug("spotdl command: %s", " ".join(cmd))
+        log.debug("Starting spotdl subprocess (arguments omitted for privacy)")
         self.flush_now()
 
         try:
             process = proc.spawn(cmd, env=env)
         except FileNotFoundError:
             self.error.emit(f"spotdl not found at {binary}")
-            self.emit_finished(CANCELLED_EXIT)
+            self.emit_finished(2)
             return
         except OSError as exc:
             self.error.emit(f"Failed to start spotdl: {exc}")
-            self.emit_finished(CANCELLED_EXIT)
+            self.emit_finished(2)
             return
 
         with self._proc_lock:
@@ -233,16 +234,19 @@ class SpotDLWorker(BaseDownloadWorker):
                 code = process.wait()
             except OSError:
                 code = CANCELLED_EXIT
-            self._process_exited.emit(code if code is not None else CANCELLED_EXIT)
+            stream.close()
+            self._process_exited.emit(code if code is not None else 2)
 
     def _on_output(self, data: bytes) -> None:
         text = self._decoder.decode(data)
         if not text:
             return
 
-        for match in _TRACK_ERROR_RE.finditer(text):
+        error_text = self._error_tail + text
+        self._error_tail = error_text[-2000:]
+        for match in _TRACK_ERROR_RE.finditer(error_text):
             snippet = match.group(0).strip()
-            if snippet not in self._track_errors:
+            if snippet not in self._track_errors and len(self._track_errors) < 100:
                 self._track_errors.append(snippet)
 
         self._update_progress(text)
@@ -301,7 +305,8 @@ class SpotDLWorker(BaseDownloadWorker):
 
         if code != 0:
             self.add_log(f"\u274c spotdl exited with code {code}.", AppStyles.ERROR_COLOR)
-            self.emit_finished(code)
+            self.error.emit(f"spotdl exited with code {code}. See the log for details.")
+            self.emit_finished(code if code > 0 else 2)
             return
 
         if self._track_errors:
@@ -327,4 +332,8 @@ class SpotDLWorker(BaseDownloadWorker):
         if folder.is_dir():
             self.emit_output(str(folder), 0)
 
-        self.emit_finished(0)
+        if self._track_errors:
+            self.error.emit("Some tracks failed. Review the log and retry.")
+            self.emit_finished(1)
+        else:
+            self.emit_finished(0)

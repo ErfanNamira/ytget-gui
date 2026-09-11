@@ -118,6 +118,11 @@ def _restrict_permissions(path: Path) -> None:
         log.debug("Could not chmod %s: %s", path, exc)
 
 
+def _domain_matches(domain: str, wanted: str) -> bool:
+    domain, wanted = domain.lower().lstrip("."), wanted.lower().lstrip(".")
+    return domain == wanted or domain.endswith("." + wanted)
+
+
 def _prune(
     cookies: Sequence[Any],
     whitelist: frozenset[str],
@@ -130,7 +135,7 @@ def _prune(
             return False
         if name in whitelist:
             return True
-        return any(d in domain for d in YOUTUBE_DOMAINS)
+        return any(_domain_matches(domain, d) for d in YOUTUBE_DOMAINS)
 
     pruned = [c for c in cookies if keep(c)]
     # Whitelisted names first so a count cap never evicts a critical cookie.
@@ -183,7 +188,7 @@ def export_for_browser(
 
     wanted = tuple(domains) if domains else DEFAULT_DOMAINS
     filtered = [
-        c for c in jar if any(d in (getattr(c, "domain", "") or "") for d in wanted)
+        c for c in jar if any(_domain_matches(getattr(c, "domain", "") or "", d) for d in wanted)
     ]
     if not filtered:
         return False, f"No YouTube-related cookies found in {browser}"
@@ -237,7 +242,7 @@ def refresh_before_download(settings) -> Tuple[bool, str]:
 
     target = getattr(settings, "COOKIES_PATH", None)
     if not target or str(target) in ("", "."):
-        base = getattr(settings, "BASE_DIR", None) or Path(".")
+        base = getattr(settings, "DATA_DIR", None) or Path(".")
         target = Path(base) / "cookies.txt"
 
     return export_for_browser(browser, Path(target))
@@ -249,7 +254,7 @@ def record_refresh(settings) -> None:
         settings.COOKIES_LAST_IMPORTED = datetime.now(timezone.utc).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
         )
-        if hasattr(settings, "save_config"):
+        if hasattr(settings, "save_config") and not getattr(settings, "_is_worker_snapshot", False):
             settings.save_config()
     except Exception as exc:  # noqa: BLE001 - bookkeeping only
         log.debug("Could not record cookie refresh: %s", exc)

@@ -851,7 +851,7 @@ class PreferencesDialog(QDialog):
             "EXTRA_YTDLP_ARGS",
             ui.line_edit(
                 "--sleep-interval 15 --max-sleep-interval 20",
-                "Appended to every yt-dlp command, after all other flags",
+                "Download-only arguments. Execution, hidden targets and reporting-mode overrides are not allowed.",
                 "Extra yt-dlp arguments",
             ),
         )
@@ -1118,11 +1118,11 @@ class PreferencesDialog(QDialog):
             bool(langs_text) and is_valid_sub_langs(langs_text)
         )
         ui.set_error(
-            self.sub_langs, not langs_ok, "Two or three letter codes, e.g. en, es, fra"
+            self.sub_langs, not langs_ok, "Language tags or patterns, e.g. en.*, pt-BR, -live_chat"
         )
 
         items_ok = is_valid_playlist_items(self.playlist_items.text())
-        ui.set_error(self.playlist_items, not items_ok, "Use indices and ranges: 1,5-10,15")
+        ui.set_error(self.playlist_items, not items_ok, "Use indices, ranges or slices: 1,5-10,15 or 1:10:2")
 
         date_ok = is_valid_dateafter(self.date_after.text())
         ui.set_error(self.date_after, not date_ok, "Use YYYYMMDD, e.g. 20240101")
@@ -1139,8 +1139,21 @@ class PreferencesDialog(QDialog):
             name_ok, name_error = True, ""
         ui.set_error(self.custom_filename, not name_ok, name_error)
 
+        from ytget_gui.utils.cli_args import parse_ytdlp_args, split_arguments
+        extra_ok, extra_error = True, ""
+        try:
+            parse_ytdlp_args(self.extra_args.text())
+        except ValueError as exc:
+            extra_ok, extra_error = False, str(exc)
+        ui.set_error(self.extra_args, not extra_ok, extra_error)
+        ffmpeg_ok, ffmpeg_error = True, ""
+        try:
+            split_arguments(self.custom_ffmpeg.text())
+        except ValueError as exc:
+            ffmpeg_ok, ffmpeg_error = False, str(exc)
+        ui.set_error(self.custom_ffmpeg, not ffmpeg_ok, ffmpeg_error)
         valid = all(
-            (proxy_ok, ca_ok, rate_ok, langs_ok, items_ok, date_ok, folder_ok, name_ok)
+            (proxy_ok, ca_ok, rate_ok, langs_ok, items_ok, date_ok, folder_ok, name_ok, extra_ok, ffmpeg_ok)
         )
         save = self.buttons.button(QDialogButtonBox.Save)
         if save is not None:

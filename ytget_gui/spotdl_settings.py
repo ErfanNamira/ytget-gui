@@ -144,7 +144,7 @@ def _coerce(value: Any, current: Any) -> Any:
     if isinstance(current, int):
         try:
             return int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return current
 
     if isinstance(current, list):

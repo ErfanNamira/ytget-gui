@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-import shlex
+from ytget_gui.utils.cli_args import split_arguments, parse_ytdlp_args
 import subprocess
 import sys
 import threading
@@ -108,7 +108,7 @@ def maybe_refresh_cookies(
 
     exported = getattr(settings, "COOKIES_PATH", None)
     if not exported or str(exported) in ("", "."):
-        exported = Path(getattr(settings, "BASE_DIR", Path("."))) / "cookies.txt"
+        exported = Path(getattr(settings, "DATA_DIR", Path("."))) / "cookies.txt"
 
     cookie_manager.record_refresh(settings)
     return Path(exported), None
@@ -177,9 +177,10 @@ def build_command(
 ) -> List[str]:
     cmd: List[str] = [
         str(yt_dlp_path),
+        "--ignore-config",
         "--ffmpeg-location", str(ffmpeg_dir),
         "--skip-download",
-        "--print-json",
+        "--dump-single-json",
         "--ignore-errors",
         "--no-warnings",
         "--no-progress",
@@ -212,26 +213,19 @@ def build_command(
     if player_client and player_client != "auto" and is_youtube_url(url):
         cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
 
-    # User args last so they can override anything above.
-    cmd.extend(parse_extra_args(getattr(settings, "EXTRA_YTDLP_ARGS", "")))
+    # Download-only passthrough flags must never execute while merely adding a URL.
+    # Network/auth/client options above are shared explicitly.
 
     # URL last: yt-dlp treats a bare token after the URL as another URL, and
     # the previous build appended flags after it, so extra args were parsed as
     # additional download targets.
-    cmd.append(url)
+    cmd.extend(["--", url])
     return cmd
 
 
 def parse_extra_args(raw: str) -> List[str]:
-    """shlex-split user-supplied CLI args, tolerating bad quoting."""
-    text = (raw or "").strip()
-    if not text:
-        return []
-    try:
-        return shlex.split(text, posix=(sys.platform != "win32"))
-    except ValueError as exc:
-        log.warning("Ignoring malformed extra yt-dlp args (%s)", exc)
-        return []
+    """Compatibility wrapper for ffmpeg argument lists."""
+    return split_arguments(raw)
 
 
 def build_env(settings) -> Dict[str, str]:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import copy
 from typing import List, Optional
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
@@ -74,6 +75,25 @@ class QueueController(QObject):
     @property
     def can_start(self) -> bool:
         return bool(self.model) and (self._paused or not self._running)
+
+    @property
+    def thread(self):
+        """The QThread currently carrying a worker, if any.
+
+        The window needs this during shutdown so it can join live threads
+        within its budget. Exposing it read-only keeps that coordination out
+        of private state without letting callers swap the thread.
+        """
+        return self._thread
+
+    @property
+    def is_busy(self) -> bool:
+        """True while an item is running or its thread is still unwinding.
+
+        Exposed so the view can gate destructive actions (importing a queue,
+        for instance) without reaching into private thread state.
+        """
+        return self._running or self._thread is not None
 
     # ------------------------------------------------------------------
     # Commands
@@ -153,7 +173,8 @@ class QueueController(QObject):
                 pass
         thread = self._thread
         if thread is not None and thread.isRunning():
-            thread.quit()
+            # The worker's finished signal quits the thread. Quitting early
+            # destroys it while the subprocess reader is still emitting signals.
             thread.wait(timeout_ms)
 
     # ------------------------------------------------------------------
@@ -161,7 +182,7 @@ class QueueController(QObject):
     # ------------------------------------------------------------------
 
     def _pump(self) -> None:
-        if self._paused or self._running:
+        if self._paused or self._running or self._thread is not None:
             self._emit_progress()
             return
 
@@ -187,7 +208,12 @@ class QueueController(QObject):
         self.running_changed.emit(True)
         self.model.save()
 
-        worker = self._build_worker(item)
+        try:
+            worker = self._build_worker(item)
+        except Exception as exc:
+            self._on_worker_error(f"Could not prepare download: {exc}")
+            self._on_worker_finished(2)
+            return
         thread = QThread()
         thread.setObjectName("download-thread")
         worker.moveToThread(thread)
@@ -199,7 +225,7 @@ class QueueController(QObject):
         worker.stage.connect(self._on_worker_stage, Qt.QueuedConnection)
         worker.output.connect(self._on_worker_output, Qt.QueuedConnection)
         worker.finished.connect(self._on_worker_finished, Qt.QueuedConnection)
-        worker.finished.connect(thread.quit, Qt.QueuedConnection)
+        worker.finished.connect(thread.quit, Qt.DirectConnection)
 
         # deleteLater on the thread's own finished signal: deleting the worker
         # from any other context can destroy a QObject that still has queued
@@ -215,15 +241,17 @@ class QueueController(QObject):
     def _build_worker(self, item: QueueItem) -> BaseDownloadWorker:
         payload = {
             "url": item.url,
-            "title": item.display_title,
+            "title": item.title,
             "format_code": item.format_code,
             "video_id": item.video_id,
             "is_playlist": item.is_playlist,
         }
+        settings = copy.deepcopy(self.settings)
+        settings._is_worker_snapshot = True
         use_spotdl = is_spotify_url(item.url) or formats.is_spotify_code(item.format_code)
         if use_spotdl:
-            return SpotDLWorker(payload, self.settings, self.settings.SPOTDL)
-        return DownloadWorker(payload, self.settings)
+            return SpotDLWorker(payload, settings, settings.SPOTDL)
+        return DownloadWorker(payload, settings)
 
     # ------------------------------------------------------------------
     # Worker callbacks
@@ -293,6 +321,7 @@ class QueueController(QObject):
 
     def _on_thread_finished(self) -> None:
         self._thread = None
+        QTimer.singleShot(0, self._pump)
 
     def _apply_outcome(self, item: QueueItem, code: int) -> None:
         cancelled = code == CANCELLED_EXIT or self._skip_requested or self._stop_requested
@@ -362,14 +391,18 @@ class QueueController(QObject):
     # Queue edits
     # ------------------------------------------------------------------
 
+    def add_items(self, items) -> int:
+        added = sum(1 for item in items if self.model.add(item))
+        if added:
+            self._finish_announced = False
+            self.queue_changed.emit()
+            self.model.save()
+            self._emit_progress()
+            QTimer.singleShot(0, self._pump)
+        return added
+
     def add_item(self, item: QueueItem) -> bool:
-        if not self.model.add(item):
-            return False
-        self._finish_announced = False
-        self.queue_changed.emit()
-        self.model.save()
-        self._emit_progress()
-        return True
+        return bool(self.add_items([item]))
 
     def remove_items(self, urls: List[str]) -> int:
         removed = 0

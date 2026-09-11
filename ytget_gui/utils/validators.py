@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, urlsplit
 
 _ANY_HTTP_URL_RE = re.compile(r"^https?://[^\s]+$", re.IGNORECASE)
 
@@ -42,7 +42,17 @@ def is_supported_url(text: str) -> bool:
     app deliberately does not gatekeep on host."""
     if not text:
         return False
-    return bool(_ANY_HTTP_URL_RE.match(text.strip()))
+    text = text.strip()
+    if any(ch.isspace() or ord(ch) < 32 for ch in text):
+        return False
+    try:
+        parsed = urlsplit(text)
+        _ = parsed.port
+        return (parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
+                and parsed.username is None and parsed.password is None
+                and not any(c in parsed.netloc for c in "\\{}<>"))
+    except ValueError:
+        return False
 
 
 def is_youtube_url(text: str) -> bool:
@@ -70,16 +80,16 @@ def is_spotify_url(text: str) -> bool:
 
 
 def is_short_video_url(text: str) -> bool:
-    return "/shorts/" in (text or "")
+    return is_youtube_url(text) and urlparse(text).path.startswith("/shorts/")
 
 
 def is_playlist_url(text: str) -> bool:
-    return "list=" in (text or "")
+    return bool(parse_qs(urlparse(text or "").query).get("list"))
 
 
 def is_valid_timecode(text: str) -> bool:
     t = (text or "").strip()
-    return t == "" or bool(_TIME_RE.match(t))
+    return t == "" or timecode_to_seconds(t) is not None
 
 
 def timecode_to_seconds(text: str) -> int | None:
@@ -106,23 +116,28 @@ def is_valid_playlist_items(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return True
-    if not _PLAYLIST_ITEMS_RE.match(t):
-        return False
-    for part in (p.strip() for p in t.split(",")):
-        if "-" in part:
-            a, b = (x.strip() for x in part.split("-", 1))
-            if not (a.isdigit() and b.isdigit()):
+    for part in t.split(","):
+        part = part.strip()
+        if re.fullmatch(r"[1-9]\d*", part):
+            continue
+        if re.fullmatch(r"[1-9]\d*\s*-\s*[1-9]\d*", part):
+            a, b = map(int, part.split("-"))
+            if b < a:
                 return False
-            if int(a) <= 0 or int(b) <= 0 or int(b) < int(a):
-                return False
-        elif not part.isdigit() or int(part) <= 0:
+            continue
+        if not re.fullmatch(r"-?\d*:-?\d*(?::-?\d*)?", part):
+            return False
+        bits = part.split(":")
+        if any(v in ("-", "0") for v in bits[:2]):
+            return False
+        if len(bits) == 3 and bits[2] in ("-", "0"):
             return False
     return True
 
 
 def is_valid_rate_limit(text: str) -> bool:
     t = (text or "").strip()
-    return t == "" or bool(_RATE_RE.match(t))
+    return not t or (bool(re.fullmatch(r"\d+(?:\.\d+)?[KkMmGgTtPpEeZzYy]?", t)) and float(re.sub(r"[A-Za-z]$", "", t)) > 0)
 
 
 def is_valid_dateafter(text: str) -> bool:
@@ -142,11 +157,28 @@ def is_valid_dateafter(text: str) -> bool:
 
 def is_valid_sub_langs(text: str) -> bool:
     t = (text or "").strip()
-    return t == "" or bool(_SUB_LANGS_RE.match(t))
+    # yt-dlp accepts language tags and regular expressions, including exclusions.
+    if not t:
+        return True
+    try:
+        for token in t.split(","):
+            token = token.strip().removeprefix("-")
+            if not token or any(ord(c) < 32 for c in token):
+                return False
+            re.compile(token)
+    except re.error:
+        return False
+    return True
 
 
 def is_valid_proxy(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return True
-    return t.startswith(("http://", "https://", "socks4://", "socks5://", "socks5h://"))
+    try:
+        parsed = urlsplit(t)
+        _ = parsed.port
+        return (parsed.scheme in ("http", "https", "socks4", "socks5", "socks5h")
+                and bool(parsed.hostname) and not any(c.isspace() for c in t))
+    except ValueError:
+        return False

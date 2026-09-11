@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import tempfile
 import time
@@ -25,6 +26,8 @@ class Status(str, Enum):
 
     @classmethod
     def parse(cls, value: Any) -> "Status":
+        if isinstance(value, cls):
+            return value
         try:
             return cls(str(value))
         except ValueError:
@@ -73,7 +76,7 @@ class QueueItem:
 
     @property
     def is_runnable(self) -> bool:
-        return not self.is_terminal
+        return self.status is Status.PENDING
 
     @property
     def has_output(self) -> bool:
@@ -85,7 +88,7 @@ class QueueItem:
         if not self.output_path:
             return False
         try:
-            return Path(self.output_path).is_file()
+            return Path(self.output_path).exists()
         except OSError:
             return False
 
@@ -123,7 +126,8 @@ class QueueItem:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> Optional["QueueItem"]:
         url = str(data.get("url") or "").strip()
-        if not url:
+        from ytget_gui.utils.validators import is_supported_url
+        if not is_supported_url(url):
             return None
 
         status = Status.parse(data.get("status", Status.PENDING))
@@ -135,28 +139,35 @@ class QueueItem:
         def as_int(value: Any, default: int = 0) -> int:
             try:
                 return int(value)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return default
 
-        duration = data.get("duration")
+        def as_float(value, default=None):
+            try:
+                n = float(value)
+                return n if math.isfinite(n) and n >= 0 else default
+            except (TypeError, ValueError, OverflowError):
+                return default
+        duration = as_float(data.get("duration"))
+        playlist = data.get("is_playlist", False)
         return cls(
             url=url,
             title=str(data.get("title") or ""),
             format_code=str(data.get("format_code") or ""),
             format_label=str(data.get("format_label") or ""),
             status=status,
-            progress=0 if status is Status.PENDING else as_int(data.get("progress")),
+            progress=0 if status is Status.PENDING else max(0, min(100, as_int(data.get("progress")))),
             video_id=str(data.get("video_id") or ""),
             thumbnail_url=str(data.get("thumbnail_url") or ""),
             thumb_path=str(data.get("thumb_path") or ""),
-            is_playlist=bool(data.get("is_playlist", False)),
-            duration=float(duration) if isinstance(duration, (int, float)) else None,
+            is_playlist=playlist is True or str(playlist).lower() in ("true", "1"),
+            duration=duration,
             uploader=str(data.get("uploader") or ""),
-            queue_attempts=as_int(data.get("queue_attempts")),
+            queue_attempts=max(0, as_int(data.get("queue_attempts"))),
             last_error=str(data.get("last_error") or ""),
-            added_at=float(data.get("added_at") or time.time()),
+            added_at=as_float(data.get("added_at"), time.time()),
             output_path=str(data.get("output_path") or ""),
-            output_count=as_int(data.get("output_count")),
+            output_count=max(0, as_int(data.get("output_count"))),
         )
 
 
@@ -197,10 +208,13 @@ class QueueModel:
         return url in self._index
 
     def index_of(self, item: QueueItem) -> int:
-        try:
-            return self._items.index(item)
-        except ValueError:
-            return -1
+        # Identity, not equality. QueueItem is a mutable dataclass, so two
+        # distinct rows that happen to hold the same field values compare
+        # equal and list.index() would resolve to the wrong row.
+        for position, existing in enumerate(self._items):
+            if existing is item:
+                return position
+        return -1
 
     # -- mutation ------------------------------------------------------
 
@@ -215,10 +229,9 @@ class QueueModel:
         item = self._index.pop(url, None)
         if item is None:
             return None
-        try:
-            self._items.remove(item)
-        except ValueError:
-            pass
+        position = self.index_of(item)
+        if position >= 0:
+            del self._items[position]
         return item
 
     def clear(self) -> None:
@@ -231,9 +244,10 @@ class QueueModel:
             self.add(item)
 
     def move_to_end(self, item: QueueItem) -> None:
-        if self.index_of(item) < 0:
+        position = self.index_of(item)
+        if position < 0:
             return
-        self._items.remove(item)
+        del self._items[position]
         self._items.append(item)
 
     def move_many(self, urls: Sequence[str], *, to_top: bool, after: int = 0) -> None:
@@ -242,7 +256,7 @@ class QueueModel:
         `after` reserves leading slots (used to keep the in-progress item at the
         head when the user sends a selection to the top).
         """
-        wanted = [self._index[u] for u in urls if u in self._index]
+        wanted = [self._index[u] for u in dict.fromkeys(urls) if u in self._index]
         if not wanted:
             return
         keys = {id(i) for i in wanted}
@@ -371,7 +385,7 @@ class QueueModel:
 
         try:
             data = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             return 0, f"Could not read {target.name}: {exc}"
 
         if not isinstance(data, list):
@@ -386,4 +400,4 @@ class QueueModel:
                 items.append(item)
 
         self.replace_all(items)
-        return len(items), None
+        return len(self._items), None

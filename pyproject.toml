@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytget-gui"
-version = "2.7.9.0"
+version = "2.8.0.0"
 description = "A GUI YouTube downloader powered by yt-dlp"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -28,6 +28,7 @@ dependencies = [
     "mutagen",
     "Pillow",
     "packaging"
+	"spotdl"
 ]
 
 [project.urls]
@@ -47,4 +48,4 @@ include = ["ytget_gui*"]
 exclude = ["Images*"]
 
 [tool.setuptools.package-data]
-ytget_gui = ["icon.ico", "dialogs/*", "utils/*", "widgets/*", "workers/*"]
+ytget_gui = ["icon.ico", "dialogs/*", "utils/*", "widgets/*", "workers/*", "queue/*"]

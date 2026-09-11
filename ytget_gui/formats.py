@@ -38,8 +38,14 @@ def ensure_best_fallback(fmt: str) -> str:
     parts = [p.strip() for p in fmt.split("/") if p.strip()]
     if not parts:
         return "best"
-    if parts[-1] != "best":
-        parts.append("best")
+    import re
+    caps = re.findall(r"\[height<=(\d+)\]", fmt)
+    widths = re.findall(r"\[width<=(\d+)\]", fmt)
+    cap = f"[height<={min(map(int, caps))}]" if caps else ""
+    cap += f"[width<={min(map(int, widths))}]" if widths else ""
+    fallback = "best" + cap
+    if parts[-1] != fallback:
+        parts.append(fallback)
     return dedupe_chain("/".join(parts))
 
 
@@ -52,8 +58,7 @@ def video_chain(height: int, width: int | None = None, audio: str = "bestaudio")
       2. VP9 under the cap, DASH/HTTP only
       3. Any video under the cap, DASH/HTTP only
       4. Any video under the cap, HLS now permitted
-      5. bestvideo+audio with no cap (odd/missing height metadata)
-      6. best
+      5. Pre-muxed video within the same cap (never silently exceeds it).
 
     Tiers 1-3 exclude HLS so a same-or-lower DASH stream always wins over an
     HLS one. Codec filters use `^=` / `~=` because yt-dlp reports
@@ -71,8 +76,7 @@ def video_chain(height: int, width: int | None = None, audio: str = "bestaudio")
                 f"bestvideo{hf}{wf}[vcodec~='^vp0?9']{_NO_HLS}+{audio}",
                 f"bestvideo{hf}{wf}{_NO_HLS}+{audio}",
                 f"bestvideo{hf}{wf}+{audio}",
-                f"bestvideo+{audio}",
-                "best",
+                f"best{hf}{wf}",
             )
         )
     )
@@ -90,7 +94,7 @@ def hls_chain(height: int | None = None) -> str:
         return (
             f"bestvideo[protocol^=m3u8][height<={height}]+bestaudio/"
             f"bestvideo[height<={height}]+bestaudio/"
-            f"best[protocol^=m3u8][height<={height}]/best[protocol^=m3u8]/best"
+            f"best[protocol^=m3u8][height<={height}]/best[height<={height}]"
         )
     return (
         "bestvideo[protocol^=m3u8]+bestaudio/"

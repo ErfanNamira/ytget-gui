@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
+import threading
 from typing import Any, Dict, Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -50,6 +51,9 @@ class BaseDownloadWorker(QObject):
         super().__init__(parent)
         self.item = item
         self._cancelled = False
+        self._cancel_event = threading.Event()
+        self._cancel_lock = threading.Lock()
+        self._finish_lock = threading.Lock()
         self._finished_emitted = False
 
         self._buffer = LogBuffer()
@@ -90,19 +94,21 @@ class BaseDownloadWorker(QObject):
             log.exception("Worker failed to start")
             self.error.emit(f"Error preparing download: {exc}")
             self.flush_now()
-            self.emit_finished(CANCELLED_EXIT)
+            self.emit_finished(CANCELLED_EXIT if self.cancelled else 2)
 
     def _start(self) -> None:
         raise NotImplementedError
 
     def cancel(self) -> None:
         """Request cancellation. Safe to call from any thread."""
-        if self._cancelled:
-            return
-        self._cancelled = True
-        self.add_log("\u23f9\ufe0f Cancelling\u2026", AppStyles.WARNING_COLOR)
-        self.flush_now()
-        self._do_cancel()
+        with self._cancel_lock:
+            if self._cancelled:
+                return
+            self._cancelled = True
+            self._cancel_event.set()
+        # No Qt timer/log operations from the calling GUI thread.
+        threading.Thread(target=self._do_cancel, daemon=True,
+                         name="download-cancel").start()
 
     def _do_cancel(self) -> None:
         raise NotImplementedError
@@ -114,9 +120,10 @@ class BaseDownloadWorker(QObject):
         racing a cancel, or a spawn failure after a partial start). Emitting
         twice made the queue controller advance two items for one job.
         """
-        if self._finished_emitted:
-            return
-        self._finished_emitted = True
+        with self._finish_lock:
+            if self._finished_emitted:
+                return
+            self._finished_emitted = True
         self._stop_log_timer()
         self.flush_now()
         self.finished.emit(code)
@@ -143,7 +150,10 @@ class BaseDownloadWorker(QObject):
 
     def add_log(self, text: str, colour: str = AppStyles.TEXT_COLOR) -> None:
         self._buffer.add(text, colour)
-        if len(self._buffer) > 800:
+        # Threshold comes from the buffer itself. It was hard-coded to 800
+        # while a single drain can only ever emit 200 entries, so a noisy
+        # download built a backlog the flush timer could not clear.
+        if len(self._buffer) >= self._buffer.flush_threshold:
             self.flush()
 
     def flush(self) -> None:
@@ -157,7 +167,11 @@ class BaseDownloadWorker(QObject):
         worker's thread is torn down.
         """
         entries = self._buffer.drain()
-        while self._buffer:
+        # Bounded. A producer thread still appending during shutdown must not
+        # be able to hold the finishing worker in this loop indefinitely.
+        for _ in range(64):
+            if not self._buffer:
+                break
             entries.extend(self._buffer.drain())
         for text, colour in coalesce(entries):
             self.log.emit(text, colour)
@@ -191,4 +205,4 @@ class BaseDownloadWorker(QObject):
 
     def emit_output(self, path: str, count: int = 1) -> None:
         if path:
-            self.output.emit(path, max(1, int(count)))
+            self.output.emit(path, max(0, int(count)))

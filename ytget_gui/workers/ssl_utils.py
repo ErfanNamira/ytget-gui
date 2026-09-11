@@ -52,10 +52,11 @@ def resolve_ssl_config(settings) -> Tuple[RequestsVerify, List[str], Dict[str, s
         verify = True
 
     ytdlp_args: List[str] = []
-    if ca_path or ignore_ssl:
-        # yt-dlp has no "extra CA" switch, so a custom CA still requires
-        # relaxing its own check; the env vars below restore real trust for
-        # everything that honours them.
+    if ca_path:
+        # The no-certifi compatibility mode uses OpenSSL's trust store, including
+        # SSL_CERT_FILE. Never disable hostname/certificate verification here.
+        ytdlp_args.extend(["--compat-options", "no-certifi"])
+    elif ignore_ssl:
         ytdlp_args.append("--no-check-certificates")
 
     env: Dict[str, str] = {}
