@@ -1,4 +1,92 @@
 ### v 2.8.0
+
+System tray, clipboard watcher, scheduler, run-at-login, and plain-text link
+import/export.
+
+#### System tray
+
+- Added `ytget_gui/tray.py`: a tray icon built from the app `icon.ico`, with a
+  graceful no-op fallback when the desktop session has no tray host.
+- Tray menu: live status line, show/hide window, start, pause, skip, stop,
+  "When the queue finishes" submenu, clipboard watcher toggle, queue clipboard
+  now, clear finished, open download folder, Preferences, and Exit.
+- Added a dynamic tooltip and optional balloon notifications for queue,
+  watcher, and scheduler events.
+- Added minimise-to-tray and close-to-tray options. Only the tray Exit action
+  (or a real quit) bypasses close-to-tray.
+- Left/double/middle-clicking the tray icon toggles the window.
+- Added a Tray page in Preferences for all of the above.
+- The post-queue power action is now persisted in the config instead of
+  resetting to Keep on every launch.
+
+#### Clipboard watcher
+
+- Added `ytget_gui/watcher.py`: captures supported links from the clipboard and
+  queues them automatically.
+- Added `ytget_gui/sites.py` with 40 popular yt-dlp-supported sites and
+  host-suffix matching, so a URL that merely mentions `youtube.com` in a query
+  string is never misclassified.
+- Added a Watcher page in Preferences: enable/disable, poll interval,
+  auto-start the queue, notifications, per-category default formats (YouTube,
+  YouTube Music, Spotify, everything else), skip playlists, ignore duplicates,
+  and a checkable site allowlist with select all/none.
+- Added Tools menu entries: "Clipboard Watcher" (Ctrl+Shift+V) and "Queue
+  Clipboard Now" for a one-shot capture.
+- `enqueue_urls` accepts an optional format label, so watcher additions can use
+  a per-site preset while manual additions keep using the main window format
+  box.
+- Captures are de-duplicated against queue history and capped at 25 links per
+  clipboard change. Both `dataChanged` and a poll timer are used, because the
+  signal alone is unreliable on Windows and X11.
+
+#### Scheduler and run at login
+
+- Added `ytget_gui/scheduler.py` and a Scheduler page in Preferences.
+- Start the queue and stop the queue at set times, each independently
+  toggleable.
+- Runs daily, or only on chosen weekdays.
+- Power manager: Shutdown, Sleep, Restart, or Close at a set time. This runs
+  even when the queue has not finished; downloads are stopped first and any
+  pending post-queue action is cleared so two power commands cannot race.
+- Events fire at most once per calendar day, with a five-minute catch-up window
+  so a briefly suspended machine still triggers. Events already in the past are
+  seeded as fired at launch, so enabling the scheduler at noon does not
+  immediately run that morning's stop.
+- Added `ytget_gui/autostart.py` and a Run at login card: a startup entry via
+  the Windows `HKCU` Run key, a macOS LaunchAgent, or a Linux XDG autostart
+  `.desktop` file, with start-hidden-in-tray and a configurable delay
+  (0-600 s, default 30 s). The active path is shown in Preferences, and
+  failures are logged instead of blocking a Preferences save.
+- Added `--minimized` and `--delay SECONDS` command line flags. The delay is
+  applied before Qt starts, and `--minimized` hides to the tray, falling back
+  to a minimised window when no tray host exists.
+
+#### Link import and export
+
+- Added `ytget_gui/dialogs/link_io.py`.
+- **File > Import Links from Text File…** (Ctrl+I): one link per line, with a
+  review dialog offering a per-link format, one format for all links via
+  "Apply to all", per-line exclusion, select all/none, and a live selected
+  count.
+- Links already in the queue are listed but unticked and marked; in-file
+  duplicates are collapsed; blank lines and `#`, `;`, `//` comments are
+  ignored; bare lines such as `www.example.com/watch` get `https://`
+  prepended; lines that are not links are counted and reported rather than
+  silently dropped.
+- The importer also reads `url | Format` and tab-separated form, so an exported
+  file round-trips with its formats.
+- **File > Export Links to Text File…** (Ctrl+E): export everything in the
+  queue, the current selection, or only waiting/finished/failed items, each
+  option showing its item count. Optionally writes the format after each link
+  and a `#` comment header with the date and count. `.txt` is appended when the
+  extension is omitted.
+
+#### Settings
+
+- Added tray, watcher, scheduler, and startup keys with validation, including
+  clamped delays and intervals, weekday lists, and `HH:MM` time coercion that
+  falls back to the default instead of raising on a hand-edited config.
+
 #### Architecture
 
 - Added `ytget_gui/_version.py` as the single source for app name, organization, repository, and version.

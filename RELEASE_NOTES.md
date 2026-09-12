@@ -2,170 +2,97 @@
 
 ## Release summary
 
-YTGet 2.8.0 is a major internal refactor focused on queue reliability, smoother downloads, safer persistence, clearer diagnostics, and a more consistent interface. The queue is now split into a dedicated model and controller, workers share common process and cancellation infrastructure, download progress is parsed from machine-readable yt-dlp output, and completed downloads can be opened directly from their queue cards.
-
-The release also centralizes version metadata, improves format selection and HLS behavior, hardens cookie and update handling, adds a command-line diagnostics mode, and restructures Preferences, About, Update Manager, themes, and reusable UI components.
+YTGet 2.8.0 is about leaving the app running and letting it work on its own.
+It adds a full system tray presence, an automatic clipboard watcher that queues
+links as you copy them, a scheduler that starts and stops the queue at set
+times with its own shutdown/sleep manager, an optional run-at-login entry that
+starts minimised to the tray, and plain-text link import/export for moving
+batches of links in and out of the queue.
 
 ---
 
 ## ⚡ Highlights
 
-### A more reliable queue
+### 🖱️ A real system tray presence
 
-- Rebuilt the download queue around a dedicated `QueueModel` and `QueueController`.
-- Queue changes are saved atomically, reducing the risk of losing the queue if the app or computer stops during a write.
-- Interrupted `Downloading` items return as `Pending` after restart instead of remaining stuck.
-- Legacy or unknown queue statuses are recovered as runnable items instead of being dropped.
-- Stopped and skipped items remain visible as `Cancelled` and are not immediately scheduled again.
-- Pressing **Start** explicitly re-arms previously cancelled items.
-- Failed downloads can be moved to the end of the queue and retried later; after the configured retry limit, they remain visible as errors.
-- The active download stays pinned while sorting or moving other items.
-- Queue order remains safe while filtering; hidden items are not accidentally discarded.
-- Duplicate URLs are rejected through a direct URL index.
-- Queue lookup is now constant-time, improving responsiveness on large queues.
-- Queue progress includes the current item’s fractional progress rather than only counting completed items.
-- Import/export is available from **File → Save Queue As…** and **Load Queue…**.
+- A tray icon built from the app icon, with a live status line in its tooltip.
+- Control the queue without the window: start, pause, skip, stop, clear
+  finished, open the download folder, open Preferences, and Exit.
+- Toggle the clipboard watcher and pick the "When the queue finishes" action
+  straight from the tray menu.
+- Optional minimise-to-tray and close-to-tray, so closing the window keeps
+  YTGet running in the background. Only the tray's Exit action really quits.
+- Left-, double-, or middle-click the icon to show or hide the window.
+- Optional balloon notifications for queue, watcher, and scheduler events.
+- The chosen post-queue action is remembered between launches instead of
+  resetting to Keep.
+- Everything above is configurable on the new **Preferences → Tray** page.
+- On desktops without a tray host, the icon is skipped and the window keeps
+  working exactly as before.
 
-### Better download progress and output tracking
+### 📋 A clipboard watcher that fills the queue for you
 
-- Replaced fragile scraping of yt-dlp’s human-readable progress bar with an explicit machine-readable progress template.
-- Added continuous playlist progress instead of restarting the visible percentage for every track.
-- Added weighted progress for downloads that use separate video and audio streams.
-- Progress-stage text is now separated from item status, preventing corrupted status chips and stuck progress bars.
-- Duplicate progress emissions are ignored.
-- Worker logs are buffered, bounded, coalesced, and delivered in batches to reduce UI stutter.
-- Subprocess output is read in larger chunks, reducing cross-thread event overhead.
-- Final output paths are captured across download, merge, conversion, move, and already-downloaded messages.
-- Queue cards record the final file or playlist folder and output count.
-- Completed items now offer **Play file**, **Show in folder**, and **Copy file path** actions.
-- Missing or moved output files are detected rather than treated as playable.
+- Copy a link anywhere and YTGet queues it automatically.
+- 40 popular yt-dlp-supported sites are recognised, including YouTube, YouTube
+  Music, Spotify, SoundCloud, Bandcamp, Vimeo, Twitch, TikTok, Instagram,
+  Facebook, X/Twitter, Reddit, Bilibili, Niconico, Odysee, Rumble, Kick, VK,
+  Crunchyroll, and Archive.org.
+- Matching is done on the real host, so a link that merely mentions
+  `youtube.com` inside a query string is not misread.
+- Per-category default formats: one preset for YouTube, one for YouTube Music,
+  one for Spotify, and one for everything else. Leave a category empty to keep
+  using the main window's format box.
+- Optional site allowlist, so only the sites you tick are captured.
+- Options for poll interval, auto-starting the queue on capture, skipping
+  playlists, ignoring duplicates, and notifications, on the new
+  **Preferences → Watcher** page.
+- Captures are de-duplicated and capped at 25 links per clipboard change, so a
+  copied wall of text cannot flood the queue.
+- **Tools → Clipboard Watcher** (Ctrl+Shift+V) toggles it; **Queue Clipboard
+  Now** does a single capture without leaving the watcher on.
 
-### Safer retries and cancellation
+### ⏰ A scheduler with a shutdown/sleep manager
 
-- Centralized worker lifecycle and cancellation behavior in a shared base worker.
-- Added shared subprocess helpers for spawning, decoding output, constructing tool environments, and terminating process trees.
-- Cancellation works while a retry delay is active.
-- Worker thread teardown is bounded during application shutdown.
-- The next worker starts only after the previous thread has unwound, preventing overlapping workers.
-- Queue completion is announced once, avoiding duplicate post-queue actions such as shutdown.
-- Retry detection covers temporary HTTP failures, rate limits, timeouts, connection failures, and unavailable formats.
-- In-process retries and later queue requeues are now separate policies.
+- Start the queue at a set time and stop it at a set time, each independently
+  toggleable, on the new **Preferences → Scheduler** page.
+- Runs daily, or only on the weekdays you tick.
+- A separate power manager runs **Shutdown**, **Sleep**, **Restart**, or
+  **Close** at its own time. This deliberately takes priority over an
+  unfinished queue: downloads are stopped first, then the action runs.
+- Any pending post-queue action is cleared when a scheduled power action fires,
+  so the machine never receives two conflicting power commands.
+- Each event fires at most once per day, with a short catch-up window so a
+  briefly suspended machine still triggers. Enabling the scheduler after an
+  event's time has passed will not immediately run it.
 
-### Improved format selection
+### 🚀 Run at login, minimised to the tray
 
-- Moved format-selector generation into a dedicated, testable `formats.py` module.
-- Added explicit YouTube and universal presets from 480p through 8K.
-- Universal presets include both height and width limits.
-- Video selection now prefers AV1, then VP9, then other DASH/HTTP formats before HLS and pre-muxed fallbacks.
-- Corrected codec matching for real yt-dlp codec identifiers such as `av01…` and `vp09…`.
-- Added guaranteed `best` fallbacks to reduce “Requested format is not available” failures.
-- Added safer audio fallback behavior.
-- HLS preference is opt-in and domain-aware.
-- YouTube domains are excluded from forced HLS preference so higher-quality DASH streams remain available.
-- Added centralized detection for audio, playlist-audio, and Spotify pseudo-formats.
+- Optionally launch YTGet when you sign in, straight into the tray.
+- Configurable delay before starting (default 30 seconds) so the network and
+  the tray host are ready.
+- Implemented natively per platform: the Windows `HKCU` Run key, a macOS
+  LaunchAgent, or a Linux XDG autostart entry. Preferences shows the exact path
+  in use.
+- New `--minimized` and `--delay SECONDS` command line flags for the same
+  behaviour by hand.
 
-### Spotify and SpotDL improvements
+### 📄 Import and export links as plain text
 
-- Spotify URLs are accepted directly in the main URL field.
-- Spotify jobs are routed through the queue controller to `SpotDLWorker`.
-- SpotDL settings are normalized through a dataclass rather than a duplicated manual mapping.
-- Preferences support SpotDL output format, thread count, output template, lyrics, LRC generation, provider order, bitrate, yt-dlp arguments, FFmpeg arguments, overwrite policy, playlist numbering, explicit-content handling, SponsorBlock, unavailable tracks, and proxy behavior.
-- Provider ordering is preserved with an ordered multi-select control.
-- The Update Manager can detect and update SpotDL where supported.
-- `spotdl` was added to project dependencies, although the supplied TOML syntax must be fixed before packaging.
-
-### Cookies, proxies, and network behavior
-
-- Browser-cookie export was rewritten with aggressive YouTube-focused pruning to avoid oversized request headers.
-- Important cookies are prioritized before count and byte limits are applied.
-- Cookie files are written atomically.
-- Cookie files are restricted to owner read/write permissions where supported.
-- Automatic browser-cookie refresh can run before downloads.
-- The last successful cookie import time is recorded.
-- Cookie refresh can be interrupted during cancellation.
-- URL classification is host-based rather than substring-based, preventing YouTube-specific behavior from being applied to unrelated hosts containing `youtube.com` in a query string.
-- Proxy validation now supports HTTP, HTTPS, SOCKS4, SOCKS5, and SOCKS5H.
-- Update checks and downloads now respect the configured proxy and SSL/CA settings.
-- A custom CA certificate takes precedence over disabling SSL verification.
-
-### New diagnostics and support tools
-
-- Added `ytget --doctor` for offline dependency and storage checks without opening the GUI.
-- Doctor mode reports the app, Python, operating system, architecture, required Python packages, writable profile/download folders, and helper binaries.
-- Missing required tools return a non-zero exit code.
-- Added `--verbose` / `-v` startup logging.
-- URLs can be passed on the command line and queued at launch.
-- `--version` now reads from centralized version metadata.
-- The About dialog now has **About**, **Environment**, and **Licence** tabs.
-- Added **Copy diagnostics** for bug reports.
-- Startup logging reports resolved paths for yt-dlp, FFmpeg, FFprobe, Deno, and SpotDL, plus active proxy/archive/SponsorBlock/naming options.
-
-### Interface and usability updates
-
-- Reworked the main window as a view over the queue controller instead of mixing UI, scheduling, and worker ownership.
-- Added a clearer empty-queue state and drag-and-drop feedback.
-- Added queue search and sorting by **Added**, **Title**, or **Status**.
-- Added bulk selection actions and a selected-item count.
-- Added output-log level filtering, copy, and clear controls.
-- Added menu actions for queue import/export, opening the download folder, choosing cookies, preferences, updates, About, and post-queue behavior.
-- Added accessible names to key controls.
-- Added a reusable animated switch control.
-- Added shared dialog components and a centralized dark theme/palette.
-- Added DPI-aware sizing and global font helpers.
-- Repaired mojibake-prone text and bullet rendering.
-- Added cross-platform open/reveal helpers for downloaded files and folders.
-- Window geometry is stored through Qt settings.
-
-### Preferences overhaul
-
-- Reorganized Preferences into focused pages for network, cookies, SponsorBlock, subtitles, playlists, output naming, processing, thumbnails, and SpotDL.
-- Added declarative widget bindings and centralized load/save/reset behavior.
-- Added live validation and first-error focus.
-- Added filename-template previews and a field reference for title, extension, duration, resolution, artist, uploader, channel, album, track number, playlist title/index, ID, upload date, release year, and sequence number.
-- Added validation for clip times, playlist selections, rate limits, dates, subtitle language expressions, and proxies.
-- Advanced Options is now focused on clip extraction and one-run playlist selection.
-
-### Settings and storage hardening
-
-- Configuration writes are atomic and synced before replacement.
-- Corrupt configuration files are quarantined as `.json.corrupt` rather than silently destroying defaults or repeatedly failing.
-- Persisted settings are sanitized and coerced through per-key validators.
-- Numeric retry values are bounded.
-- Invalid containers, thumbnail formats, filename modes, browser names, SponsorBlock values, and HLS domains are normalized.
-- Saved helper-tool paths are restored only if they still exist; otherwise normal discovery resumes.
-- Helper binaries can be resolved from environment overrides, `PATH`, or bundled files.
-- Download-directory changes now refresh output templates and create the target directory.
-- Empty cookie/archive values no longer collapse to the current directory.
-- Download archive arguments are only emitted when the archive path is usable.
-- Thumbnail cache and application-data paths are centralized.
-
-### Thumbnail and cover-art handling
-
-- Reworked thumbnail retrieval with cache validation, URL canonicalization, YouTube thumbnail probing, requests/yt-dlp fallbacks, and AVIF conversion.
-- Added cancellable thumbnail subprocess handling.
-- Thumbnail logging can be enabled separately.
-- Reworked square audio-cover processing for ID3/MP3, FLAC, MP4/M4A, and Ogg/Opus containers.
-- Cover-cropping work is cancellable and better isolated from the main window.
-
-### Updates and installer safety
-
-- Rebuilt the Update Manager around a common tool model.
-- Missing or unknown installations are no longer incorrectly labeled up to date.
-- Added per-tool status, progress, cancellation, and clearer platform information.
-- YTGet self-update opens the release page; helper tools can be installed in place.
-- Downloads use bounded timeouts and configured proxy/SSL behavior.
-- Binary replacement is staged and atomic.
-- Deno archive extraction rejects absolute paths and directory traversal and enforces a size limit.
-- Installed helper binaries receive executable permissions where needed.
-
+- **File → Import Links from Text File…** (Ctrl+I) reads one link per line and
+  opens a review dialog before anything is queued.
+- Choose a format per link, or set one format for every link with **Apply to
+  all**. Untick any line you do not want.
+- Links already in the queue are shown but unticked, duplicates are collapsed,
+  and blank lines and `#` comments are ignored. Bare `www.` lines are accepted.
+- Lines that are not links are counted and reported instead of disappearing
+  silently.
+- **File → Export Links to Text File…** (Ctrl+E) writes the whole queue, the
+  current selection, or only the waiting, finished, or failed items.
+- Optionally write the format after each link as `url | Format`, which the
+  importer reads back, so exported files round-trip with their formats.
 
 ---
-## 🆚 Updated Dependencies
-- **yt-dlp:** `2026.08.19`
-- **ffmpeg:** `9.0.1`  
-- **deno:**  `2.9.6`
-- **SpotDL (Windows only):**  `4.5.2 - hotfix`
----
+
 ### 📥 Official Downloads
 <table align="center">
   <thead>
@@ -184,7 +111,7 @@ The release also centralizes version metadata, improves format selection and HLS
       <td>ZIP</td>
       <td><strong>255 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.9/YTGet-windows.zip">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.0/YTGet-windows.zip">
           <img src="https://img.shields.io/badge/Download-ZIP-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows ZIP Download">
         </a>
       </td>
@@ -193,7 +120,7 @@ The release also centralizes version metadata, improves format selection and HLS
       <td>7z</td>
       <td><strong>165</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.9/YTGet-windows.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.0/YTGet-windows.7z">
           <img src="https://img.shields.io/badge/Download-7z-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows 7z Download">
         </a>
       </td>
@@ -204,7 +131,7 @@ The release also centralizes version metadata, improves format selection and HLS
       <td>tar.gz</td>
       <td><strong>255 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.9/YTGet-linux.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.0/YTGet-linux.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux tar.gz Download">
         </a>
       </td>
@@ -213,7 +140,7 @@ The release also centralizes version metadata, improves format selection and HLS
       <td>7z</td>
       <td><strong>190</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.9/YTGet-linux.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.0/YTGet-linux.7z">
           <img src="https://img.shields.io/badge/Download-7z-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux 7z Download">
         </a>
       </td>
@@ -224,7 +151,7 @@ The release also centralizes version metadata, improves format selection and HLS
       <td>tar.gz</td>
       <td><strong>155 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.9/YTGet-macOS-arm64.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.0/YTGet-macOS-arm64.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS ARM tar.gz Download">
         </a>
       </td>
@@ -233,7 +160,7 @@ The release also centralizes version metadata, improves format selection and HLS
       <td>7z</td>
       <td><strong>105</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.9/YTGet-macOS-arm64.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.0/YTGet-macOS-arm64.7z">
           <img src="https://img.shields.io/badge/Download-7z-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS ARM 7z Download">
         </a>
       </td>
@@ -244,7 +171,7 @@ The release also centralizes version metadata, improves format selection and HLS
       <td>tar.gz</td>
       <td><strong>155 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.9/YTGet-macOS-x86_64.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.0/YTGet-macOS-x86_64.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS Intel tar.gz Download">
         </a>
       </td>
@@ -253,7 +180,7 @@ The release also centralizes version metadata, improves format selection and HLS
       <td>7z</td>
       <td><strong>110</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.7.9/YTGet-macOS-x86_64.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.0/YTGet-macOS-x86_64.7z">
           <img src="https://img.shields.io/badge/Download-7z-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS Intel 7z Download">
         </a>
       </td>

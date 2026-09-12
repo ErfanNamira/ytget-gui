@@ -14,6 +14,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
 
+from ytget_gui.utils.validators import is_supported_url
+
 log = logging.getLogger(__name__)
 
 
@@ -126,7 +128,6 @@ class QueueItem:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> Optional["QueueItem"]:
         url = str(data.get("url") or "").strip()
-        from ytget_gui.utils.validators import is_supported_url
         if not is_supported_url(url):
             return None
 

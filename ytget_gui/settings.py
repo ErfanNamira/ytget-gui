@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,7 @@ from ytget_gui.formats import (
     ensure_best_fallback,
     video_chain,
 )
+from ytget_gui.sites import DEFAULT_ENABLED_SITE_KEYS, SITE_LABELS
 from ytget_gui.spotdl_settings import SpotDLSettings
 from ytget_gui.utils.paths import (
     default_downloads_dir,
@@ -78,10 +80,18 @@ BROWSERS = (
     "opera", "brave", "vivaldi", "safari", "whale",
 )
 
+POST_QUEUE_ACTIONS = ("Keep", "Shutdown", "Sleep", "Restart", "Close")
+
+SCHEDULE_POWER_ACTIONS = ("Shutdown", "Sleep", "Restart", "Close")
+
 DEFAULT_TITLE_TEMPLATE = "%(title)s.%(ext)s"
 DEFAULT_PLAYLIST_TEMPLATE = "%(playlist_index)s - %(title)s.%(ext)s"
 
 MAX_LOG_LINES = 1000
+
+# Module level: resolve_format_code() runs per queued item and previously
+# re-imported and re-compiled this on every call.
+_BARE_HEIGHT_RE = re.compile(r"(\d{3,4})p")
 
 # Keys serialised as JSON natives. Coerced on load to the type of the
 # in-memory default, so a hand-edited config cannot inject a wrong type.
@@ -129,6 +139,35 @@ _PLAIN_KEYS: tuple[str, ...] = (
     "LOG_THUMBNAILS",
     "MAX_LOG_LINES",
     "CONFIRM_ON_QUIT",
+    "POST_QUEUE_ACTION",
+    "TRAY_ENABLED",
+    "TRAY_MINIMIZE_TO_TRAY",
+    "TRAY_CLOSE_TO_TRAY",
+    "TRAY_NOTIFICATIONS",
+    "CLIPBOARD_WATCHER_ENABLED",
+    "WATCHER_POLL_SECONDS",
+    "WATCHER_FORMAT_YOUTUBE",
+    "WATCHER_FORMAT_YTMUSIC",
+    "WATCHER_FORMAT_SPOTIFY",
+    "WATCHER_FORMAT_OTHER",
+    "WATCHER_AUTO_START",
+    "WATCHER_ONLY_KNOWN_SITES",
+    "WATCHER_ENABLED_SITES",
+    "WATCHER_SKIP_PLAYLISTS",
+    "WATCHER_IGNORE_DUPLICATES",
+    "WATCHER_NOTIFY",
+    "SCHEDULER_ENABLED",
+    "SCHEDULE_DAYS",
+    "SCHEDULE_START_ENABLED",
+    "SCHEDULE_START_TIME",
+    "SCHEDULE_STOP_ENABLED",
+    "SCHEDULE_STOP_TIME",
+    "SCHEDULE_POWER_ENABLED",
+    "SCHEDULE_POWER_TIME",
+    "SCHEDULE_POWER_ACTION",
+    "RUN_ON_STARTUP",
+    "STARTUP_MINIMIZED",
+    "STARTUP_DELAY_SECONDS",
 )
 
 # Keys stored as strings but held as Path. Restored only when still valid.
@@ -166,6 +205,23 @@ _VALIDATORS: Dict[str, Callable[[Any], Any]] = {
     "HLS_PREFERRED_DOMAINS": lambda v: [
         str(x).strip().lower() for x in v if str(x).strip()
     ],
+    "POST_QUEUE_ACTION": lambda v: v if v in POST_QUEUE_ACTIONS else "Keep",
+    "WATCHER_POLL_SECONDS": lambda v: max(1, min(60, int(v))),
+    # Unknown site keys are dropped rather than kept: a stale key would show
+    # up nowhere in the UI while still silently widening the allowlist.
+    "WATCHER_ENABLED_SITES": lambda v: [
+        str(x).strip() for x in v if str(x).strip() in SITE_LABELS
+    ],
+    # Weekdays as Monday=0 .. Sunday=6. An empty list means every day, which
+    # is also what the scheduler treats as "daily".
+    "SCHEDULE_DAYS": lambda v: sorted(
+        {int(x) for x in v if str(x).strip().lstrip("-").isdigit() and 0 <= int(x) <= 6}
+    ),
+    "SCHEDULE_START_TIME": lambda v: _clock(v, "22:00"),
+    "SCHEDULE_STOP_TIME": lambda v: _clock(v, "06:00"),
+    "SCHEDULE_POWER_TIME": lambda v: _clock(v, "03:00"),
+    "SCHEDULE_POWER_ACTION": lambda v: v if v in SCHEDULE_POWER_ACTIONS else "Shutdown",
+    "STARTUP_DELAY_SECONDS": lambda v: max(0, min(600, int(v))),
 }
 
 
@@ -276,6 +332,51 @@ class AppSettings:
     LOG_THUMBNAILS: bool = False
     MAX_LOG_LINES: int = MAX_LOG_LINES
     CONFIRM_ON_QUIT: bool = True
+    # Remembered between runs, so an unattended overnight queue keeps the
+    # power action the user chose last time instead of resetting to Keep.
+    POST_QUEUE_ACTION: str = "Keep"
+
+    # --- System tray ---
+    TRAY_ENABLED: bool = True
+    TRAY_MINIMIZE_TO_TRAY: bool = False
+    TRAY_CLOSE_TO_TRAY: bool = False
+    TRAY_NOTIFICATIONS: bool = True
+
+    # --- Clipboard watcher ---
+    CLIPBOARD_WATCHER_ENABLED: bool = False
+    WATCHER_POLL_SECONDS: int = 2
+    # Format preset labels (keys of RESOLUTIONS). An empty string means
+    # "use whatever the main window's format box is set to", which is the
+    # default so the watcher never silently overrides a manual choice.
+    WATCHER_FORMAT_YOUTUBE: str = ""
+    WATCHER_FORMAT_YTMUSIC: str = ""
+    WATCHER_FORMAT_SPOTIFY: str = ""
+    WATCHER_FORMAT_OTHER: str = ""
+    WATCHER_AUTO_START: bool = False
+    WATCHER_ONLY_KNOWN_SITES: bool = False
+    WATCHER_ENABLED_SITES: List[str] = field(
+        default_factory=lambda: list(DEFAULT_ENABLED_SITE_KEYS)
+    )
+    WATCHER_SKIP_PLAYLISTS: bool = False
+    WATCHER_IGNORE_DUPLICATES: bool = True
+    WATCHER_NOTIFY: bool = True
+
+    # --- Scheduler ---
+    SCHEDULER_ENABLED: bool = False
+    # Monday=0 .. Sunday=6; empty means daily.
+    SCHEDULE_DAYS: List[int] = field(default_factory=list)
+    SCHEDULE_START_ENABLED: bool = False
+    SCHEDULE_START_TIME: str = "22:00"
+    SCHEDULE_STOP_ENABLED: bool = False
+    SCHEDULE_STOP_TIME: str = "06:00"
+    SCHEDULE_POWER_ENABLED: bool = False
+    SCHEDULE_POWER_TIME: str = "03:00"
+    SCHEDULE_POWER_ACTION: str = "Shutdown"
+
+    # --- Run at login ---
+    RUN_ON_STARTUP: bool = False
+    STARTUP_MINIMIZED: bool = True
+    STARTUP_DELAY_SECONDS: int = 30
 
     # --- Nested ---
     SPOTDL: SpotDLSettings = field(default_factory=SpotDLSettings)
@@ -396,12 +497,10 @@ class AppSettings:
         Accepts a preset label, a bare "1080p" token, or an already-valid
         selector string.
         """
-        import re
-
         code = str(code or "")
         if code in self.RESOLUTIONS:
             return self.RESOLUTIONS[code]
-        m = re.fullmatch(r"(\d{3,4})p", code.strip())
+        m = _BARE_HEIGHT_RE.fullmatch(code.strip())
         if m:
             return self.get_format_for_resolution(int(m.group(1)))
         return code
@@ -578,6 +677,24 @@ class AppSettings:
             log.warning("Corrupt config moved to %s", backup)
         except OSError:
             pass
+
+
+def _clock(value: Any, fallback: str) -> str:
+    """Normalise a time to zero-padded "HH:MM", or fall back.
+
+    Config files get hand-edited, so "7:5", "07:05:00" and junk all have to
+    land somewhere sane instead of crashing the scheduler at runtime.
+    """
+    text = str(value or "").strip()
+    parts = text.split(":")
+    if len(parts) >= 2:
+        try:
+            hour, minute = int(parts[0]), int(parts[1])
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}"
+        except ValueError:
+            pass
+    return fallback
 
 
 def _coerce(value: Any, current: Any) -> Any:

@@ -28,7 +28,8 @@ dependencies = [
     "mutagen",
     "Pillow",
     "packaging",
-	"spotdl"
+    "spotdl",
+    "browser_cookie3",
 ]
 
 [project.urls]

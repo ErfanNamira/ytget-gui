@@ -49,6 +49,12 @@ class TitleFetchQueue(QObject):
         # *between* items, so an in-flight fetch blocked shutdown for up to
         # DEFAULT_TIMEOUT_SECS.
         self._lock = threading.Lock()
+        # Guards the queue/pending/cancelled collections. stop() and cancel()
+        # are documented as callable from any thread, and they mutated these
+        # containers directly while _drain() was iterating them on the fetch
+        # thread. `deque.remove()` racing `deque.popleft()` can raise or drop
+        # the wrong entry, and a set mutated mid-iteration raises RuntimeError.
+        self._queue_lock = threading.Lock()
         self._current_proc: Optional[subprocess.Popen] = None
         # Companion for the cookie-refresh step, which runs before any
         # subprocess exists and has no PID to signal.
@@ -65,13 +71,14 @@ class TitleFetchQueue(QObject):
     @Slot(list)
     def enqueue_many(self, urls: Iterable[str]) -> None:
         added = False
-        for url in urls:
-            if not url or url in self._pending:
-                continue
-            self._queue.append(url)
-            self._pending.add(url)
-            self._cancelled.discard(url)
-            added = True
+        with self._queue_lock:
+            for url in urls:
+                if not url or url in self._pending:
+                    continue
+                self._queue.append(url)
+                self._pending.add(url)
+                self._cancelled.discard(url)
+                added = True
         if added and not self._draining:
             self._drain()
 
@@ -83,7 +90,8 @@ class TitleFetchQueue(QObject):
     def stop(self) -> None:
         """Drop the backlog and abort the in-flight fetch. Any thread."""
         self._stopping = True
-        self._queue.clear()
+        with self._queue_lock:
+            self._queue.clear()
         with self._lock:
             self._cancel_event.set()
             process = self._current_proc
@@ -101,17 +109,19 @@ class TitleFetchQueue(QObject):
         if not url:
             return
 
-        try:
-            while url in self._queue:
-                self._queue.remove(url)
-        except ValueError:
-            pass
-        self._pending.discard(url)
+        with self._queue_lock:
+            try:
+                while url in self._queue:
+                    self._queue.remove(url)
+            except ValueError:
+                pass
+            self._pending.discard(url)
 
-        if self._current_url != url:
-            return
+            if self._current_url != url:
+                return
 
-        self._cancelled.add(url)
+            self._cancelled.add(url)
+
         with self._lock:
             self._cancel_event.set()
             process = self._current_proc
@@ -132,8 +142,11 @@ class TitleFetchQueue(QObject):
         # for the remainder of the process lifetime.
         self._stopping = False
         try:
-            while self._queue and not self._stopping:
-                url = self._queue.popleft()
+            while not self._stopping:
+                with self._queue_lock:
+                    if not self._queue:
+                        break
+                    url = self._queue.popleft()
                 self.started_one.emit(url)
                 try:
                     self._fetch_one(url)
@@ -141,12 +154,14 @@ class TitleFetchQueue(QObject):
                     log.exception("Title fetch crashed for %s", url)
                     self.error.emit(url, "Unexpected error while fetching metadata")
                 finally:
-                    self._pending.discard(url)
+                    with self._queue_lock:
+                        self._pending.discard(url)
                     self.finished_one.emit(url)
 
             if self._stopping:
-                self._queue.clear()
-                self._pending.clear()
+                with self._queue_lock:
+                    self._queue.clear()
+                    self._pending.clear()
         finally:
             self._draining = False
             self.idle.emit()
@@ -188,8 +203,10 @@ class TitleFetchQueue(QObject):
             self._current_url = None
 
         # A result for a cancelled URL is stale from the user's point of view.
-        if url in self._cancelled:
+        with self._queue_lock:
+            was_cancelled = url in self._cancelled
             self._cancelled.discard(url)
+        if was_cancelled:
             return
         if result.cancelled:
             return

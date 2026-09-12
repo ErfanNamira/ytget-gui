@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt
+from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt, QTime
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCalendarWidget,
@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStyle,
+    QTimeEdit,
     QToolTip,
     QVBoxLayout,
     QWidget,
@@ -47,6 +48,9 @@ from PySide6.QtWidgets import (
 
 from ytget_gui.dialogs import common as ui
 from ytget_gui.dialogs.spotdl_preferences_tab import SpotDLPreferencesTab
+from ytget_gui import autostart
+from ytget_gui.scheduler import DAY_LABELS, POWER_ACTIONS
+from ytget_gui.sites import ALWAYS_ALLOWED_KEYS, POPULAR_SITES
 from ytget_gui.settings import (
     BROWSERS,
     FILENAME_FORMAT_PRESETS,
@@ -330,6 +334,11 @@ class PreferencesDialog(QDialog):
         self._add_page("Output", icons.SP_DialogOpenButton, self._page_output())
         self._add_page("Processing", icons.SP_FileDialogDetailedView, self._page_processing())
         self._add_page("Thumbnails", icons.SP_FileDialogContentsView, self._page_thumbnails())
+        self._add_page("Watcher", icons.SP_BrowserReload, self._page_watcher())
+        self._add_page("Tray", icons.SP_TitleBarNormalButton, self._page_tray())
+        self._add_page(
+            "Scheduler", icons.SP_MediaSeekForward, self._page_scheduler()
+        )
         self._add_page("Advanced", icons.SP_MessageBoxWarning, self._page_advanced())
 
         self.spotdl_tab = SpotDLPreferencesTab(self.settings.SPOTDL)
@@ -838,6 +847,409 @@ class PreferencesDialog(QDialog):
             )
         )
 
+    # -- Watcher -------------------------------------------------------
+
+    def _format_choices(self) -> Tuple[Tuple[str, str], ...]:
+        """Format presets, prefixed with the "follow the main window" option.
+
+        Built from live settings rather than a constant, so the list cannot
+        drift from the main window's format box.
+        """
+        choices = [("Use the main window selection", "")]
+        choices.extend((label, label) for label in self.settings.RESOLUTIONS)
+        return tuple(choices)
+
+    def _page_watcher(self) -> QWidget:
+        formats = self._format_choices()
+
+        self.watcher_enabled = self._bind_switch(
+            "CLIPBOARD_WATCHER_ENABLED", ui.switch("Watch the clipboard")
+        )
+        self.watcher_interval = self._bind_spin(
+            "WATCHER_POLL_SECONDS", ui.spin(1, 60, "Clipboard check interval", " s")
+        )
+        self.watcher_autostart = self._bind_switch(
+            "WATCHER_AUTO_START", ui.switch("Start downloading immediately")
+        )
+        self.watcher_notify = self._bind_switch(
+            "WATCHER_NOTIFY", ui.switch("Show a tray notification")
+        )
+
+        enable_card = ui.card(
+            self._column(
+                self._row(
+                    "Clipboard watcher",
+                    self.watcher_enabled,
+                    "Copy any supported link and it is queued automatically",
+                ),
+                self._row(
+                    "Check every",
+                    self.watcher_interval,
+                    "",
+                ),
+                self._row(
+                    "Auto start",
+                    self.watcher_autostart,
+                    "Start the queue as soon as a link is captured",
+                ),
+                self._row("Notify", self.watcher_notify, "Announce captured links in the tray"),
+            ),
+            title="Clipboard watcher",
+            subtitle="Links are matched on host, so a URL merely mentioning "
+            "youtube.com is never treated as YouTube.",
+        )
+
+        self.watcher_format_youtube = self._bind_combo_mapped(
+            "WATCHER_FORMAT_YOUTUBE", ui.combo([], "YouTube format"), formats, ""
+        )
+        self.watcher_format_ytmusic = self._bind_combo_mapped(
+            "WATCHER_FORMAT_YTMUSIC", ui.combo([], "YouTube Music format"), formats, ""
+        )
+        self.watcher_format_spotify = self._bind_combo_mapped(
+            "WATCHER_FORMAT_SPOTIFY", ui.combo([], "Spotify format"), formats, ""
+        )
+        self.watcher_format_other = self._bind_combo_mapped(
+            "WATCHER_FORMAT_OTHER", ui.combo([], "Other sites format"), formats, ""
+        )
+
+        format_card = ui.card(
+            self._column(
+                self._row("YouTube", self.watcher_format_youtube),
+                self._row("YouTube Music", self.watcher_format_ytmusic),
+                self._row("Spotify", self.watcher_format_spotify),
+                self._row("Everything else", self.watcher_format_other),
+            ),
+            title="Default format per link type",
+            subtitle="Applied only to items the watcher adds. Manual additions "
+            "always use the format box in the main window.",
+        )
+
+        self.watcher_skip_playlists = self._bind_switch(
+            "WATCHER_SKIP_PLAYLISTS", ui.switch("Ignore playlist links")
+        )
+        self.watcher_ignore_dupes = self._bind_switch(
+            "WATCHER_IGNORE_DUPLICATES", ui.switch("Ignore repeated links")
+        )
+        self.watcher_only_known = self._bind_switch(
+            "WATCHER_ONLY_KNOWN_SITES", ui.switch("Only capture the sites below")
+        )
+
+        # A checkable QListWidget was tried here first and was a mistake: the
+        # dialog's QSS restyles every QListWidget::item, which swallows the
+        # check indicator, and nesting a scrollable list inside the page's own
+        # scroll area meant the wheel never reached the inner list. A plain
+        # grid of the already-styled checkboxes shows all sites at once and
+        # scrolls with the page.
+        self.watcher_sites: Dict[str, QCheckBox] = {}
+        self._site_grid = QWidget()
+        grid = QGridLayout(self._site_grid)
+        grid.setContentsMargins(0, 2, 0, 2)
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(7)
+
+        for index, (key, label, domains) in enumerate(POPULAR_SITES):
+            box = ui.check(label, domains[0])
+            if key in ALWAYS_ALLOWED_KEYS:
+                box.setChecked(True)
+                box.setEnabled(False)
+                box.setToolTip("Always captured while the watcher is running")
+            box.toggled.connect(self._on_changed)
+            self.watcher_sites[key] = box
+            grid.addWidget(box, index // 2, index % 2)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
+        def read_sites() -> List[str]:
+            return [key for key, box in self.watcher_sites.items() if box.isChecked()]
+
+        def write_sites(value: Any) -> None:
+            selected = set(value or [])
+            for key, box in self.watcher_sites.items():
+                if key in ALWAYS_ALLOWED_KEYS:
+                    continue
+                with QSignalBlocker(box):
+                    box.setChecked(key in selected)
+
+        self._register(
+            "WATCHER_ENABLED_SITES", self._site_grid, read_sites, write_sites
+        )
+
+        site_buttons = QWidget()
+        site_layout = QHBoxLayout(site_buttons)
+        site_layout.setContentsMargins(0, 0, 0, 0)
+        site_layout.setSpacing(6)
+        for text, state in (("Select all", True), ("Select none", False)):
+            button = QPushButton(text)
+            button.setMinimumHeight(30)
+            button.clicked.connect(lambda _c=False, s=state: self._set_all_sites(s))
+            site_layout.addWidget(button)
+        site_layout.addStretch(1)
+
+        self._site_controls = (self._site_grid, site_buttons)
+        self.watcher_only_known.toggled.connect(self._on_allowlist_toggled)
+
+        sites_card = ui.card(
+            self._column(
+                self._row("Playlists", self.watcher_skip_playlists, "Skip links that point at a whole playlist"),
+                self._row("Duplicates", self.watcher_ignore_dupes, "Do not re-add a link copied twice"),
+                self._row("Allowlist", self.watcher_only_known, "Otherwise any supported link is captured"),
+                self._site_grid,
+                site_buttons,
+            ),
+            title=f"Sites ({len(POPULAR_SITES)} popular)",
+            subtitle="yt-dlp supports well over a thousand sites and any of "
+            "them can be captured; these are the popular ones you can filter "
+            "by. YouTube, YouTube Music and Spotify are always captured.",
+        )
+
+        return self._page(enable_card, format_card, sites_card)
+
+    def _on_allowlist_toggled(self, enabled: bool) -> None:
+        for widget in self._site_controls:
+            widget.setEnabled(enabled)
+
+    def _set_all_sites(self, checked: bool) -> None:
+        for key, box in self.watcher_sites.items():
+            if key not in ALWAYS_ALLOWED_KEYS:
+                box.setChecked(checked)
+
+    # -- Tray ----------------------------------------------------------
+
+    def _page_tray(self) -> QWidget:
+        self.tray_enabled = self._bind_switch(
+            "TRAY_ENABLED", ui.switch("Show a tray icon")
+        )
+        self.tray_minimize = self._bind_switch(
+            "TRAY_MINIMIZE_TO_TRAY", ui.switch("Minimise to the tray")
+        )
+        self.tray_close = self._bind_switch(
+            "TRAY_CLOSE_TO_TRAY", ui.switch("Close to the tray")
+        )
+        self.tray_notifications = self._bind_switch(
+            "TRAY_NOTIFICATIONS", ui.switch("Show notifications")
+        )
+
+        for widget in (self.tray_minimize, self.tray_close, self.tray_notifications):
+            self.tray_enabled.toggled.connect(widget.setEnabled)
+
+        return self._page(
+            ui.card(
+                self._column(
+                    self._row(
+                        "Tray icon",
+                        self.tray_enabled,
+                        "Control the queue, the watcher and the post-queue "
+                        "action without the window",
+                    ),
+                    self._row("Minimise", self.tray_minimize, "Hide the window instead of showing it in the taskbar"),
+                    self._row(
+                        "Close button",
+                        self.tray_close,
+                        "Keep running in the background. Exit from the tray menu "
+                        "quits completely.",
+                    ),
+                    self._row("Notifications", self.tray_notifications, "Queue and watcher events"),
+                ),
+                title="System tray",
+                subtitle="Takes effect immediately when Preferences is saved.",
+            )
+        )
+
+    # -- Scheduler -----------------------------------------------------
+
+    def _bind_time(self, key: str, widget: QTimeEdit) -> QTimeEdit:
+        """Times are stored as "HH:MM" strings so the config stays readable."""
+        return self._register(
+            key,
+            widget,
+            lambda w=widget: w.time().toString("HH:mm"),
+            lambda v, w=widget: w.setTime(
+                QTime.fromString(str(v or ""), "HH:mm")
+                if QTime.fromString(str(v or ""), "HH:mm").isValid()
+                else QTime(0, 0)
+            ),
+        )
+
+    @staticmethod
+    def _time_edit(accessible: str) -> QTimeEdit:
+        widget = QTimeEdit()
+        widget.setDisplayFormat("HH:mm")
+        widget.setAccessibleName(accessible)
+        widget.setMinimumWidth(96)
+        return widget
+
+    def _page_scheduler(self) -> QWidget:
+        self.scheduler_enabled = self._bind_switch(
+            "SCHEDULER_ENABLED", ui.switch("Enable the scheduler")
+        )
+
+        # Days ---------------------------------------------------------
+        self.schedule_days: Dict[int, QCheckBox] = {}
+        day_host = QWidget()
+        day_grid = QGridLayout(day_host)
+        day_grid.setContentsMargins(0, 0, 0, 0)
+        day_grid.setHorizontalSpacing(14)
+        day_grid.setVerticalSpacing(6)
+        for index, label in enumerate(DAY_LABELS):
+            box = ui.check(label)
+            self.schedule_days[index] = box
+            day_grid.addWidget(box, index // 4, index % 4)
+        self._day_host = day_host
+
+        def read_days() -> List[int]:
+            return sorted(i for i, b in self.schedule_days.items() if b.isChecked())
+
+        def write_days(value: Any) -> None:
+            wanted = {int(v) for v in (value or []) if str(v).isdigit()}
+            for index, box in self.schedule_days.items():
+                with QSignalBlocker(box):
+                    box.setChecked(index in wanted)
+
+        self._register("SCHEDULE_DAYS", day_host, read_days, write_days)
+
+        # Queue windows ------------------------------------------------
+        self.schedule_start_enabled = self._bind_switch(
+            "SCHEDULE_START_ENABLED", ui.switch("Start the queue on a timer")
+        )
+        self.schedule_start_time = self._bind_time(
+            "SCHEDULE_START_TIME", self._time_edit("Queue start time")
+        )
+        self.schedule_stop_enabled = self._bind_switch(
+            "SCHEDULE_STOP_ENABLED", ui.switch("Stop the queue on a timer")
+        )
+        self.schedule_stop_time = self._bind_time(
+            "SCHEDULE_STOP_TIME", self._time_edit("Queue stop time")
+        )
+
+        # Power --------------------------------------------------------
+        self.schedule_power_enabled = self._bind_switch(
+            "SCHEDULE_POWER_ENABLED", ui.switch("Run a power action on a timer")
+        )
+        self.schedule_power_time = self._bind_time(
+            "SCHEDULE_POWER_TIME", self._time_edit("Power action time")
+        )
+        self.schedule_power_action = self._bind_combo_mapped(
+            "SCHEDULE_POWER_ACTION",
+            ui.combo([], "Power action"),
+            tuple((name, name) for name in POWER_ACTIONS),
+            "Shutdown",
+        )
+
+        # Startup ------------------------------------------------------
+        self.run_on_startup = self._bind_switch(
+            "RUN_ON_STARTUP", ui.switch("Launch YTGet when you sign in")
+        )
+        self.startup_minimized = self._bind_check(
+            "STARTUP_MINIMIZED", ui.check("Start hidden in the system tray")
+        )
+        self.startup_delay = self._bind_spin(
+            "STARTUP_DELAY_SECONDS", ui.spin(0, 600, "Startup delay", " s")
+        )
+
+        startup_hint = QLabel(autostart.location())
+        startup_hint.setWordWrap(True)
+        startup_hint.setObjectName("muted")
+        self._startup_hint = startup_hint
+
+        # Enablement wiring -------------------------------------------
+        self._schedule_children = (
+            day_host,
+            self.schedule_start_enabled,
+            self.schedule_stop_enabled,
+            self.schedule_power_enabled,
+        )
+        self.scheduler_enabled.toggled.connect(self._on_scheduler_toggled)
+        self.schedule_start_enabled.toggled.connect(self._sync_schedule_rows)
+        self.schedule_stop_enabled.toggled.connect(self._sync_schedule_rows)
+        self.schedule_power_enabled.toggled.connect(self._sync_schedule_rows)
+        for box in self.schedule_days.values():
+            box.toggled.connect(self._on_changed)
+        for edit in (
+            self.schedule_start_time,
+            self.schedule_stop_time,
+            self.schedule_power_time,
+        ):
+            edit.timeChanged.connect(self._on_changed)
+        self.run_on_startup.toggled.connect(self._on_startup_toggled)
+
+        return self._page(
+            ui.card(
+                self._column(
+                    self._row(
+                        "Scheduler",
+                        self.scheduler_enabled,
+                        "Runs while YTGet is open, including from the tray",
+                    ),
+                    self._row(
+                        "Days",
+                        day_host,
+                        "Leave every day unchecked to run daily",
+                    ),
+                ),
+                title="Schedule",
+                subtitle="Times use your computer's local clock.",
+            ),
+            ui.card(
+                self._column(
+                    self._row("Start queue", self.schedule_start_enabled),
+                    self._row("Start at", self.schedule_start_time),
+                    self._row("Stop queue", self.schedule_stop_enabled),
+                    self._row(
+                        "Stop at",
+                        self.schedule_stop_time,
+                        "Finishes the current item, then holds the queue",
+                    ),
+                ),
+                title="Queue times",
+            ),
+            ui.card(
+                self._column(
+                    self._row("Power action", self.schedule_power_enabled),
+                    self._row("Run at", self.schedule_power_time),
+                    self._row("Action", self.schedule_power_action),
+                ),
+                title="Power manager",
+                subtitle=(
+                    "Runs at the chosen time even when the queue has not "
+                    "finished. Downloads are stopped first."
+                ),
+            ),
+            ui.card(
+                self._column(
+                    self._row("Run on startup", self.run_on_startup),
+                    self._row("Minimised", self.startup_minimized),
+                    self._row(
+                        "Delay",
+                        self.startup_delay,
+                        "Waits before launching so the network is ready",
+                    ),
+                    startup_hint,
+                ),
+                title="Run at login",
+            ),
+        )
+
+    def _on_scheduler_toggled(self, enabled: bool) -> None:
+        for widget in self._schedule_children:
+            widget.setEnabled(enabled)
+        self._sync_schedule_rows()
+
+    def _sync_schedule_rows(self, *_args: Any) -> None:
+        active = self.scheduler_enabled.isChecked()
+        self.schedule_start_time.setEnabled(
+            active and self.schedule_start_enabled.isChecked()
+        )
+        self.schedule_stop_time.setEnabled(
+            active and self.schedule_stop_enabled.isChecked()
+        )
+        power = active and self.schedule_power_enabled.isChecked()
+        self.schedule_power_time.setEnabled(power)
+        self.schedule_power_action.setEnabled(power)
+
+    def _on_startup_toggled(self, enabled: bool) -> None:
+        self.startup_minimized.setEnabled(enabled)
+        self.startup_delay.setEnabled(enabled)
+
     # -- Advanced ------------------------------------------------------
 
     def _page_advanced(self) -> QWidget:
@@ -943,6 +1355,11 @@ class PreferencesDialog(QDialog):
         self.cookies_status.setText(f"Last imported: {last}" if last else "")
 
         self._on_subs_toggled(self.subs_enabled.isChecked())
+        self._on_allowlist_toggled(self.watcher_only_known.isChecked())
+        self._on_scheduler_toggled(self.scheduler_enabled.isChecked())
+        self._on_startup_toggled(self.run_on_startup.isChecked())
+        for widget in (self.tray_minimize, self.tray_close, self.tray_notifications):
+            widget.setEnabled(self.tray_enabled.isChecked())
         self.archive_path.setEnabled(self.archive_enabled.isChecked())
         self.thumbnail_format.setEnabled(self.convert_thumbnails.isChecked())
         self.hls_domains.setEnabled(self.prefer_hls.isChecked())

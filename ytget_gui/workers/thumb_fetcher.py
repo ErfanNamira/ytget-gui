@@ -33,7 +33,7 @@ from PySide6.QtCore import QObject, Signal
 from ytget_gui.settings import AppSettings
 from ytget_gui.utils.text import cache_key, url_digest
 from ytget_gui.workers import cookies as cookie_manager
-from ytget_gui.workers import proc, ssl_utils
+from ytget_gui.workers import fetch_core, proc, ssl_utils
 
 log = logging.getLogger(__name__)
 
@@ -405,9 +405,7 @@ class ThumbFetcher(QObject):
         if not stdout:
             return None, None
         try:
-            metadata = __import__(
-                "ytget_gui.workers.fetch_core", fromlist=["parse_metadata"]
-            ).parse_metadata(stdout)
+            metadata = fetch_core.parse_metadata(stdout)
         except Exception:  # noqa: BLE001 - parse failures are non-fatal here
             return None, None
         return metadata.thumb_url or None, metadata.video_id or None

@@ -46,7 +46,12 @@ class LogBuffer:
                 text = raw[:self._max_flush_bytes - 4].decode("utf-8", errors="ignore") + "…"
                 size = len(text.encode("utf-8", errors="replace"))
         else:
-            size = len(text)
+            # len(text) is a character count, not a byte count. Using it as a
+            # byte size under-counted every non-ASCII line (CJK titles are 3
+            # bytes per character), so the per-flush byte budget could be
+            # overshot by ~3x. `isascii()` is a cheap C-level scan and lets the
+            # common case stay allocation-free.
+            size = len(text) if text.isascii() else len(text.encode("utf-8", errors="replace"))
         with self._lock:
             self._entries.append((text, colour, size))
             if len(self._entries) > self._max_entries:

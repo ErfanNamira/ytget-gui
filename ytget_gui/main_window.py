@@ -8,6 +8,7 @@ the controller, and renders controller signals.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import platform
 import shutil
@@ -17,7 +18,16 @@ import webbrowser
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QSettings, QSize, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    QRect,
+    QSettings,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QIcon, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -47,6 +57,10 @@ from ytget_gui.queue.controller import QueueController
 from ytget_gui.queue.model import QueueItem, QueueModel, Status
 from ytget_gui.settings import AppSettings
 from ytget_gui.styles import AppStyles, Palette
+from ytget_gui import autostart
+from ytget_gui.scheduler import Scheduler
+from ytget_gui.tray import TrayController
+from ytget_gui.watcher import ClipboardWatcher
 from ytget_gui.theme import main_window_qss
 from ytget_gui.utils import opener
 from ytget_gui.utils.text import short
@@ -88,8 +102,21 @@ class MainWindow(QMainWindow):
         self._log_entries: List[Tuple[str, str, str]] = []
         self._console_pending: List[Tuple[str, str]] = []
 
-        self._post_queue_action = "Keep"
+        # Restored from config, so an unattended queue keeps the power action
+        # that was chosen last session.
+        self._post_queue_action = (
+            self.settings.POST_QUEUE_ACTION
+            if self.settings.POST_QUEUE_ACTION in _POST_ACTIONS
+            else "Keep"
+        )
         self._post_action_items: Dict[str, QAction] = {}
+
+        # Set by the tray's Exit action (and by any other deliberate quit) so
+        # closeEvent can tell "user wants out" from "user clicked the X while
+        # close-to-tray is on".
+        self._force_quit = False
+        self.tray: Optional[TrayController] = None
+        self.watcher: Optional[ClipboardWatcher] = None
 
         self._title_thread: Optional[QThread] = None
         self._title_queue: Optional[TitleFetchQueue] = None
@@ -97,6 +124,8 @@ class MainWindow(QMainWindow):
         self._cover_worker: Optional[CoverCropWorker] = None
         self._cover_running = False
         self._pending_post_action: Optional[str] = None
+        self._normal_geometry: Optional[QRect] = None
+        self._was_maximized = False
 
         self._build_ui()
         self._build_menu()
@@ -106,6 +135,9 @@ class MainWindow(QMainWindow):
         self._restore_geometry()
         self._load_queue()
         self._log_environment()
+        self._start_watcher()
+        self._start_scheduler()
+        self._apply_tray_settings()
 
     # ==================================================================
     # Construction
@@ -488,6 +520,13 @@ class MainWindow(QMainWindow):
         file_menu.addAction("Save Queue As\u2026", self._export_queue, "Ctrl+S")
         file_menu.addAction("Load Queue\u2026", self._import_queue, "Ctrl+O")
         file_menu.addSeparator()
+        file_menu.addAction(
+            "Import Links from Text File\u2026", self._import_links, "Ctrl+I"
+        )
+        file_menu.addAction(
+            "Export Links to Text File\u2026", self._export_links, "Ctrl+E"
+        )
+        file_menu.addSeparator()
         file_menu.addAction("Open Download Folder", self._open_downloads)
         file_menu.addSeparator()
         file_menu.addAction("Exit", self.close, "Ctrl+Q")
@@ -519,6 +558,13 @@ class MainWindow(QMainWindow):
         self.action_crop = tools_menu.addAction(
             "Crop Audio Covers Now", self._start_cover_crop
         )
+        tools_menu.addSeparator()
+        self.action_watcher = QAction("Clipboard Watcher", self, checkable=True)
+        self.action_watcher.setShortcut("Ctrl+Shift+V")
+        self.action_watcher.setToolTip("Queue supported links automatically as you copy them")
+        self.action_watcher.toggled.connect(self.set_clipboard_watcher)
+        tools_menu.addAction(self.action_watcher)
+        tools_menu.addAction("Queue Clipboard Now", self.queue_clipboard_now)
 
         help_menu = menubar.addMenu("Help")
         help_menu.addAction("Check for Updates\u2026", self._show_updates)
@@ -535,6 +581,9 @@ class MainWindow(QMainWindow):
         self.controller.overall_progress.connect(self.global_progress.setValue)
         self.controller.running_changed.connect(lambda _: self._update_buttons())
         self.controller.queue_finished.connect(self._on_queue_finished)
+        self.controller.queue_changed.connect(self._refresh_tray)
+        self.controller.running_changed.connect(lambda _: self._refresh_tray())
+        self.controller.overall_progress.connect(lambda _: self._refresh_tray())
 
     def _start_thumb_manager(self) -> None:
         self.thumbs = ThumbManager(
@@ -745,12 +794,21 @@ class MainWindow(QMainWindow):
         if self.enqueue_urls([url]):
             self.url_input.clear()
 
-    def enqueue_urls(self, urls: Sequence[str]) -> int:
-        """Add URLs and start metadata fetches. Returns the number added."""
+    def enqueue_urls(
+        self, urls: Sequence[str], format_label: Optional[str] = None
+    ) -> int:
+        """Add URLs and start metadata fetches. Returns the number added.
+
+        `format_label` lets the clipboard watcher apply a per-site preset. When
+        it is None or unknown, the main window's format box wins, so manual
+        additions always behave exactly as before.
+        """
         accepted: List[str] = []
         items = []
         seen = set()
-        label = self.format_box.currentText()
+        label = format_label or self.format_box.currentText()
+        if label not in self.settings.RESOLUTIONS:
+            label = self.format_box.currentText()
         code = self.settings.RESOLUTIONS.get(label, "best")
 
         for raw in urls:
@@ -1028,6 +1086,193 @@ class MainWindow(QMainWindow):
         self.btn_pause.setEnabled(running and not self.controller.is_paused)
         self.btn_skip.setEnabled(running)
         self.btn_stop.setEnabled(running)
+        self._refresh_tray()
+
+    # ==================================================================
+    # System tray
+    # ==================================================================
+
+    @property
+    def post_queue_action(self) -> str:
+        return self._post_queue_action
+
+    def set_post_queue_action(self, value: str) -> None:
+        """Public entry point used by the tray menu."""
+        self._set_post_action(value)
+
+    def _apply_tray_settings(self) -> None:
+        """Create or tear down the tray to match TRAY_ENABLED."""
+        wanted = bool(self.settings.TRAY_ENABLED)
+        if wanted and self.tray is None:
+            tray = TrayController(self, self.settings, self._app_icon)
+            if not tray.available:
+                self.log(
+                    "\u2139\ufe0f No system tray is available in this session.",
+                    AppStyles.WARNING_COLOR,
+                    "Warning",
+                )
+                return
+            self.tray = tray
+        elif not wanted and self.tray is not None:
+            self.tray.shutdown()
+            self.tray = None
+        self._refresh_tray()
+
+    def _refresh_tray(self) -> None:
+        if self.tray is not None:
+            self.tray.refresh()
+
+    def _notify(self, title: str, message: str, *, warning: bool = False) -> None:
+        if self.tray is not None:
+            self.tray.notify(title, message, warning=warning)
+
+    def open_downloads(self) -> None:
+        self._open_downloads()
+
+    def show_preferences(self) -> None:
+        self.activateWindow()
+        self._show_preferences()
+
+    def clear_completed(self) -> None:
+        self._clear_completed()
+
+    def quit_application(self) -> None:
+        """Exit for real, bypassing close-to-tray."""
+        self._force_quit = True
+        self.close()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if (
+            event.type() == event.Type.WindowStateChange
+            and self.isMinimized()
+            and self.tray is not None
+            and self.settings.TRAY_MINIMIZE_TO_TRAY
+        ):
+            # Defer: hiding inside the state-change handler confuses some
+            # window managers into leaving a ghost taskbar entry.
+            QTimer.singleShot(0, self.hide_to_tray)
+        self._refresh_tray()
+
+    # ==================================================================
+    # Clipboard watcher
+    # ==================================================================
+
+    def _start_scheduler(self) -> None:
+        self.scheduler = Scheduler(self.settings, parent=self)
+        self.scheduler.start_queue.connect(self._on_schedule_start)
+        self.scheduler.stop_queue.connect(self._on_schedule_stop)
+        self.scheduler.power_action.connect(self._on_schedule_power)
+        self.scheduler.message.connect(self._on_watcher_message)
+        self.scheduler.apply_settings()
+
+    def _on_schedule_start(self) -> None:
+        if self.controller.is_running:
+            return
+        if not self.controller.can_start:
+            self.log(
+                "\u23f0 Scheduled start skipped: nothing to download.",
+                AppStyles.WARNING_COLOR,
+            )
+            return
+        self.log("\u23f0 Scheduled start.", AppStyles.INFO_COLOR)
+        self._notify("Scheduled start", "The queue is starting.")
+        self.controller.start()
+
+    def _on_schedule_stop(self) -> None:
+        if not self.controller.is_running:
+            return
+        self.log("\u23f0 Scheduled stop.", AppStyles.INFO_COLOR)
+        self._notify("Scheduled stop", "The queue is stopping.")
+        self.controller.stop_all()
+
+    def _on_schedule_power(self, action: str) -> None:
+        """Deliberately pre-empts an unfinished queue.
+
+        The user asked for the power action to win over the queue, so any
+        running download is stopped first and the pending post-queue action
+        is cleared to avoid two power commands racing each other.
+        """
+        self._pending_post_action = None
+        if self.controller.is_running:
+            self.log(
+                "\u23f0 Scheduled " + action.lower() + ": stopping the queue first.",
+                AppStyles.WARNING_COLOR,
+            )
+            self.controller.stop_all()
+        self._notify("Scheduled " + action, "Running now.", warning=True)
+        self._run_post_action(action)
+
+    def _start_watcher(self) -> None:
+        self.watcher = ClipboardWatcher(self.settings, parent=self)
+        self.watcher.urls_ready.connect(self._on_watcher_urls)
+        self.watcher.message.connect(self._on_watcher_message)
+        self.watcher.running_changed.connect(self._on_watcher_running)
+        if self.settings.CLIPBOARD_WATCHER_ENABLED:
+            self.watcher.start(announce=False)
+        self._on_watcher_running(self.watcher.is_running)
+
+    def set_clipboard_watcher(self, enabled: bool) -> None:
+        if self.watcher is None:
+            return
+        if enabled == self.watcher.is_running:
+            return
+        self.watcher.set_enabled(bool(enabled))
+        self.settings.save_config()
+
+    def queue_clipboard_now(self) -> None:
+        """One-shot capture, independent of whether the watcher is running."""
+        from ytget_gui.watcher import extract_urls
+
+        text = QGuiApplication.clipboard().text() if QGuiApplication.clipboard() else ""
+        urls = extract_urls(text or "")
+        if not urls:
+            self.log(
+                "Clipboard holds no supported links.", AppStyles.WARNING_COLOR, "Warning"
+            )
+            return
+        added = self.enqueue_urls(urls)
+        if added and self.watcher is not None:
+            for url in urls:
+                self.watcher._remember(url)
+
+    @Slot(bool)
+    def _on_watcher_running(self, running: bool) -> None:
+        for action in (getattr(self, "action_watcher", None),):
+            if action is not None and action.isChecked() != running:
+                action.blockSignals(True)
+                action.setChecked(running)
+                action.blockSignals(False)
+        self._refresh_tray()
+
+    @Slot(str, str)
+    def _on_watcher_message(self, text: str, level: str) -> None:
+        colour = (
+            AppStyles.WARNING_COLOR if level == "Warning" else AppStyles.INFO_COLOR
+        )
+        self.log(text, colour, level)
+
+    @Slot(list)
+    def _on_watcher_urls(self, batch: List[Tuple[str, str]]) -> None:
+        """Queue watcher hits, grouped so each format preset is applied once."""
+        grouped: Dict[str, List[str]] = {}
+        for url, label in batch:
+            grouped.setdefault(label or "", []).append(url)
+
+        added = 0
+        for label, urls in grouped.items():
+            added += self.enqueue_urls(urls, format_label=label or None)
+        if not added:
+            return
+
+        self.log(
+            f"\U0001f4cb Clipboard watcher queued {added} item(s).",
+            AppStyles.SUCCESS_COLOR,
+        )
+        if self.settings.WATCHER_NOTIFY:
+            self._notify("YTGet", f"Queued {added} link(s) from the clipboard.")
+        if self.settings.WATCHER_AUTO_START and self.controller.can_start:
+            self.controller.start()
 
     # ==================================================================
     # Drag and drop
@@ -1100,10 +1345,34 @@ class MainWindow(QMainWindow):
             max(100, int(self.settings.MAX_LOG_LINES))
         )
         self._refresh_format_box()
+        # Watcher and tray are live objects, so Preferences has to be pushed
+        # into them rather than waiting for a restart.
+        if self.watcher is not None:
+            self.watcher.apply_settings()
+        self._apply_tray_settings()
+        self.scheduler.apply_settings()
+        self._apply_autostart()
         self.log("\u2705 Preferences saved.", AppStyles.SUCCESS_COLOR)
         active = self._active_options_summary()
         if active:
             self.log("\u2699\ufe0f Active: " + ", ".join(active))
+
+    def _apply_autostart(self) -> None:
+        """Registry/LaunchAgent/XDG entry, best effort.
+
+        A failure here must not block saving Preferences, so it is logged
+        rather than raised.
+        """
+        ok, error = autostart.apply(
+            self.settings.RUN_ON_STARTUP,
+            minimized=self.settings.STARTUP_MINIMIZED,
+            delay=self.settings.STARTUP_DELAY_SECONDS,
+        )
+        if not ok:
+            self.log(
+                "\u26a0\ufe0f Could not update the startup entry: " + str(error),
+                AppStyles.WARNING_COLOR,
+            )
 
     def _show_advanced(self) -> None:
         try:
@@ -1223,6 +1492,9 @@ class MainWindow(QMainWindow):
             self.post_action_box.blockSignals(False)
         for key, action in self._post_action_items.items():
             action.setChecked(key == value)
+        self.settings.POST_QUEUE_ACTION = value
+        self.settings.save_config()
+        self._refresh_tray()
 
     # ==================================================================
     # Queue persistence
@@ -1398,14 +1670,196 @@ class MainWindow(QMainWindow):
         return [c for c in command if c]
 
     # ==================================================================
+    # Plain-text link import / export
+    # ==================================================================
+
+    def _import_links(self) -> None:
+        """One link per line, optionally "url | Format", reviewed before adding."""
+        from ytget_gui.dialogs.link_io import LinkImportDialog, parse_link_file
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Links",
+            str(self.settings.DOWNLOADS_DIR),
+            "Text files (*.txt *.text *.list *.csv);;All files (*)",
+        )
+        if not path:
+            return
+
+        try:
+            # errors="replace": a mojibake character is recoverable, a hard
+            # decode failure loses the whole file.
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            self.log(f"Could not read {path}: {exc}", AppStyles.ERROR_COLOR, "Error")
+            return
+
+        pairs, skipped = parse_link_file(text)
+        if not pairs:
+            QMessageBox.information(
+                self,
+                "Import Links",
+                "No links found in that file.\n\n"
+                "Expected one link per line. Lines starting with # are ignored.",
+            )
+            return
+
+        dialog = LinkImportDialog(
+            self,
+            pairs,
+            list(self.settings.RESOLUTIONS.keys()),
+            self.format_box.currentText(),
+            source=Path(path).name,
+            already_queued=[item.url for item in self.model.items],
+        )
+        if not dialog.exec():
+            return
+
+        added = 0
+        for label, urls in dialog.grouped().items():
+            added += self.enqueue_urls(urls, format_label=label)
+
+        summary = f"\U0001f4c4 Imported {added} link(s) from {Path(path).name}"
+        if skipped:
+            summary += f" ({skipped} line(s) were not links)"
+        self.log(summary, AppStyles.SUCCESS_COLOR if added else AppStyles.WARNING_COLOR)
+
+    def _export_links(self) -> None:
+        from ytget_gui.dialogs.link_io import LinkExportDialog
+
+        items = list(self.model.items)
+        if not items:
+            QMessageBox.information(self, "Export Links", "The queue is empty.")
+            return
+
+        selected = set(self._selected_urls())
+        counts = {
+            "all": len(items),
+            "selected": len([i for i in items if i.url in selected]),
+            "pending": len([i for i in items if i.status == Status.PENDING]),
+            "completed": len([i for i in items if i.status == Status.COMPLETED]),
+            "error": len([i for i in items if i.status == Status.ERROR]),
+        }
+
+        dialog = LinkExportDialog(self, counts, has_selection=bool(selected))
+        if not dialog.exec():
+            return
+
+        scope = dialog.scope
+        if scope == "selected":
+            chosen = [i for i in items if i.url in selected]
+        elif scope == "pending":
+            chosen = [i for i in items if i.status == Status.PENDING]
+        elif scope == "completed":
+            chosen = [i for i in items if i.status == Status.COMPLETED]
+        elif scope == "error":
+            chosen = [i for i in items if i.status == Status.ERROR]
+        else:
+            chosen = items
+
+        if not chosen:
+            QMessageBox.information(
+                self, "Export Links", "Nothing matches that selection."
+            )
+            return
+
+        suggested = str(Path(self.settings.DOWNLOADS_DIR) / "ytget-links.txt")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Links", suggested, "Text files (*.txt);;All files (*)"
+        )
+        if not path:
+            return
+        if not Path(path).suffix:
+            path += ".txt"
+
+        lines: List[str] = []
+        if dialog.include_header:
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            lines.append(f"# YTGet links - {len(chosen)} item(s) - {stamp}")
+            lines.append("# One link per line. Re-import with File > Import Links.")
+        for item in chosen:
+            if dialog.include_formats and item.format_label:
+                lines.append(f"{item.url} | {item.format_label}")
+            else:
+                lines.append(item.url)
+
+        try:
+            Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError as exc:
+            self.log(f"Could not write {path}: {exc}", AppStyles.ERROR_COLOR, "Error")
+            return
+
+        self.log(
+            f"\U0001f4e4 Exported {len(chosen)} link(s) to {path}",
+            AppStyles.SUCCESS_COLOR,
+        )
+
+    # ==================================================================
     # Window state / shutdown
     # ==================================================================
+
+    def _remember_geometry(self) -> None:
+        """Track the last real windowed geometry.
+
+        Qt only keeps a usable `saveGeometry()` while the window is visible and
+        normal. Hiding to the tray (especially via minimise, where the window is
+        already minimised by the time changeEvent fires) leaves a zero or
+        minimised rect behind, which is why a restored window came back at its
+        default size instead of the size it had when it was hidden.
+        """
+        if not self.isVisible() or self.isMinimized():
+            return
+        if self.isMaximized() or self.isFullScreen():
+            self._was_maximized = True
+            return
+        self._was_maximized = False
+        self._normal_geometry = self.geometry()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._remember_geometry()
+
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        self._remember_geometry()
+
+    def restore_window(self) -> None:
+        """Bring the window back exactly as it was before hiding to the tray."""
+        if self._was_maximized:
+            self.showMaximized()
+        else:
+            # showNormal() first: a hidden-while-minimised window keeps the
+            # minimised state flag, and setGeometry() on it is ignored.
+            self.showNormal()
+            geometry = self._normal_geometry
+            if geometry is not None and geometry.isValid():
+                self.setGeometry(geometry)
+        self.raise_()
+        self.activateWindow()
+        self._refresh_tray()
+
+    def hide_to_tray(self) -> None:
+        """Single entry point so geometry is always captured before hiding."""
+        self._remember_geometry()
+        self.hide()
+        self._refresh_tray()
 
     def _restore_geometry(self) -> None:
         store = QSettings(_version.ORG_NAME, _version.APP_NAME)
         geometry = store.value("main/geometry")
         if geometry:
             self.restoreGeometry(geometry)
+        rect = store.value("main/normalRect")
+        if rect:
+            try:
+                x, y, w, h = (int(v) for v in rect)
+                if w > 0 and h > 0:
+                    self._normal_geometry = QRect(x, y, w, h)
+            except (TypeError, ValueError):
+                pass
+        self._was_maximized = str(
+            store.value("main/maximized", False)
+        ).lower() in ("true", "1")
         state = store.value("main/windowState")
         if state:
             self.restoreState(state)
@@ -1428,9 +1882,33 @@ class MainWindow(QMainWindow):
         store.setValue("main/geometry", self.saveGeometry())
         store.setValue("main/windowState", self.saveState())
         store.setValue("main/splitSizes", self.splitter.sizes())
+        geometry = self._normal_geometry
+        if geometry is not None and geometry.isValid():
+            store.setValue(
+                "main/normalRect",
+                [
+                    geometry.x(),
+                    geometry.y(),
+                    geometry.width(),
+                    geometry.height(),
+                ],
+            )
+        store.setValue("main/maximized", self._was_maximized)
         store.sync()
 
     def closeEvent(self, event) -> None:
+        # Close-to-tray: keep running in the background instead of exiting.
+        # Only the tray's Exit action (or a real quit) sets _force_quit.
+        if (
+            not self._force_quit
+            and self.tray is not None
+            and self.settings.TRAY_CLOSE_TO_TRAY
+        ):
+            event.ignore()
+            self.hide_to_tray()
+            self._notify("YTGet is still running", "Reopen it from the tray icon.")
+            return
+
         if self.controller.is_running and self.settings.CONFIRM_ON_QUIT:
             answer = QMessageBox.question(
                 self,
@@ -1450,6 +1928,8 @@ class MainWindow(QMainWindow):
 
         self._console_timer.stop()
         self._filter_timer.stop()
+        if self.watcher is not None:
+            self.watcher.stop(announce=False)
 
         try:
             self._save_geometry()
@@ -1481,4 +1961,8 @@ class MainWindow(QMainWindow):
             self.setWindowTitle("YTGet — stopping background work…")
             QTimer.singleShot(200, self.close)
             return
+
+        if self.tray is not None:
+            self.tray.shutdown()
+            self.tray = None
         super().closeEvent(event)

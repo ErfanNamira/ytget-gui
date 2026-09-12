@@ -7,6 +7,7 @@ instantiating settings (which touches the filesystem).
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Iterable, List
 
@@ -18,6 +19,12 @@ PLAYLIST_FORMAT_CODES = frozenset({"playlist_mp3", "playlist_opus"})
 SPOTIFY_FORMAT_CODE = "spotify"
 
 _NO_HLS = "[protocol!*=m3u8]"
+
+# Module level: these were compiled inside the functions below, which run for
+# every preset build and every format resolution.
+_HEIGHT_CAP_RE = re.compile(r"\[height<=(\d+)\]")
+_WIDTH_CAP_RE = re.compile(r"\[width<=(\d+)\]")
+_HEIGHT_ANY_RE = re.compile(r"height(?:<=|=)(\d+)")
 
 
 def dedupe_chain(chain: str) -> str:
@@ -38,9 +45,8 @@ def ensure_best_fallback(fmt: str) -> str:
     parts = [p.strip() for p in fmt.split("/") if p.strip()]
     if not parts:
         return "best"
-    import re
-    caps = re.findall(r"\[height<=(\d+)\]", fmt)
-    widths = re.findall(r"\[width<=(\d+)\]", fmt)
+    caps = _HEIGHT_CAP_RE.findall(fmt)
+    widths = _WIDTH_CAP_RE.findall(fmt)
     cap = f"[height<={min(map(int, caps))}]" if caps else ""
     cap += f"[width<={min(map(int, widths))}]" if widths else ""
     fallback = "best" + cap
@@ -111,9 +117,7 @@ def audio_chain(base: str = "bestaudio") -> str:
 
 def heights_in(selector: str) -> List[int]:
     """Extract every height cap present in a resolved selector chain."""
-    import re
-
-    return [int(h) for h in re.findall(r"height(?:<=|=)(\d+)", selector or "")]
+    return [int(h) for h in _HEIGHT_ANY_RE.findall(selector or "")]
 
 
 def max_height_in(selector: str) -> int | None:

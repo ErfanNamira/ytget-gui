@@ -5,8 +5,6 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse, parse_qs, urlsplit
 
-_ANY_HTTP_URL_RE = re.compile(r"^https?://[^\s]+$", re.IGNORECASE)
-
 _YOUTUBE_HOSTS = (
     "youtube.com",
     "www.youtube.com",
@@ -20,13 +18,16 @@ _YOUTUBE_HOSTS = (
 
 _SPOTIFY_HOSTS = ("open.spotify.com", "spotify.com", "www.spotify.com")
 
-_TIME_RE = re.compile(r"^(?:\d+|(?:\d{1,3}:)?[0-5]?\d:[0-5]\d)$")
-_PLAYLIST_ITEMS_RE = re.compile(
-    r"^\s*\d+\s*(?:-\s*\d+\s*)?(?:\s*,\s*\d+\s*(?:-\s*\d+\s*)?)*\s*$"
-)
-_RATE_RE = re.compile(r"^\d+(?:\.\d+)?[KkMmGg]$")
 _DATE_RE = re.compile(r"^\d{8}$")
-_SUB_LANGS_RE = re.compile(r"^[A-Za-z]{2,3}(?:\s*,\s*[A-Za-z]{2,3})*$")
+
+# Pre-compiled because these run per keystroke in the Preferences dialogs and
+# per URL when a queue is imported. `re.fullmatch` re-parses the pattern text
+# on every call once the internal cache is evicted by other call sites.
+_ITEM_SINGLE_RE = re.compile(r"[1-9]\d*")
+_ITEM_RANGE_RE = re.compile(r"[1-9]\d*\s*-\s*[1-9]\d*")
+_ITEM_SLICE_RE = re.compile(r"-?\d*:-?\d*(?::-?\d*)?")
+_RATE_LIMIT_RE = re.compile(r"\d+(?:\.\d+)?[KkMmGgTtPpEeZzYy]?")
+_RATE_SUFFIX_RE = re.compile(r"[A-Za-z]$")
 
 
 def _host(text: str) -> str:
@@ -80,6 +81,7 @@ def is_spotify_url(text: str) -> bool:
 
 
 def is_short_video_url(text: str) -> bool:
+    text = (text or "").strip()
     return is_youtube_url(text) and urlparse(text).path.startswith("/shorts/")
 
 
@@ -118,14 +120,14 @@ def is_valid_playlist_items(text: str) -> bool:
         return True
     for part in t.split(","):
         part = part.strip()
-        if re.fullmatch(r"[1-9]\d*", part):
+        if _ITEM_SINGLE_RE.fullmatch(part):
             continue
-        if re.fullmatch(r"[1-9]\d*\s*-\s*[1-9]\d*", part):
+        if _ITEM_RANGE_RE.fullmatch(part):
             a, b = map(int, part.split("-"))
             if b < a:
                 return False
             continue
-        if not re.fullmatch(r"-?\d*:-?\d*(?::-?\d*)?", part):
+        if not _ITEM_SLICE_RE.fullmatch(part):
             return False
         bits = part.split(":")
         if any(v in ("-", "0") for v in bits[:2]):
@@ -137,7 +139,18 @@ def is_valid_playlist_items(text: str) -> bool:
 
 def is_valid_rate_limit(text: str) -> bool:
     t = (text or "").strip()
-    return not t or (bool(re.fullmatch(r"\d+(?:\.\d+)?[KkMmGgTtPpEeZzYy]?", t)) and float(re.sub(r"[A-Za-z]$", "", t)) > 0)
+    if not t:
+        return True
+    if not _RATE_LIMIT_RE.fullmatch(t):
+        return False
+    # A bare unit suffix ("K") leaves an empty numeric part, which float()
+    # raises on -- that surfaced as a crash in the Preferences validator
+    # rather than an inline "invalid" hint.
+    number = _RATE_SUFFIX_RE.sub("", t)
+    try:
+        return float(number) > 0
+    except ValueError:
+        return False
 
 
 def is_valid_dateafter(text: str) -> bool:

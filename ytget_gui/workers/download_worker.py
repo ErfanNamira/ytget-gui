@@ -18,8 +18,9 @@ import re
 import subprocess
 import threading
 import time
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 from PySide6.QtCore import QTimer, Signal
 
@@ -156,6 +157,11 @@ _AUDIO_EXTENSIONS = frozenset({".mp3", ".flac", ".opus", ".m4a", ".ogg"})
 # revision but never reached the command line -- the setting did nothing.
 _LOUDNORM_FILTER = "loudnorm=I=-14:TP=-1.5:LRA=11"
 
+# Characters of subprocess output retained for error condensing / retry
+# classification. Enough to hold a full yt-dlp traceback, small enough to be
+# irrelevant to the process footprint.
+_RECENT_OUTPUT_LIMIT = 8000
+
 
 class DownloadWorker(BaseDownloadWorker):
     """Runs one yt-dlp invocation, with transparent retries for transient errors."""
@@ -184,7 +190,21 @@ class DownloadWorker(BaseDownloadWorker):
 
         self._cmd: List[str] = []
         self._env: Dict[str, str] = {}
-        self._recent_output = ""
+        # Rolling tail of yt-dlp output, kept for error condensing and retry
+        # classification. Stored as chunks rather than one string: the previous
+        # `(self._recent_output + text)[-8000:]` rebuilt an 8 KiB string on
+        # every read from the subprocess (thousands of times per download),
+        # which is pure copying on the hottest path in the app.
+        self._recent_chunks: Deque[str] = deque()
+        self._recent_len = 0
+        # Declared here rather than being created on the fly inside
+        # _build_command()/_resolve_output(). Those assignments only happened
+        # on some branches, so readers such as _add_pp_args() and the
+        # track-number check could hit AttributeError depending on the format
+        # and URL combination.
+        self._pp_args: Dict[str, List[str]] = {}
+        self._flat_album_name = ""
+        self._name_template = ""
         self._attempt = 0
         self._max_attempts = max(0, int(getattr(settings, "AUTO_RETRY_COUNT", 3) or 0))
         self._started_at = 0.0
@@ -250,7 +270,7 @@ class DownloadWorker(BaseDownloadWorker):
             return
 
         self._cancel_poll.stop()
-        self._recent_output = ""
+        self._reset_recent()
         self._line_tail = ""
         self._decoder.reset()
         self._stream_index = 0
@@ -340,7 +360,7 @@ class DownloadWorker(BaseDownloadWorker):
         if not text:
             return
 
-        self._recent_output = (self._recent_output + text)[-8000:]
+        self._record_recent(text)
 
         # Split into complete lines so a progress record straddling two reads
         # is still matched, and progress records never reach the console.
@@ -594,6 +614,38 @@ class DownloadWorker(BaseDownloadWorker):
             self.emit_output(str(self._flat_playlist_dir), len(self._outputs))
 
         self.emit_finished(0)
+
+    # ------------------------------------------------------------------
+    # Recent-output tail
+    # ------------------------------------------------------------------
+
+    def _record_recent(self, text: str) -> None:
+        """Append to the bounded tail of subprocess output.
+
+        Amortised O(len(text)) instead of O(_RECENT_OUTPUT_LIMIT) per chunk.
+        """
+        self._recent_chunks.append(text)
+        self._recent_len += len(text)
+        # Keep at least one chunk so a single oversized chunk is still readable.
+        while self._recent_len > _RECENT_OUTPUT_LIMIT and len(self._recent_chunks) > 1:
+            self._recent_len -= len(self._recent_chunks.popleft())
+
+    def _reset_recent(self) -> None:
+        self._recent_chunks.clear()
+        self._recent_len = 0
+
+    @property
+    def _recent_output(self) -> str:
+        """The tail as one string, materialised only when actually needed
+        (error condensing and retry classification), not per read."""
+        if not self._recent_chunks:
+            return ""
+        if len(self._recent_chunks) > 1:
+            joined = "".join(self._recent_chunks)
+            self._recent_chunks.clear()
+            self._recent_chunks.append(joined)
+            self._recent_len = len(joined)
+        return self._recent_chunks[0]
 
     def _should_retry(self) -> bool:
         if self.cancelled or self._attempt >= self._max_attempts:

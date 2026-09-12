@@ -145,8 +145,19 @@ class BaseDownloadWorker(QObject):
 
     def _stop_log_timer(self) -> None:
         timer = self._log_timer
-        if timer is not None and timer.isActive():
+        if timer is None:
+            return
+        # Stop unconditionally and drop the reference: gating on isActive()
+        # left an inactive-but-connected timer attached to a worker that is
+        # about to be deleted, and a single-shot restart could revive flushing
+        # after the final flush_now().
+        self._log_timer = None
+        try:
             timer.stop()
+            timer.timeout.disconnect(self.flush)
+            timer.deleteLater()
+        except (RuntimeError, TypeError):
+            pass
 
     def add_log(self, text: str, colour: str = AppStyles.TEXT_COLOR) -> None:
         self._buffer.add(text, colour)

@@ -96,6 +96,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--version", action="store_true", help="print version and exit")
     parser.add_argument("--doctor", action="store_true", help="check dependencies and storage without opening the GUI")
     parser.add_argument("--verbose", "-v", action="store_true", help="debug logging")
+    parser.add_argument(
+        "--minimized",
+        action="store_true",
+        help="start hidden in the system tray (used by the startup entry)",
+    )
+    parser.add_argument(
+        "--delay",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help="wait before starting, so the network is ready at login",
+    )
     parser.add_argument("urls", nargs="*", help="URLs to enqueue on startup")
     return parser.parse_args(argv)
 
@@ -124,6 +136,13 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+
+    # Sleep before Qt starts: at login the network and the tray host
+    # are often not ready yet, and no window exists to look frozen.
+    if args.delay > 0:
+        import time
+
+        time.sleep(min(600, args.delay))
 
     app = QApplication(sys.argv)
     app.setApplicationName(_version.APP_NAME)
@@ -162,7 +181,15 @@ def main(argv: list[str] | None = None) -> int:
         log.exception("Startup failed")
         QMessageBox.critical(None, "YTGet could not start", f"{exc}\nRun python -m ytget_gui --doctor for dependency checks.")
         return 2
-    window.show()
+    if args.minimized and getattr(window, "tray", None) is not None \
+            and window.tray.available:
+        window.hide()
+    elif args.minimized:
+        # No tray host available, so a minimised window is the only
+        # way to stay reachable.
+        window.showMinimized()
+    else:
+        window.show()
 
     if args.urls:
         window.enqueue_urls(args.urls)
