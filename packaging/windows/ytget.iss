@@ -121,8 +121,8 @@ function IsAppRunning(): Boolean;
 var
   ResultCode: Integer;
 begin
-  { Overwriting a running exe fails mid-install with a confusing "file in
-    use" error, so check first. tasklist ships with every supported Windows. }
+  // Overwriting a running exe fails mid-install with a confusing "file in
+  // use" error, so check first. tasklist ships with every supported Windows.
   Result := False;
   if Exec(ExpandConstant('{cmd}'),
           '/C tasklist /FI "IMAGENAME eq {#AppExeName}" | find /I "{#AppExeName}" >nul',
@@ -160,9 +160,9 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataDir: String;
 begin
-  { Settings, cookies and the saved queue live in LOCALAPPDATA\YTGet,
-    outside {app}, so they survive an uninstall unless removed here.
-    Asked rather than assumed: a reinstall usually wants them kept. }
+  // Settings, cookies and the saved queue live in the per-user data folder,
+  // outside the install directory, so they survive an uninstall unless
+  // removed here. Asked, not assumed: a reinstall usually wants them kept.
   if CurUninstallStep = usPostUninstall then
   begin
     DataDir := ExpandConstant('{localappdata}\{#AppName}');

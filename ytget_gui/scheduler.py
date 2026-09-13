@@ -76,6 +76,12 @@ class Scheduler(QObject):
     def apply_settings(self) -> None:
         """Re-read settings; called after Preferences is saved."""
         if self.settings.SCHEDULER_ENABLED:
+            if self._timer.isActive():
+                # Times may have just been edited. Re-seed so a minute
+                # that is already in the past is not fired retroactively
+                # merely because Preferences was saved inside the
+                # catch-up window.
+                self._seed_fired()
             self.start()
         else:
             self.stop()

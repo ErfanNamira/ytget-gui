@@ -1019,11 +1019,21 @@ class PreferencesDialog(QDialog):
         return self._page(enable_card, format_card, sites_card)
 
     def _on_allowlist_toggled(self, _enabled: object = None) -> None:
-        # The per-site checkboxes only matter when unlisted sites are not
-        # queued unconditionally.
-        enabled = self.watcher_unlisted.currentIndex() != 0
+        # The list stays editable under every policy: ticking sites while
+        # unlisted links are queued automatically is how the list gets
+        # prepared before switching to Ask or Ignore. Only the hint
+        # changes, so no setting silently becomes unreachable.
+        applies = self.watcher_unlisted.currentIndex() != 0
+        hint = (
+            "Ticked sites are always captured; every other site follows "
+            "the Unlisted sites setting above."
+            if applies
+            else "Every site is captured right now, so these ticks only "
+            "take effect once Unlisted sites is set to Ask or Ignore."
+        )
         for widget in self._site_controls:
-            widget.setEnabled(enabled)
+            widget.setEnabled(True)
+            widget.setToolTip(hint)
 
     def _set_all_sites(self, checked: bool) -> None:
         for key, box in self.watcher_sites.items():

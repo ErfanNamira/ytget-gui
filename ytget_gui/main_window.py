@@ -122,6 +122,8 @@ class MainWindow(QMainWindow):
         # close-to-tray is on".
         self._force_quit = False
         self.tray: Optional[TrayController] = None
+        # Guards the modal unlisted-site prompt against re-entry.
+        self._unlisted_prompt_open = False
         self.watcher: Optional[ClipboardWatcher] = None
 
         self._title_thread: Optional[QThread] = None
@@ -1295,6 +1297,10 @@ class MainWindow(QMainWindow):
         elif not wanted and self.tray is not None:
             self.tray.shutdown()
             self.tray = None
+            # Without a tray icon a hidden window is unreachable, so it
+            # has to come back when the tray is switched off.
+            if not self.isVisible():
+                self.restore_window()
         self._refresh_tray()
 
     def _refresh_tray(self) -> None:
@@ -1413,8 +1419,7 @@ class MainWindow(QMainWindow):
             return
         added = self.enqueue_urls(urls)
         if added and self.watcher is not None:
-            for url in urls:
-                self.watcher._remember(url)
+            self.watcher.note_urls(urls)
 
     @Slot(bool)
     def _on_watcher_running(self, running: bool) -> None:
@@ -1463,16 +1468,30 @@ class MainWindow(QMainWindow):
         """
         if not batch:
             return
+        if self._unlisted_prompt_open:
+            # One dialog at a time: the watcher keeps polling while this
+            # one is modal. The links are not remembered, so copying them
+            # again asks properly.
+            log.debug("Unlisted prompt already open; dropping %d link(s)", len(batch))
+            return
+        if not self.isVisible():
+            # A modal dialog parented to a hidden window can end up with
+            # no visible owner, so surface the window first.
+            self.restore_window()
         hosts = list(dict.fromkeys(host_of(url) or url for url, _ in batch))
         preview = ", ".join(hosts[:5]) + ("\u2026" if len(hosts) > 5 else "")
-        answer = QMessageBox.question(
-            self,
-            "Queue links from an unlisted site?",
-            f"{len(batch)} copied link(s) come from sites that are not in "
-            f"your watcher list:\n\n{preview}\n\nQueue them?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
+        self._unlisted_prompt_open = True
+        try:
+            answer = QMessageBox.question(
+                self,
+                "Queue links from an unlisted site?",
+                f"{len(batch)} copied link(s) come from sites that are not in "
+                f"your watcher list:\n\n{preview}\n\nQueue them?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+        finally:
+            self._unlisted_prompt_open = False
         if answer != QMessageBox.Yes:
             self.log(
                 f"Skipped {len(batch)} link(s) from unlisted site(s).",

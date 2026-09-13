@@ -257,6 +257,16 @@ class ClipboardWatcher(QObject):
         for url in urls:
             self._remember(url)
 
+    def note_urls(self, urls: List[str]) -> None:
+        """Record links queued outside the watcher (paste and queue).
+
+        The clipboard baseline is re-synced as well, so the next poll
+        does not treat the text that was just handled as a new change.
+        """
+        for url in urls:
+            self._remember(url)
+        self._last_text = self._safe_text()
+
     def _check(self) -> None:
         if not self._running:
             return
