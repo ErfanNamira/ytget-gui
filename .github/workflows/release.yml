@@ -248,6 +248,7 @@ jobs:
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: bash
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           choco install innosetup --no-progress -y
@@ -277,13 +278,54 @@ jobs:
 
       - name: Verify Windows installer
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
+        timeout-minutes: 10
         run: |
-          set -euo pipefail
-          # /HELP exits 0 only for a well-formed Inno setup binary, which
-          # catches a truncated or non-executable output before release.
-          "./$SETUP_NAME" //HELP >/dev/null
-          ls -la "$SETUP_NAME"
+          $ErrorActionPreference = "Stop"
+          $setup = "$env:SETUP_NAME"
+          $item = Get-Item $setup
+          Write-Host "Installer: $($item.Name) ($([math]::Round($item.Length / 1MB, 1)) MB)"
+          if ($item.Length -lt 20MB) {
+            throw "Installer looks truncated: $($item.Length) bytes"
+          }
+
+          # Cheap sanity check that the compiler produced a real PE binary.
+          $head = [System.IO.File]::ReadAllBytes($item.FullName)[0..1]
+          if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) {
+            throw "Output is not a Windows executable"
+          }
+
+          # Real smoke test: install silently to a scratch folder, confirm the
+          # app landed, then uninstall. Never run the wizard interactively and
+          # never wait forever - a prompt would otherwise hang the whole job.
+          $dir = Join-Path $env:RUNNER_TEMP "ytget-smoke"
+          $log = Join-Path $env:RUNNER_TEMP "ytget-install.log"
+          $installArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", "/DIR=$dir", "/LOG=$log")
+          $proc = Start-Process -FilePath $item.FullName -ArgumentList $installArgs -PassThru
+          if (-not $proc.WaitForExit(240000)) {
+            $proc.Kill()
+            throw "Installer did not finish within 4 minutes"
+          }
+          if ($proc.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content $log -Tail 40 }
+            throw "Installer exited with code $($proc.ExitCode)"
+          }
+
+          $exe = Join-Path $dir "YTGet.exe"
+          if (-not (Test-Path $exe)) {
+            if (Test-Path $log) { Get-Content $log -Tail 40 }
+            throw "YTGet.exe was not installed"
+          }
+          Write-Host "Installed OK: $exe"
+
+          $uninstaller = Get-ChildItem -Path $dir -Filter "unins*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($uninstaller) {
+            $un = Start-Process -FilePath $uninstaller.FullName -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru
+            if (-not $un.WaitForExit(240000)) { $un.Kill() }
+            Write-Host "Uninstaller ran (exit $($un.ExitCode))"
+          } else {
+            Write-Warning "No uninstaller found in $dir"
+          }
 
       - name: Generate SHA-256 checksum
         shell: bash

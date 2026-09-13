@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://erfannamira.github.io/ytget-gui/sitemap.xml
