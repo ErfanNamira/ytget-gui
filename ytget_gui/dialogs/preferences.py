@@ -151,7 +151,7 @@ class PreferencesDialog(QDialog):
 
         self.setWindowTitle("Preferences")
         self.setModal(True)
-        self.setMinimumSize(980, 700)
+        self.setMinimumSize(980, 710)
         self.setSizeGripEnabled(True)
         self.setStyleSheet(ui.dialog_qss())
 

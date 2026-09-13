@@ -300,8 +300,8 @@ jobs:
           # never wait forever - a prompt would otherwise hang the whole job.
           $dir = Join-Path $env:RUNNER_TEMP "ytget-smoke"
           $log = Join-Path $env:RUNNER_TEMP "ytget-install.log"
-          $installArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", "/DIR=$dir", "/LOG=$log")
-          $proc = Start-Process -FilePath $item.FullName -ArgumentList $installArgs -PassThru
+          $args = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", "/DIR=$dir", "/LOG=$log")
+          $proc = Start-Process -FilePath $item.FullName -ArgumentList $args -PassThru
           if (-not $proc.WaitForExit(240000)) {
             $proc.Kill()
             throw "Installer did not finish within 4 minutes"
