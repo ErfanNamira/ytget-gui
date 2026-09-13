@@ -56,7 +56,9 @@ def _open_fallback(path: Path) -> bool:
             os.startfile(str(path))  # noqa: S606 - the documented Windows API
             return True
         command = ["open"] if sys.platform == "darwin" else ["xdg-open"]
-        subprocess.Popen([*command, str(path)], **_hidden_kwargs())
+        # No _hidden_kwargs() here either: these launch the user's own
+        # viewer, which must be visible.
+        subprocess.Popen([*command, str(path)])
         return True
     except (OSError, AttributeError) as exc:
         log.debug("Fallback open failed for %s: %s", path, exc)
@@ -78,9 +80,18 @@ def reveal_path(target: Optional[PathLike]) -> bool:
 
     try:
         if sys.platform == "win32":
+            # Explorer needs the path quoted *inside* the /select, token, so
+            # this is passed as a command string rather than an argument
+            # list: list quoting wraps the whole "/select,C:\\a b\\f.mp4"
+            # token, which Explorer reads as a folder name and ignores.
+            #
+            # _hidden_kwargs() is deliberately NOT used: its SW_HIDE applies
+            # to the first window the process creates, so the Explorer window
+            # itself opened hidden and the command looked like a no-op.
+            #
             # explorer returns exit code 1 even on success, so the return code
             # is deliberately not checked.
-            subprocess.Popen(["explorer", f"/select,{resolved}"], **_hidden_kwargs())
+            subprocess.Popen(f'explorer /select,"{resolved}"')
             return True
         if sys.platform == "darwin":
             subprocess.Popen(["open", "-R", resolved])

@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from ytget_gui.queue.model import QueueItem, Status
-from ytget_gui.utils.text import clamp
+from ytget_gui.utils.text import clamp, human_bytes
 
 __all__ = ["QueueCard"]
 
@@ -87,6 +87,7 @@ class QueueCard(QFrame):
     def __init__(self, item: QueueItem, parent=None) -> None:
         super().__init__(parent)
         self.url = item.url
+        self.key = item.key
 
         self.setObjectName("QueueCard")
         self.setFrameShape(QFrame.StyledPanel)
@@ -212,7 +213,7 @@ class QueueCard(QFrame):
         self.play_btn.setVisible(False)
         right.addWidget(self.play_btn, 0, Qt.AlignRight)
 
-        self.play_btn.clicked.connect(lambda: self.open_requested.emit(self.url))
+        self.play_btn.clicked.connect(lambda: self.open_requested.emit(self.key))
 
         right.addStretch(1)
         root.addLayout(right)
@@ -220,7 +221,7 @@ class QueueCard(QFrame):
         self.more_btn.clicked.connect(self._open_menu_at_button)
         # The delete button previously only emitted a signal nothing was
         # connected to, so clicking it did nothing at all.
-        self.btn_delete.clicked.connect(lambda: self.removed.emit(self.url))
+        self.btn_delete.clicked.connect(lambda: self.removed.emit(self.key))
 
         # Right-click anywhere works even when the window is narrow enough that
         # the icon buttons get squeezed out of the layout.
@@ -234,6 +235,7 @@ class QueueCard(QFrame):
     def update_from(self, item: QueueItem) -> None:
         """Refresh every field from the model. Cheap when nothing changed."""
         self.url = item.url
+        self.key = item.key
         self._set_title(item.display_title)
         self._set_status(item.status)
         self._set_progress(item.progress)
@@ -263,7 +265,7 @@ class QueueCard(QFrame):
 
     def mouseDoubleClickEvent(self, event) -> None:
         if self._playable:
-            self.open_requested.emit(self.url)
+            self.open_requested.emit(self.key)
         super().mouseDoubleClickEvent(event)
 
     def set_thumbnail_path(self, path: str) -> None:
@@ -313,6 +315,11 @@ class QueueCard(QFrame):
             parts.append(item.stage)
         if item.format_label:
             parts.append(item.format_label)
+        # Right after the format, which is what the size belongs to.
+        # Playlists are skipped: their total is unknown without one
+        # metadata fetch per entry.
+        if item.filesize and not item.is_playlist:
+            parts.append(f"~{human_bytes(item.filesize)}")
         duration = _format_duration(item.duration)
         if duration:
             parts.append(duration)
@@ -368,7 +375,7 @@ class QueueCard(QFrame):
         menu.setAttribute(Qt.WA_DeleteOnClose)
 
         actions = self._context_actions or [
-            ("Remove", lambda: self.removed.emit(self.url))
+            ("Remove", lambda: self.removed.emit(self.key))
         ]
         for label, callback in actions:
             # Deferred to the next event-loop turn. These callbacks can rebuild

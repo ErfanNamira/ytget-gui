@@ -18,6 +18,12 @@ from ytget_gui.utils.validators import is_supported_url
 
 log = logging.getLogger(__name__)
 
+# Settings keys an individual queue item may override. Everything else is
+# global by design; these are the "for this download only" options.
+ITEM_OPTION_KEYS = frozenset(
+    {"CLIP_START", "CLIP_END", "PLAYLIST_ITEMS", "PLAYLIST_REVERSE"}
+)
+
 
 class Status(str, Enum):
     PENDING = "Pending"
@@ -62,11 +68,33 @@ class QueueItem:
     is_playlist: bool = False
     duration: Optional[float] = None
     uploader: str = ""
+    # Approximate download size in bytes (video + merged audio), or None
+    # when the site does not advertise one. Never set for playlists.
+    filesize: Optional[int] = None
     queue_attempts: int = 0
     last_error: str = ""
     added_at: float = field(default_factory=time.time)
     output_path: str = ""
     output_count: int = 0
+    # Quality tag appended to the output filename when another item for
+    # the same URL already targets the same container, e.g. "QHD".
+    # Empty for the first item of a URL, which keeps the default naming.
+    name_suffix: str = ""
+    # Per-item settings overrides captured when the item was added (clip
+    # range, playlist selection). Applied on top of the settings snapshot
+    # handed to the worker, so changing Advanced later -- or adding a
+    # second item -- cannot retroactively re-cut an item already queued.
+    options: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def key(self) -> str:
+        """Queue identity: the same URL may be queued in several formats.
+
+        Everything that used to be keyed by URL (the model index, the card
+        map, the list rows, the controller signals) is keyed by this, so
+        adding 1080p and MP3 of one video gives two independent rows.
+        """
+        return f"{self.url}\n{self.format_code}"
 
     @property
     def display_title(self) -> str:
@@ -123,6 +151,9 @@ class QueueItem:
             "added_at": self.added_at,
             "output_path": self.output_path,
             "output_count": self.output_count,
+            "filesize": self.filesize,
+            "name_suffix": self.name_suffix,
+            "options": dict(self.options),
         }
 
     @classmethod
@@ -169,7 +200,31 @@ class QueueItem:
             added_at=as_float(data.get("added_at"), time.time()),
             output_path=str(data.get("output_path") or ""),
             output_count=max(0, as_int(data.get("output_count"))),
+            filesize=cls._parse_size(data.get("filesize")),
+            name_suffix=str(data.get("name_suffix") or "")[:40].strip(),
+            options=cls._parse_options(data.get("options")),
         )
+
+    @staticmethod
+    def _parse_size(raw: Any) -> Optional[int]:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        return int(raw) if raw > 0 else None
+
+    @staticmethod
+    def _parse_options(raw: Any) -> Dict[str, Any]:
+        """Only known override keys with scalar values are accepted.
+
+        queue.json is user-editable and survives upgrades, so an arbitrary
+        dict here would be setattr'd straight onto the settings snapshot.
+        """
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            key: value
+            for key, value in raw.items()
+            if key in ITEM_OPTION_KEYS and isinstance(value, (str, int, float, bool))
+        }
 
 
 class QueueModel:
@@ -182,7 +237,11 @@ class QueueModel:
 
     def __init__(self, path: Optional[Path] = None) -> None:
         self._items: List[QueueItem] = []
+        # Keyed by QueueItem.key (url + format), not by URL.
         self._index: Dict[str, QueueItem] = {}
+        # Secondary index: metadata and thumbnail fetches are per URL and
+        # have to fan out to every format queued for that URL.
+        self._by_url: Dict[str, List[QueueItem]] = {}
         self.path = Path(path) if path else None
 
     # -- container protocol -------------------------------------------
@@ -202,11 +261,28 @@ class QueueModel:
 
     # -- lookup --------------------------------------------------------
 
-    def get(self, url: str) -> Optional[QueueItem]:
-        return self._index.get(url)
+    def get(self, token: str) -> Optional[QueueItem]:
+        """Look up by item key, falling back to a bare URL.
 
-    def contains(self, url: str) -> bool:
-        return url in self._index
+        The URL fallback keeps older callers (and a queue.json written by a
+        previous build) working; it resolves to the first format queued
+        for that URL.
+        """
+        item = self._index.get(token)
+        if item is not None:
+            return item
+        bucket = self._by_url.get(token)
+        return bucket[0] if bucket else None
+
+    def items_for_url(self, url: str) -> List[QueueItem]:
+        """Every queued format of one URL, in queue order."""
+        return list(self._by_url.get(url, ()))
+
+    def contains(self, token: str) -> bool:
+        return token in self._index or token in self._by_url
+
+    def contains_url(self, url: str) -> bool:
+        return url in self._by_url
 
     def index_of(self, item: QueueItem) -> int:
         # Identity, not equality. QueueItem is a mutable dataclass, so two
@@ -220,16 +296,25 @@ class QueueModel:
     # -- mutation ------------------------------------------------------
 
     def add(self, item: QueueItem) -> bool:
-        if item.url in self._index:
+        # Same URL *and* same format is a duplicate; same URL in a
+        # different format is a separate download.
+        if item.key in self._index:
             return False
         self._items.append(item)
-        self._index[item.url] = item
+        self._index[item.key] = item
+        self._by_url.setdefault(item.url, []).append(item)
         return True
 
-    def remove(self, url: str) -> Optional[QueueItem]:
-        item = self._index.pop(url, None)
+    def remove(self, token: str) -> Optional[QueueItem]:
+        item = self.get(token)
         if item is None:
             return None
+        self._index.pop(item.key, None)
+        bucket = self._by_url.get(item.url)
+        if bucket is not None:
+            self._by_url[item.url] = [i for i in bucket if i is not item]
+            if not self._by_url[item.url]:
+                del self._by_url[item.url]
         position = self.index_of(item)
         if position >= 0:
             del self._items[position]
@@ -238,6 +323,7 @@ class QueueModel:
     def clear(self) -> None:
         self._items.clear()
         self._index.clear()
+        self._by_url.clear()
 
     def replace_all(self, items: Iterable[QueueItem]) -> None:
         self.clear()
@@ -251,13 +337,14 @@ class QueueModel:
         del self._items[position]
         self._items.append(item)
 
-    def move_many(self, urls: Sequence[str], *, to_top: bool, after: int = 0) -> None:
-        """Move the given URLs as a block.
+    def move_many(self, keys: Sequence[str], *, to_top: bool, after: int = 0) -> None:
+        """Move the given item keys as a block.
 
         `after` reserves leading slots (used to keep the in-progress item at the
         head when the user sends a selection to the top).
         """
-        wanted = [self._index[u] for u in dict.fromkeys(urls) if u in self._index]
+        resolved = (self.get(k) for k in dict.fromkeys(keys))
+        wanted = [item for item in resolved if item is not None]
         if not wanted:
             return
         keys = {id(i) for i in wanted}
@@ -269,17 +356,17 @@ class QueueModel:
         else:
             self._items = rest + wanted
 
-    def reorder_by_urls(self, urls: Sequence[str]) -> None:
-        """Apply a visual order. Items missing from `urls` keep relative order
+    def reorder_by_keys(self, keys: Sequence[str]) -> None:
+        """Apply a visual order. Items missing from `keys` keep relative order
         at the end, so a filtered view can never silently drop entries."""
-        seen: set[str] = set()
+        seen: set[int] = set()
         ordered: List[QueueItem] = []
-        for url in urls:
-            item = self._index.get(url)
-            if item is not None and url not in seen:
+        for key in keys:
+            item = self.get(key)
+            if item is not None and id(item) not in seen:
                 ordered.append(item)
-                seen.add(url)
-        ordered.extend(i for i in self._items if i.url not in seen)
+                seen.add(id(item))
+        ordered.extend(i for i in self._items if id(i) not in seen)
         self._items = ordered
 
     def sort_by(self, key: str) -> None:

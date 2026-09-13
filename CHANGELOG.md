@@ -1,7 +1,131 @@
 ### v 2.8.0
 
-System tray, clipboard watcher, scheduler, run-at-login, and plain-text link
-import/export.
+System tray, clipboard watcher, scheduler, run-at-login, plain-text link
+import/export, a Windows installer, per-item advanced options, several
+formats of one link in the queue, download-size estimates, an unlisted-site
+policy, and a faster cold start.
+
+#### Windows installer
+
+- Added `packaging/windows/ytget.iss`, an Inno Setup 6 script that builds
+  `YTGet-<version>-windows-setup.exe`.
+- Installs per user (`PrivilegesRequired=lowest`), so no UAC prompt is needed,
+  with optional desktop and run-at-login shortcuts and a proper uninstaller.
+- The release workflow now builds, verifies and checksums the installer
+  alongside the existing ZIP and 7z assets. The debug workflow builds it too,
+  so it can be tested before tagging.
+
+#### Queue
+
+- The same link can now be queued in several formats at once. Queue identity
+  moved from the URL to url+format, so 1080p and MP3 of one video are two
+  independent rows; only an identical url+format pair is refused as a
+  duplicate.
+- Metadata and thumbnails are still fetched once per URL and fanned out to
+  every format of it. A newly added format immediately inherits the title and
+  thumbnail a sibling row already has.
+- Removing one format keeps the other row's thumbnail and in-flight metadata
+  fetch alive; the cached image is only deleted when no row for that URL is
+  left.
+- Each card now shows the estimated download size next to the format, for
+  example `YouTube 1440p QHD  ·  ~1.24 GiB`. The estimate reuses the metadata
+  JSON that is already fetched, so no extra yt-dlp call is made: the largest
+  stream for the selected height plus the best audio-only stream, or audio
+  alone for audio presets. Sites that only publish progressive streams are not
+  double-counted, and a bitrate x duration fallback is used when no size is
+  advertised. Playlists show no size.
+- Duration and uploader are now shown on the card. Both were parsed and then
+  dropped, because the metadata signal had no room for them.
+- The format label is now part of the row search text.
+- Added `ytget_gui/naming.py`. A second format of the same URL keeps the
+  default `%(title)s.%(ext)s` naming unless it would land on the same
+  container as an item already queued for that URL; in that case the
+  quality tag is appended, e.g. `Title QHD.mkv` next to `Title.mkv`.
+  Different containers (`.mkv` and `.mp3`) cannot collide, so neither is
+  renamed. Tags come from the format label, with a numeric suffix as the
+  last resort, so no two rows can target one path.
+- The download archive is skipped for such an item. The URL is already
+  recorded from the first format, so with `ENABLE_ARCHIVE` on yt-dlp would
+  otherwise refuse the second quality as "already recorded".
+- Queue cards now carry the queue key rather than the URL, so removing,
+  opening, retrying or revealing the second format of a URL no longer acts
+  on the first one.
+
+#### Advanced options are per item
+
+- Clip start/end, playlist item selection and reverse order now apply only to
+  the items added while they are set, instead of being written to the shared
+  settings and silently applying to every item in the queue.
+- Pending overrides are stamped onto each queue item as it is added and applied
+  to that item's settings snapshot at download time.
+- The Advanced button shows a dot and a tooltip listing what is armed.
+- Persisted overrides are whitelisted and type-checked on load, so a
+  hand-edited `queue.json` cannot inject arbitrary settings.
+
+#### Unlisted sites
+
+- Replaced the "only known sites" switch with an explicit policy in
+  **Preferences → Watcher**: queue unlisted sites automatically (the default),
+  ask first, or ignore them.
+- On "ask", the watcher reports the hosts involved and nothing is queued until
+  it is confirmed.
+- The old boolean is still honoured on upgrade: `true` becomes "ignore".
+
+#### Performance
+
+- Faster cold start: the Preferences, About, Update Manager and Advanced
+  dialogs and the cover-crop worker are no longer imported before the first
+  paint, and the clipboard watcher, scheduler, tray setup and the environment
+  probe (which shells out to yt-dlp and ffmpeg) now run on the first idle tick
+  instead of inside the window constructor.
+- The queue list is patched in place on add and remove instead of destroying
+  and re-creating every card on each queue change.
+- Row lookups use an index instead of a linear scan on every progress tick and
+  thumbnail callback.
+- Search text is memoised per row, so filtering a long queue is no longer
+  quadratic in keystrokes.
+
+#### Album art
+
+- Covers are now cropped to 1:1 as each item finishes downloading instead
+  of in one pass at the end of the queue. Stopping the queue no longer
+  leaves already-downloaded audio uncropped.
+- Only the files that item produced are opened, rather than rescanning the
+  whole downloads folder on every run.
+- Items finishing while a pass is still running are queued behind it, so
+  two threads can never rewrite the same tags at once. A pending power
+  action still waits for cropping to finish.
+
+#### Fixed
+
+- The size estimate never appeared: `main_window` called
+  `formats.estimate_download_size()` without importing `formats`, so every
+  metadata callback raised `NameError` before the size was stored. The
+  metadata signal payload was also built through an unimported helper in
+  `title_fetch_manager`.
+- Items restored from a queue saved by an older build carry no size. The
+  unfinished ones now get a background details refresh at start-up, so
+  sizes appear for an existing queue instead of only for new additions.
+- Installer: the exe was listed twice in `[Files]`; an upgrade kept the
+  previous build's `_internal` tree, which can crash the app with mixed Qt
+  DLLs; an uninstall left YTGet's own run-at-login registry value behind;
+  and `x64compatible` is now guarded for Inno Setup below 6.3. Uninstall
+  also offers to delete the per-user profile in `%LOCALAPPDATA%\YTGet`.
+- The release workflow excluded the versioned installer from the uploaded
+  assets while the notes linked to exactly that filename, so the installer
+  download 404'd.
+- **Show in folder** did nothing on Windows. Explorer was launched with a
+  hidden-window flag and with `/select,` quoted as a separate argument, which
+  Explorer rejects. It is now invoked correctly, and the hidden-window flag was
+  also removed from the `open`/`xdg-open` fallbacks.
+- Removing an item from the queue left its thumbnail on screen. `takeItem()`
+  dropped the list row but left the card widget, and its pixmap, parented to
+  the viewport. Rows now free their widget, and the cached image file is
+  purged.
+- A metadata fetch that finished after its item was removed could re-create the
+  deleted card. Pending fetches are now cancelled on removal.
+- `utils.text.short()` could return a string longer than the requested limit.
+- Open-ended playlist ranges such as `5:` and `:3` were rejected as invalid.
 
 #### System tray
 
@@ -23,7 +147,7 @@ import/export.
 
 - Added `ytget_gui/watcher.py`: captures supported links from the clipboard and
   queues them automatically.
-- Added `ytget_gui/sites.py` with 40 popular yt-dlp-supported sites and
+- Added `ytget_gui/sites.py` with 76 recognised yt-dlp-supported sites and
   host-suffix matching, so a URL that merely mentions `youtube.com` in a query
   string is never misclassified.
 - Added a Watcher page in Preferences: enable/disable, poll interval,

@@ -15,17 +15,25 @@ class ShortTests(unittest.TestCase):
         self.assertLessEqual(len(result), 8)
         self.assertTrue(result.endswith("..."))
 
+    def test_limit_shorter_than_the_suffix(self):
+        self.assertEqual(text_utils.short("abcdef", 2), "ab")
+
     def test_handles_empty(self):
         self.assertEqual(text_utils.short("", 5), "")
 
 
 class ClampTests(unittest.TestCase):
-    def test_within_range(self):
-        self.assertEqual(text_utils.clamp(5, 0, 10), 5)
+    # clamp() shortens label text with a single-character ellipsis; it is
+    # not the numeric clamp the original tests assumed.
+    def test_leaves_short_text_alone(self):
+        self.assertEqual(text_utils.clamp("hello", 10), "hello")
 
-    def test_below_and_above(self):
-        self.assertEqual(text_utils.clamp(-1, 0, 10), 0)
-        self.assertEqual(text_utils.clamp(99, 0, 10), 10)
+    def test_truncates_to_limit_plus_ellipsis(self):
+        result = text_utils.clamp("abcdefghijklmnop", 8)
+        self.assertEqual(result, "abcdefgh\u2026")
+
+    def test_handles_empty(self):
+        self.assertEqual(text_utils.clamp("", 5), "")
 
 
 class WhitespaceTests(unittest.TestCase):
@@ -61,7 +69,9 @@ class UrlDigestTests(unittest.TestCase):
 class HumanBytesTests(unittest.TestCase):
     def test_scales_units(self):
         self.assertIn("B", text_utils.human_bytes(512))
-        self.assertIn("KB", text_utils.human_bytes(2048).upper())
+        # Binary units: 2048 bytes is 2.0 KiB.
+        self.assertIn("KIB", text_utils.human_bytes(2048).upper())
+        self.assertIn("MIB", text_utils.human_bytes(5 * 1024 * 1024).upper())
 
     def test_zero(self):
         self.assertTrue(text_utils.human_bytes(0))

@@ -14,7 +14,7 @@ from ytget_gui.workers import fetch_core
 class TitleFetcher(QObject):
     """Signals mirror TitleFetchQueue so either can drive the same UI slots."""
 
-    metadata_fetched = Signal(str, str, str, str, bool)
+    metadata_fetched = Signal(str, object)   # url, payload dict
     title_fetched = Signal(str, str)
     error = Signal(str, str)
     finished = Signal()
@@ -65,9 +65,7 @@ class TitleFetcher(QObject):
                 return
 
             md = result.metadata
-            self.metadata_fetched.emit(
-                self.url, md.title, md.video_id, md.thumb_url, md.is_playlist
-            )
+            self.metadata_fetched.emit(self.url, fetch_core.metadata_payload(md))
             self.title_fetched.emit(self.url, md.title)
         except Exception as exc:  # noqa: BLE001 - guarantee `finished` fires
             self.error.emit(self.url, f"Unexpected error: {exc}")

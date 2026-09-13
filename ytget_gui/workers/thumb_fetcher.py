@@ -122,6 +122,11 @@ def canonical_watch_url(url: str) -> str:
     return url or ""
 
 
+def cache_stem(url: str) -> str:
+    """Cache filename stem for a URL, mirroring ThumbFetcher's naming."""
+    return cache_key(extract_video_id(url) or url_digest(url))
+
+
 class ThumbFetcher(QObject):
     """Fetch and cache one thumbnail.
 
@@ -620,6 +625,34 @@ class ThumbManager(QObject):
             self._executor.shutdown(wait=False, cancel_futures=True)
         except TypeError:  # pragma: no cover - Python < 3.9
             self._executor.shutdown(wait=False)
+
+    def purge(self, url: str, thumb_path: str = "") -> None:
+        """Cancel any fetch for `url` and delete its cached image.
+
+        Removing a queue item previously left the downloaded thumbnail on
+        disk forever, so the cache grew without bound across sessions and a
+        re-added URL still showed a stale image. Cancelling first also stops
+        an in-flight fetch from writing the file back after deletion.
+        """
+        if not url:
+            return
+        self.cancel(url)
+
+        targets = []
+        if thumb_path:
+            targets.append(Path(thumb_path))
+        stem = cache_stem(url)
+        targets.extend(self.cache_dir / f"{stem}{ext}" for ext in _IMAGE_EXTENSIONS)
+
+        for target in targets:
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError) as exc:
+                # A Windows AV scanner or a still-open handle can hold the
+                # file briefly; losing one cache file is not worth an error.
+                log.debug("Could not delete cached thumbnail %s: %s", target, exc)
 
     def _run_one(self, url: str) -> None:
         fetcher = ThumbFetcher(url, self.cache_dir, self.settings)

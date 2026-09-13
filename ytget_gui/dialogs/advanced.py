@@ -31,9 +31,18 @@ _ITEMS_HINT = "Indices and ranges, e.g. 1, 3-5, 10"
 class AdvancedOptionsDialog(QDialog):
     """Esc cancels, Ctrl+Enter saves, Alt+R resets."""
 
-    def __init__(self, parent: Optional[QWidget], settings: AppSettings) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget],
+        settings: AppSettings,
+        overrides: Optional[Dict[str, object]] = None,
+    ) -> None:
         super().__init__(parent)
         self.settings = settings
+        # These options apply to the items added next, not to the whole
+        # queue, so the fields are seeded from the window's pending set
+        # rather than from persisted settings.
+        self._overrides = dict(overrides or {})
 
         self.setWindowTitle("Advanced")
         self.setModal(True)
@@ -54,7 +63,9 @@ class AdvancedOptionsDialog(QDialog):
 
         title = QLabel("Advanced options")
         title.setObjectName("dlgTitle")
-        subtitle = QLabel("Clip extraction and playlist selection for the next run")
+        subtitle = QLabel(
+            "Clip extraction and playlist selection for the items you add next"
+        )
         subtitle.setObjectName("dlgSubtitle")
         root.addWidget(title)
         root.addWidget(subtitle)
@@ -109,7 +120,8 @@ class AdvancedOptionsDialog(QDialog):
             ui.card(
                 playlist_body,
                 title="Playlist",
-                subtitle="Applies to every playlist URL in the queue.",
+                subtitle="Applies to the playlist items you add next, not to "
+                "items already in the queue.",
             )
         )
 
@@ -143,11 +155,16 @@ class AdvancedOptionsDialog(QDialog):
 
     # ------------------------------------------------------------------
 
+    def _value(self, key: str, default: object = "") -> object:
+        if key in self._overrides:
+            return self._overrides[key]
+        return getattr(self.settings, key, default)
+
     def _load(self) -> None:
-        self.clip_start.setText(str(getattr(self.settings, "CLIP_START", "") or ""))
-        self.clip_end.setText(str(getattr(self.settings, "CLIP_END", "") or ""))
-        self.playlist_items.setText(str(getattr(self.settings, "PLAYLIST_ITEMS", "") or ""))
-        self.playlist_reverse.setChecked(bool(getattr(self.settings, "PLAYLIST_REVERSE", False)))
+        self.clip_start.setText(str(self._value("CLIP_START") or ""))
+        self.clip_end.setText(str(self._value("CLIP_END") or ""))
+        self.playlist_items.setText(str(self._value("PLAYLIST_ITEMS") or ""))
+        self.playlist_reverse.setChecked(bool(self._value("PLAYLIST_REVERSE", False)))
 
     def _reset(self) -> None:
         self.clip_start.clear()

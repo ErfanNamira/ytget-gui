@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
-from typing import Iterable, List
+from typing import Iterable, List, Mapping, Optional
 
 # Audio-only pseudo-codes used by the UI; resolved by the download worker.
 AUDIO_FORMAT_CODES = frozenset(
@@ -160,6 +160,34 @@ def build_resolution_presets() -> dict[str, str]:
     presets["\U0001F3B8 Spotify (via SpotDL)"] = SPOTIFY_FORMAT_CODE
 
     return presets
+
+
+def estimate_download_size(
+    video_sizes: Optional[Mapping[int, int]],
+    audio_size: Optional[int],
+    format_code: str,
+) -> Optional[int]:
+    """Approximate bytes for `format_code`, or None when unknown.
+
+    Audio-only presets return the audio stream alone; video presets return
+    the best height within the preset's cap plus the audio track that gets
+    merged with it. Sites that only publish progressive streams report no
+    audio-only format, and those sizes already include the audio.
+    """
+    if is_audio_code(format_code):
+        return audio_size
+    if not video_sizes:
+        return None
+    cap = max_height_in(format_code)
+    heights = [h for h in video_sizes if cap is None or h <= cap]
+    if not heights:
+        # Everything available is above the cap; the smallest is what
+        # yt-dlp's `best` fallback would end up taking.
+        heights = [min(video_sizes)]
+    total = video_sizes[max(heights)]
+    if audio_size:
+        total += audio_size
+    return total or None
 
 
 def is_audio_code(code: str | None) -> bool:

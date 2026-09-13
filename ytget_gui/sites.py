@@ -1,10 +1,11 @@
 # File: ytget_gui/sites.py
-"""Popular yt-dlp supported sites, used by the clipboard watcher.
+"""The watcher's site list.
 
 yt-dlp supports well over a thousand extractors, so this is deliberately a
 curation rather than an attempt at completeness: the watcher only needs a
 user-facing allowlist for "other" links, and a thousand checkboxes would be
-unusable. Anything missing can still be accepted by turning the allowlist off.
+unusable. Anything missing is still handled by the Unlisted sites policy,
+so a site absent from here can still be captured.
 """
 
 from __future__ import annotations
@@ -13,8 +14,9 @@ from typing import Dict, Sequence, Tuple
 from urllib.parse import urlsplit
 
 # (key, label, domains). `key` is what is persisted, so labels can be
-# reworded without invalidating a saved configuration.
-POPULAR_SITES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
+# reworded and the list can grow without invalidating a saved
+# configuration.
+SITES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     ("youtube", "YouTube", ("youtube.com", "youtu.be", "youtube-nocookie.com")),
     ("ytmusic", "YouTube Music", ("music.youtube.com",)),
     ("spotify", "Spotify", ("spotify.com",)),
@@ -55,7 +57,47 @@ POPULAR_SITES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     ("rutube", "Rutube", ("rutube.ru",)),
     ("archive", "Internet Archive", ("archive.org",)),
     ("crunchyroll", "Crunchyroll", ("crunchyroll.com",)),
+    ("steam", "Steam", ("steampowered.com", "steamcommunity.com")),
+    ("patreon", "Patreon", ("patreon.com",)),
+    ("vevo", "Vevo", ("vevo.com",)),
+    ("nebula", "Nebula", ("nebula.tv",)),
+    ("bitchute", "BitChute", ("bitchute.com",)),
+    ("threads", "Threads", ("threads.net", "threads.com")),
+    ("snapchat", "Snapchat", ("snapchat.com",)),
+    ("telegram", "Telegram", ("t.me", "telegram.me")),
+    ("twitcasting", "TwitCasting", ("twitcasting.tv",)),
+    ("9gag", "9GAG", ("9gag.com",)),
+    ("googledrive", "Google Drive", ("drive.google.com",)),
+    ("dropbox", "Dropbox", ("dropbox.com",)),
+    ("applepodcasts", "Apple Podcasts", ("podcasts.apple.com",)),
+    ("aparat", "Aparat", ("aparat.com",)),
+    ("telewebion", "Telewebion", ("telewebion.com",)),
+    ("naver", "Naver TV", ("naver.com", "naver.me")),
+    ("kakao", "Kakao TV", ("kakao.com",)),
+    ("soop", "SOOP / AfreecaTV", ("sooplive.co.kr", "afreecatv.com")),
+    ("youku", "Youku", ("youku.com",)),
+    ("iqiyi", "iQIYI", ("iqiyi.com", "iq.com")),
+    ("zingmp3", "Zing MP3", ("zingmp3.vn",)),
+    ("aljazeera", "Al Jazeera", ("aljazeera.com", "aljazeera.net")),
+    ("cnn", "CNN", ("cnn.com",)),
+    ("espn", "ESPN", ("espn.com",)),
+    ("cbc", "CBC", ("cbc.ca",)),
+    ("dw", "DW", ("dw.com",)),
+    ("nrk", "NRK", ("nrk.no",)),
+    ("svt", "SVT Play", ("svtplay.se", "svt.se")),
+    ("ard", "ARD Mediathek", ("ardmediathek.de", "ard.de")),
+    ("zdf", "ZDF", ("zdf.de",)),
+    ("rai", "RaiPlay", ("raiplay.it", "rai.it")),
+    ("rtve", "RTVE", ("rtve.es",)),
+    ("pornhub", "Pornhub", ("pornhub.com", "pornhub.org")),
+    ("xvideos", "XVideos", ("xvideos.com",)),
+    ("xhamster", "xHamster", ("xhamster.com",)),
+    ("redtube", "RedTube", ("redtube.com",)),
 )
+
+# Kept as an alias: older configurations and any external code may still
+# refer to the previous name.
+POPULAR_SITES = SITES
 
 # Sites that are always accepted regardless of the allowlist, because they have
 # their own dedicated watcher category and format preference.
@@ -77,11 +119,11 @@ DEFAULT_ENABLED_SITE_KEYS: Tuple[str, ...] = (
     "reddit",
 )
 
-SITE_LABELS: Dict[str, str] = {key: label for key, label, _ in POPULAR_SITES}
+SITE_LABELS: Dict[str, str] = {key: label for key, label, _ in SITES}
 
 # domain -> site key. Built once; lookups are per clipboard change.
 _DOMAIN_INDEX: Dict[str, str] = {
-    domain.lower(): key for key, _label, domains in POPULAR_SITES for domain in domains
+    domain.lower(): key for key, _label, domains in SITES for domain in domains
 }
 
 

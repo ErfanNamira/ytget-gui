@@ -9,13 +9,27 @@ times with its own shutdown/sleep manager, an optional run-at-login entry that
 starts minimised to the tray, and plain-text link import/export for moving
 batches of links in and out of the queue.
 
+It also ships a proper Windows installer next to the archives, lets one link be
+queued in several formats at once, shows the estimated download size on every
+card, keeps the Advanced options (clip extraction, playlist selection) scoped
+to the item you are adding, replaces the unlisted-site switch with a real
+policy, and starts noticeably faster.
+
 ---
 
 ## ⚡ Highlights
 
+### 💿 A proper Windows installer
+
+- New `YTGet-2.8.0-windows-setup.exe` alongside the existing ZIP and 7z
+  downloads.
+- Installs for the current user only, so there is no UAC prompt, and adds a
+  Start menu entry, an optional desktop shortcut, an optional run-at-login
+  entry, and a real uninstaller.
+
 ### 🖱️ A real system tray presence
 
-- A tray icon built from the app icon, with a live status line in its tooltip.
+- A tray icon, with a live status line in its tooltip.
 - Control the queue without the window: start, pause, skip, stop, clear
   finished, open the download folder, open Preferences, and Exit.
 - Toggle the clipboard watcher and pick the "When the queue finishes" action
@@ -33,16 +47,21 @@ batches of links in and out of the queue.
 ### 📋 A clipboard watcher that fills the queue for you
 
 - Copy a link anywhere and YTGet queues it automatically.
-- 40 popular yt-dlp-supported sites are recognised, including YouTube, YouTube
-  Music, Spotify, SoundCloud, Bandcamp, Vimeo, Twitch, TikTok, Instagram,
-  Facebook, X/Twitter, Reddit, Bilibili, Niconico, Odysee, Rumble, Kick, VK,
-  Crunchyroll, and Archive.org.
+- 76 sites are recognised, including YouTube, YouTube Music, Spotify,
+  SoundCloud, Bandcamp, Vimeo, Twitch, TikTok, Instagram, Facebook,
+  X/Twitter, Reddit, Threads, Telegram, Steam, Patreon, Bilibili, Niconico,
+  Youku, iQIYI, Naver, Kakao, SOOP, Aparat, Telewebion, Odysee, Rumble,
+  Kick, BitChute, VK, Pornhub, Crunchyroll, BBC, ARD, ZDF, RaiPlay, SVT,
+  NRK, Al Jazeera, CNN, and Archive.org.
 - Matching is done on the real host, so a link that merely mentions
   `youtube.com` inside a query string is not misread.
 - Per-category default formats: one preset for YouTube, one for YouTube Music,
   one for Spotify, and one for everything else. Leave a category empty to keep
   using the main window's format box.
-- Optional site allowlist, so only the sites you tick are captured.
+- Links from sites outside the list are no longer all-or-nothing. Choose
+  **Queue them automatically** (the default), **Ask me before queueing** —
+  YTGet reports which hosts it found and waits — or **Ignore them**. The old
+  "only known sites" switch maps to *Ignore them*.
 - Options for poll interval, auto-starting the queue on capture, skipping
   playlists, ignoring duplicates, and notifications, on the new
   **Preferences → Watcher** page.
@@ -91,6 +110,66 @@ batches of links in and out of the queue.
 - Optionally write the format after each link as `url | Format`, which the
   importer reads back, so exported files round-trip with their formats.
 
+### 🎚️ Queue one link in several formats
+
+- Add the same video as 1080p **and** MP3 (or any other combination) and get
+  two independent rows instead of an "already queued" message.
+- Only an identical link + format pair is refused as a duplicate.
+- Details are still fetched once per link and shared across its rows, so a
+  second format appears instantly with the title and thumbnail already filled
+  in.
+- Removing one format leaves the other row, its thumbnail and its pending
+  fetch untouched.
+- Naming stays exactly as it was for a single item. Only when a second format
+  would land on the **same container** — 1080p and 4K both being `.mkv`, for
+  example — is the quality tag appended, giving `Title.mkv` and
+  `Title QHD.mkv`. A video plus an MP3 cannot collide, so neither is renamed.
+- With the download archive enabled, the extra quality is no longer skipped as
+  "already recorded"; the archive is bypassed for that item only.
+
+### 📏 Download size on every card
+
+- Each queued item now shows its estimated size right after the format, for
+  example `YouTube 1440p QHD  ·  ~1.24 GiB`, video and audio combined.
+- The estimate is read from details YTGet already fetches, so nothing became
+  slower and no extra request is made.
+- Audio presets show the audio size alone, and sites that publish a single
+  combined stream are not double-counted.
+- Playlists intentionally show no size.
+- Unfinished items restored from an older queue get their details refreshed in
+  the background at start-up, so sizes fill in for an existing queue too.
+- Cards now also show duration and uploader.
+
+### 🖼️ Album art cropped as each item finishes
+
+- Cropping covers to 1:1 now happens right after an item downloads instead
+  of in one pass at the end of the queue, so stopping the queue no longer
+  leaves finished audio uncropped.
+- Only that item's own files are touched, instead of rescanning the entire
+  downloads folder every time.
+
+### ✂️ Advanced options apply to the item you are adding
+
+- Clip start/end, playlist item selection and reverse order are attached to the
+  items you add while they are set, and no longer leak onto every other item in
+  the queue.
+- The **ADVANCED** button shows a dot and a tooltip listing exactly what is
+  armed for the next addition.
+
+### 🏎️ Faster launch
+
+- The Preferences, About, Update Manager and Advanced dialogs and the cover
+  cropper are no longer loaded before the window appears.
+- The clipboard watcher, scheduler, tray icon and the yt-dlp/ffmpeg version
+  probe now start right after the first paint instead of delaying it — that
+  probe alone accounted for most of the old start-up wait.
+
+---
+
+## 🐛 Fixes
+
+- Open-ended playlist ranges such as `5:` and `:3` are accepted again.
+
 ---
 
 ### 📥 Official Downloads
@@ -106,8 +185,17 @@ batches of links in and out of the queue.
   </thead>
   <tbody>
     <tr>
-      <td rowspan="2">🪟 <strong>Windows</strong></td>
-      <td rowspan="2"><code>x86_64</code></td>
+      <td rowspan="3">🪟 <strong>Windows</strong></td>
+      <td rowspan="3"><code>x86_64</code></td>
+      <td>Installer</td>
+      <td><strong>165 MB</strong></td>
+      <td>
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.0/YTGet-2.8.0-windows-setup.exe">
+          <img src="https://img.shields.io/badge/Download-Setup-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows Installer Download">
+        </a>
+      </td>
+    </tr>
+    <tr>
       <td>ZIP</td>
       <td><strong>255 MB</strong></td>
       <td>

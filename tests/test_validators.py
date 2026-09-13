@@ -98,8 +98,12 @@ class TimecodeTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertTrue(v.is_valid_timecode(value))
 
+    def test_empty_means_unset(self):
+        # Blank start/end fields are how the UI expresses "no trim".
+        self.assertTrue(v.is_valid_timecode(""))
+
     def test_invalid(self):
-        for value in ("xx:yy", "1:2:3:4", ""):
+        for value in ("xx:yy", "1:2:3:4", "99:99"):
             with self.subTest(value=value):
                 self.assertFalse(v.is_valid_timecode(value))
 

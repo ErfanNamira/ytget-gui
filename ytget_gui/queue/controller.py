@@ -10,7 +10,12 @@ from typing import List, Optional
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 
 from ytget_gui import formats
-from ytget_gui.queue.model import QueueItem, QueueModel, Status
+from ytget_gui.queue.model import (
+    ITEM_OPTION_KEYS,
+    QueueItem,
+    QueueModel,
+    Status,
+)
 from ytget_gui.settings import AppSettings
 from ytget_gui.styles import AppStyles
 from ytget_gui.utils.text import short
@@ -29,7 +34,8 @@ class QueueController(QObject):
     The view observes signals and never touches worker threads itself.
     """
 
-    item_changed = Signal(str)          # url
+    item_changed = Signal(str)          # item key
+    item_completed = Signal(str)        # item key, download succeeded
     queue_changed = Signal()            # structural change (add/remove/reorder)
     overall_progress = Signal(int)
     running_changed = Signal(bool)
@@ -156,9 +162,9 @@ class QueueController(QObject):
         if self._worker is not None:
             self._worker.cancel()
 
-    def cancel_item(self, url: str) -> None:
+    def cancel_item(self, key: str) -> None:
         """Cancel a specific item if it happens to be the running one."""
-        if self._current is not None and self._current.url == url and self._worker:
+        if self._current is not None and self._current.key == key and self._worker:
             self._skip_requested = True
             self._worker.cancel()
 
@@ -204,7 +210,7 @@ class QueueController(QObject):
         item.output_count = 0
 
         self._running = True
-        self.item_changed.emit(item.url)
+        self.item_changed.emit(item.key)
         self.running_changed.emit(True)
         self.model.save()
 
@@ -245,9 +251,18 @@ class QueueController(QObject):
             "format_code": item.format_code,
             "video_id": item.video_id,
             "is_playlist": item.is_playlist,
+            # Set only for a second (or later) format of the same URL in
+            # the same container; the worker appends it to the filename
+            # and skips the download archive for that item.
+            "name_suffix": item.name_suffix,
         }
         settings = copy.deepcopy(self.settings)
         settings._is_worker_snapshot = True
+        # Per-item overrides win over the global snapshot. from_dict()
+        # filters the keys, so this cannot set arbitrary attributes.
+        for key, value in (item.options or {}).items():
+            if key in ITEM_OPTION_KEYS:
+                setattr(settings, key, value)
         use_spotdl = is_spotify_url(item.url) or formats.is_spotify_code(item.format_code)
         if use_spotdl:
             return SpotDLWorker(payload, settings, settings.SPOTDL)
@@ -262,7 +277,7 @@ class QueueController(QObject):
         if item is None or item.progress == percent:
             return
         item.progress = percent
-        self.item_changed.emit(item.url)
+        self.item_changed.emit(item.key)
         self._emit_progress()
 
     def _on_worker_stage(self, text: str) -> None:
@@ -273,7 +288,7 @@ class QueueController(QObject):
         # The previous revision wrote this into the item's *status* field, which
         # corrupted the status chip and left the progress bar pinned at 0%.
         item.stage = text
-        self.item_changed.emit(item.url)
+        self.item_changed.emit(item.key)
 
     def _on_worker_output(self, path: str, count: int) -> None:
         item = self._current
@@ -281,7 +296,7 @@ class QueueController(QObject):
             return
         item.output_path = path
         item.output_count = count
-        self.item_changed.emit(item.url)
+        self.item_changed.emit(item.key)
 
     def _on_worker_error(self, message: str) -> None:
         item = self._current
@@ -296,8 +311,13 @@ class QueueController(QObject):
 
         if item is not None:
             self._apply_outcome(item, code)
-            self.item_changed.emit(item.url)
+            self.item_changed.emit(item.key)
             self.model.save()
+            if item.status is Status.COMPLETED:
+                # Emitted per item so post-processing (album art cropping)
+                # can run now rather than at the end of the queue, which a
+                # stop or a crash would never reach.
+                self.item_completed.emit(item.key)
 
         self._worker = None
         self.running_changed.emit(False)
@@ -404,12 +424,12 @@ class QueueController(QObject):
     def add_item(self, item: QueueItem) -> bool:
         return bool(self.add_items([item]))
 
-    def remove_items(self, urls: List[str]) -> int:
+    def remove_items(self, keys: List[str]) -> int:
         removed = 0
-        for url in urls:
-            if self._current is not None and self._current.url == url:
-                self.cancel_item(url)
-            if self.model.remove(url) is not None:
+        for key in keys:
+            if self._current is not None and self._current.key == key:
+                self.cancel_item(key)
+            if self.model.remove(key) is not None:
                 removed += 1
         if removed:
             self.queue_changed.emit()
@@ -425,41 +445,41 @@ class QueueController(QObject):
             self._emit_progress()
         return len(removed)
 
-    def move_selection(self, urls: List[str], *, to_top: bool) -> None:
+    def move_selection(self, keys: List[str], *, to_top: bool) -> None:
         # Keep the running item pinned at the head so "send to top" cannot
         # reorder the queue out from under an active download.
         reserved = 1 if (self._current is not None and to_top) else 0
-        filtered = [u for u in urls if self._current is None or u != self._current.url]
+        filtered = [k for k in keys if self._current is None or k != self._current.key]
         if not filtered:
             return
         self.model.move_many(filtered, to_top=to_top, after=reserved)
         self.queue_changed.emit()
         self.model.save()
 
-    def apply_visual_order(self, urls: List[str]) -> None:
-        self.model.reorder_by_urls(urls)
+    def apply_visual_order(self, keys: List[str]) -> None:
+        self.model.reorder_by_keys(keys)
         if self._current is not None:
             self.model.move_many(
-                [self._current.url], to_top=True, after=0
+                [self._current.key], to_top=True, after=0
             )
         self.model.save()
 
     def sort_by(self, key: str) -> None:
         self.model.sort_by(key)
         if self._current is not None:
-            self.model.move_many([self._current.url], to_top=True, after=0)
+            self.model.move_many([self._current.key], to_top=True, after=0)
         self.queue_changed.emit()
         self.model.save()
 
-    def forget_output(self, url: str) -> None:
+    def forget_output(self, key: str) -> None:
         """Drop a recorded output path whose file no longer exists."""
-        item = self.model.get(url)
+        item = self.model.get(key)
         if item is None or not item.output_path:
             return
         item.output_path = ""
         item.output_count = 0
         self.model.save()
-        self.item_changed.emit(url)
+        self.item_changed.emit(key)
 
     # ------------------------------------------------------------------
     # Helpers

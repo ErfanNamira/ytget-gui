@@ -245,12 +245,53 @@ jobs:
             cd ..
           fi
 
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          choco install innosetup --no-progress -y
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          if [ ! -f "$ISCC" ]; then
+            echo "ISCC.exe not found at $ISCC"; exit 1
+          fi
+
+          # Inno Setup requires a numeric x.y.z[.b] version string, so strip a
+          # leading "v" from the tag and fall back to the packaged version.
+          RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${RAW_TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
+            VERSION=$(python -c "import ytget_gui._version as v; print(v.__version__)")
+          fi
+          echo "Installer version: $VERSION"
+
+          "$ISCC" //DAppVersion="$VERSION" "packaging/windows/ytget.iss"
+
+          SETUP="YTGet-$VERSION-windows-setup.exe"
+          if [ ! -f "$SETUP" ]; then
+            echo "Installer was not produced"; ls -la; exit 1
+          fi
+          # Hand the exact filename to the later steps so the asset that
+          # ships is the one RELEASE_NOTES.md links to.
+          echo "SETUP_NAME=$SETUP" >> "$GITHUB_ENV"
+
+      - name: Verify Windows installer
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # /HELP exits 0 only for a well-formed Inno setup binary, which
+          # catches a truncated or non-executable output before release.
+          "./$SETUP_NAME" //HELP >/dev/null
+          ls -la "$SETUP_NAME"
+
       - name: Generate SHA-256 checksum
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             certutil -hashfile YTGet-windows.zip SHA256 > YTGet-windows.sha256
             certutil -hashfile YTGet-windows.7z SHA256 > YTGet-windows-7z.sha256
+            certutil -hashfile "$SETUP_NAME" SHA256 > YTGet-windows-setup.sha256
           elif [[ "$RUNNER_OS" == "Linux" ]]; then
             shasum -a 256 YTGet-linux.tar.gz > YTGet-linux.sha256
             shasum -a 256 YTGet-linux.7z > YTGet-linux-7z.sha256

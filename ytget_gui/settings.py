@@ -82,6 +82,11 @@ BROWSERS = (
 
 POST_QUEUE_ACTIONS = ("Keep", "Shutdown", "Sleep", "Restart", "Close")
 
+# What the clipboard watcher does with a link whose site is not in the
+# curated list (a Steam trailer, a news site, anything yt-dlp happens to
+# support). "allow" keeps the previous behaviour of queueing it.
+WATCHER_UNLISTED_POLICIES = ("allow", "ask", "block")
+
 SCHEDULE_POWER_ACTIONS = ("Shutdown", "Sleep", "Restart", "Close")
 
 DEFAULT_TITLE_TEMPLATE = "%(title)s.%(ext)s"
@@ -152,6 +157,7 @@ _PLAIN_KEYS: tuple[str, ...] = (
     "WATCHER_FORMAT_OTHER",
     "WATCHER_AUTO_START",
     "WATCHER_ONLY_KNOWN_SITES",
+    "WATCHER_UNLISTED_POLICY",
     "WATCHER_ENABLED_SITES",
     "WATCHER_SKIP_PLAYLISTS",
     "WATCHER_IGNORE_DUPLICATES",
@@ -207,6 +213,9 @@ _VALIDATORS: Dict[str, Callable[[Any], Any]] = {
     ],
     "POST_QUEUE_ACTION": lambda v: v if v in POST_QUEUE_ACTIONS else "Keep",
     "WATCHER_POLL_SECONDS": lambda v: max(1, min(60, int(v))),
+    "WATCHER_UNLISTED_POLICY": lambda v: (
+        str(v) if str(v) in WATCHER_UNLISTED_POLICIES else "allow"
+    ),
     # Unknown site keys are dropped rather than kept: a stale key would show
     # up nowhere in the UI while still silently widening the allowlist.
     "WATCHER_ENABLED_SITES": lambda v: [
@@ -353,7 +362,10 @@ class AppSettings:
     WATCHER_FORMAT_SPOTIFY: str = ""
     WATCHER_FORMAT_OTHER: str = ""
     WATCHER_AUTO_START: bool = False
+    # Legacy flag, kept so an existing config still loads. True is read as
+    # WATCHER_UNLISTED_POLICY == "block".
     WATCHER_ONLY_KNOWN_SITES: bool = False
+    WATCHER_UNLISTED_POLICY: str = "allow"
     WATCHER_ENABLED_SITES: List[str] = field(
         default_factory=lambda: list(DEFAULT_ENABLED_SITE_KEYS)
     )

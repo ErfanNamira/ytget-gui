@@ -56,6 +56,18 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 ## ☄️ How to Install
 > ⚠️ **Some formats are still limited or temporarily unavailable on YouTube itself.** These cannot be fixed by the app alone. If a specific format continues to fail, we may need to wait for an **yt-dlp update** to adapt to changes on YouTube.
 ### 🪟 Windows
+
+**Installer (recommended)**
+1. Download the latest `YTGet-<version>-windows-setup.exe` from the
+   [releases page](https://github.com/ErfanNamira/ytget-gui/releases/latest).
+2. Run it. It installs for the current user only, so no administrator
+   prompt appears.
+3. Optionally tick the desktop shortcut and **Start YTGet when I sign in**
+   during setup.
+4. Launch YTGet from the Start menu. Uninstall from **Settings → Apps** like
+   any other program.
+
+**Portable archive**
 1. [Download the latest `YTGet-Windows.zip` release.](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-windows.zip)  
 2. Extract the contents.  
 3. Run `YTGet.exe`.
@@ -195,6 +207,8 @@ sudo apt update && sudo apt install ffmpeg
 
 ### 📥 Download Options
 - 📹 **Multiple Formats** — Download videos from 480p up to 8K.  
+- 🔁 **Same Link, Several Formats** — Queue one video as 1080p *and* MP3; each format is its own row.  
+- 📏 **Size Estimates** — Every queued item shows its approximate download size (video + audio).  
 - 🎵 **MP3/FLAC Mode** — High-quality audio extraction with embedded thumbnails & metadata.  
 - 📄 **Subtitles** — Auto-fetch subtitles (multi-language).  
 - 📂 **Playlist Support** — Download entire playlists in audio/video mode.
@@ -202,7 +216,7 @@ sudo apt update && sudo apt install ffmpeg
 ### 🔧 Advanced Features
 - ⚙️ **Persistent Settings** — All settings saved to `config.json`.  
 - 🚀 **Improved Playlist Support** — Reverse order, select items, archive tracking.  
-- ✂️ **Clip Extraction** — Download video portions by start/end time.  
+- ✂️ **Clip Extraction** — Download video portions by start/end time, applied only to the item you are adding.  
 - ⏭️ **SponsorBlock** — Skip sponsored content, intros, and outros.  
 - 🧩 **Chapters Handling** — Embed or split videos by chapters.  
 - 🎼 **YouTube Music Metadata** — Accurate music info and album data.
@@ -213,7 +227,8 @@ sudo apt update && sudo apt install ffmpeg
 - 🧪 **Custom FFmpeg Args** — Add advanced arguments for power users.  
 - 🔊 **Audio Normalization** — Uniform volume for all downloads.  
 - 🗃 **Channel Organization** — Auto-sort videos into uploader folders.  
-- ⚡ **Performance Enhancements** — Smart rate limiting and retry logic.
+- ⚡ **Performance Enhancements** — Smart rate limiting, retry logic, and a fast cold start.
+- 🌐 **Unlisted Site Policy** — Links from sites outside your watcher list can be queued automatically, confirmed first, or ignored.
 
 
 ---
@@ -223,8 +238,9 @@ sudo apt update && sudo apt install ffmpeg
 1. ▶️ Launch `YTGet`.  
 2. 🔗 Paste a YouTube URL.  
 3. 🎚️ Select format (e.g., 1080p MKV or MP3).  
-4. ⬇️ Click **➕ Add to Queue**.  
-5. ⬇️ Click **▶️ Start Queue**.
+4. ⚙️ Optional: open **ADVANCED** to set a clip range or playlist selection. It applies only to the items you add next, and the button shows a dot while it is armed.  
+5. ⬇️ Click **➕ Add to Queue**. To grab the same link in another format, pick a different format and add it again — you get a second row.  
+6. ⬇️ Click **▶️ Start Queue**.
 
 ---
 
@@ -259,7 +275,7 @@ For **age-restricted** or **private content**:
 
 ## ⚙️ Requirements
 
-- ✅ No installation — just unzip and run.  
+- ✅ No installation needed — unzip and run, or use the Windows installer.  
 - 🪟 Windows 10+ (64-bit).
 
 ---

@@ -205,6 +205,7 @@ class DownloadWorker(BaseDownloadWorker):
         self._pp_args: Dict[str, List[str]] = {}
         self._flat_album_name = ""
         self._name_template = ""
+        self._name_suffix = str(item.get("name_suffix") or "").strip()
         self._attempt = 0
         self._max_attempts = max(0, int(getattr(settings, "AUTO_RETRY_COUNT", 3) or 0))
         self._started_at = 0.0
@@ -808,7 +809,11 @@ class DownloadWorker(BaseDownloadWorker):
         if getattr(s, "PLAYLIST_ITEMS", ""):
             flags += ["--playlist-items", s.PLAYLIST_ITEMS]
 
-        archive = s.archive_target()
+        # A second format of a URL that is already in the archive would be
+        # skipped outright ("has already been recorded in the archive"),
+        # so a deliberate re-download in another quality ignores it. The
+        # URL is already recorded, so nothing is lost by not re-recording.
+        archive = None if self._name_suffix else s.archive_target()
         if archive is not None:
             flags += ["--download-archive", str(archive)]
 
@@ -896,15 +901,20 @@ class DownloadWorker(BaseDownloadWorker):
             stub = self._resolve_name_template(default_stub)
             self._name_template = stub
 
+            # Only set when another queued item for this URL already
+            # targets the same container, so single items keep the plain
+            # "%(title)s.%(ext)s" naming.
+            tag = f" {self._name_suffix}" if self._name_suffix else ""
             if (
                 self._should_force_title(is_playlist)
                 and getattr(s, "FILENAME_FORMAT", "default") == "default"
             ):
                 # No cookies means yt-dlp may resolve a degraded title; prefer
                 # the one already shown in the queue so the file matches the UI.
-                filename = safe_stem(self.title).replace("%", "%%") + ".%(ext)s"
+                forced = safe_stem(self.title + tag).replace("%", "%%")
+                filename = forced + ".%(ext)s"
             else:
-                filename = f"{stub}.%(ext)s"
+                filename = f"{stub}{tag}.%(ext)s"
             self._flat_album_name = ""
             # base here intentionally contains yt-dlp template fields such as
             # %(playlist_title)s, so it must not be escaped.

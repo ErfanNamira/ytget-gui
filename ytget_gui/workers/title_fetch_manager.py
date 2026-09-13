@@ -24,7 +24,7 @@ class TitleFetchQueue(QObject):
     drops twenty URLs is what gets an IP rate-limited.
     """
 
-    metadata_fetched = Signal(str, str, str, str, bool)
+    metadata_fetched = Signal(str, object)   # url, payload dict
     title_fetched = Signal(str, str)
     error = Signal(str, str)
     started_one = Signal(str)
@@ -221,7 +221,5 @@ class TitleFetchQueue(QObject):
             return
 
         md = result.metadata
-        self.metadata_fetched.emit(
-            url, md.title, md.video_id, md.thumb_url, md.is_playlist
-        )
+        self.metadata_fetched.emit(url, fetch_core.metadata_payload(md))
         self.title_fetched.emit(url, md.title)

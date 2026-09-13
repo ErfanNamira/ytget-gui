@@ -43,6 +43,12 @@ class Metadata:
     duration: Optional[float] = None
     uploader: str = ""
     entry_count: Optional[int] = None
+    # Largest advertised size per video height, plus the best audio-only
+    # size, taken from the same --dump-single-json output. The selected
+    # format is only known to the queue, so the raw numbers are carried
+    # here and combined by formats.estimate_download_size().
+    video_sizes: Optional[Dict[int, int]] = None
+    audio_size: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -317,6 +323,77 @@ def _best_thumbnail(info: Dict[str, Any]) -> str:
     return str(max(candidates, key=rank).get("url", ""))
 
 
+def metadata_payload(md: "Metadata") -> Dict[str, Any]:
+    """Serialise Metadata for the Qt signal.
+
+    A dict rather than a widening positional signature: the previous
+    five-argument signal had nowhere to put duration or uploader, so both
+    were parsed and then dropped before the card could show them.
+    """
+    return {
+        "title": md.title,
+        "video_id": md.video_id,
+        "thumb_url": md.thumb_url,
+        "is_playlist": md.is_playlist,
+        "duration": md.duration,
+        "uploader": md.uploader,
+        "entry_count": md.entry_count,
+        "video_sizes": dict(md.video_sizes or {}),
+        "audio_size": md.audio_size,
+    }
+
+
+def _size_of(fmt: Dict[str, Any]) -> Optional[int]:
+    """Exact size when yt-dlp knows it, otherwise its own estimate."""
+    for key in ("filesize", "filesize_approx"):
+        value = fmt.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return int(value)
+    # Some extractors only report a bitrate; tbr is in kbit/s.
+    tbr = fmt.get("tbr")
+    duration = fmt.get("_duration")
+    if isinstance(tbr, (int, float)) and isinstance(duration, (int, float)):
+        if tbr > 0 and duration > 0:
+            return int(tbr * 125 * duration)
+    return None
+
+
+def parse_sizes(info: Dict[str, Any]) -> Tuple[Dict[int, int], Optional[int]]:
+    """Map video height -> bytes, and the best audio-only size.
+
+    Progressive formats (audio muxed into the video stream) are recorded
+    with an audio size of None so the caller does not double-count them.
+    """
+    formats = info.get("formats")
+    if not isinstance(formats, list):
+        return {}, None
+    duration = info.get("duration")
+
+    video_sizes: Dict[int, int] = {}
+    audio_size: Optional[int] = None
+    for fmt in formats:
+        if not isinstance(fmt, dict):
+            continue
+        if isinstance(duration, (int, float)):
+            fmt = {**fmt, "_duration": duration}
+        size = _size_of(fmt)
+        if size is None:
+            continue
+        has_video = str(fmt.get("vcodec") or "none") != "none"
+        has_audio = str(fmt.get("acodec") or "none") != "none"
+        height = fmt.get("height")
+        if has_video and isinstance(height, (int, float)) and height > 0:
+            key = int(height)
+            # yt-dlp picks the highest-bitrate stream for a height, which
+            # is the largest one.
+            if size > video_sizes.get(key, 0):
+                video_sizes[key] = size
+        elif has_audio and not has_video:
+            if audio_size is None or size > audio_size:
+                audio_size = size
+    return video_sizes, audio_size
+
+
 def parse_metadata(stdout_text: str) -> Metadata:
     output = (stdout_text or "").strip()
     if not output:
@@ -366,6 +443,10 @@ def parse_metadata(stdout_text: str) -> Metadata:
         entry_count = len(infos)
 
     duration = head.get("duration")
+    # Playlists are deliberately skipped: --flat-playlist carries no
+    # per-entry formats, and summing a whole playlist would need one
+    # yt-dlp call per entry.
+    video_sizes, audio_size = ({}, None) if is_playlist else parse_sizes(head)
     return Metadata(
         title=title,
         video_id=str(head.get("id") or ""),
@@ -374,6 +455,8 @@ def parse_metadata(stdout_text: str) -> Metadata:
         duration=float(duration) if isinstance(duration, (int, float)) else None,
         uploader=str(head.get("uploader") or head.get("channel") or ""),
         entry_count=entry_count,
+        video_sizes=video_sizes or None,
+        audio_size=audio_size,
     )
 
 

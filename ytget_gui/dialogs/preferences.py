@@ -50,7 +50,7 @@ from ytget_gui.dialogs import common as ui
 from ytget_gui.dialogs.spotdl_preferences_tab import SpotDLPreferencesTab
 from ytget_gui import autostart
 from ytget_gui.scheduler import DAY_LABELS, POWER_ACTIONS
-from ytget_gui.sites import ALWAYS_ALLOWED_KEYS, POPULAR_SITES
+from ytget_gui.sites import ALWAYS_ALLOWED_KEYS, SITES
 from ytget_gui.settings import (
     BROWSERS,
     FILENAME_FORMAT_PRESETS,
@@ -151,7 +151,7 @@ class PreferencesDialog(QDialog):
 
         self.setWindowTitle("Preferences")
         self.setModal(True)
-        self.setMinimumSize(980, 680)
+        self.setMinimumSize(980, 710)
         self.setSizeGripEnabled(True)
         self.setStyleSheet(ui.dialog_qss())
 
@@ -798,7 +798,7 @@ class PreferencesDialog(QDialog):
                         self.audio_normalize,
                         "Apply EBU R128 normalisation to \u221214 LUFS",
                     ),
-                    self._row("Album art", self.crop_covers, "Centre-crop covers to 1:1 after the queue"),
+                    self._row("Album art", self.crop_covers, "Centre-crop covers to 1:1 as each item finishes"),
                     self._row("Chapters", self.chapters_combo),
                 ),
                 title="Post-processing",
@@ -930,8 +930,15 @@ class PreferencesDialog(QDialog):
         self.watcher_ignore_dupes = self._bind_switch(
             "WATCHER_IGNORE_DUPLICATES", ui.switch("Ignore repeated links")
         )
-        self.watcher_only_known = self._bind_switch(
-            "WATCHER_ONLY_KNOWN_SITES", ui.switch("Only capture the sites below")
+        self.watcher_unlisted = self._bind_combo_mapped(
+            "WATCHER_UNLISTED_POLICY",
+            ui.combo([], "Sites outside the list"),
+            (
+                ("Queue them automatically", "allow"),
+                ("Ask me before queueing", "ask"),
+                ("Ignore them", "block"),
+            ),
+            "allow",
         )
 
         # A checkable QListWidget was tried here first and was a mistake: the
@@ -947,7 +954,7 @@ class PreferencesDialog(QDialog):
         grid.setHorizontalSpacing(18)
         grid.setVerticalSpacing(7)
 
-        for index, (key, label, domains) in enumerate(POPULAR_SITES):
+        for index, (key, label, domains) in enumerate(SITES):
             box = ui.check(label, domains[0])
             if key in ALWAYS_ALLOWED_KEYS:
                 box.setChecked(True)
@@ -986,25 +993,35 @@ class PreferencesDialog(QDialog):
         site_layout.addStretch(1)
 
         self._site_controls = (self._site_grid, site_buttons)
-        self.watcher_only_known.toggled.connect(self._on_allowlist_toggled)
+        self.watcher_unlisted.currentIndexChanged.connect(
+            lambda _i: self._on_allowlist_toggled()
+        )
 
         sites_card = ui.card(
             self._column(
                 self._row("Playlists", self.watcher_skip_playlists, "Skip links that point at a whole playlist"),
                 self._row("Duplicates", self.watcher_ignore_dupes, "Do not re-add a link copied twice"),
-                self._row("Allowlist", self.watcher_only_known, "Otherwise any supported link is captured"),
+                self._row(
+                    "Unlisted sites",
+                    self.watcher_unlisted,
+                    "yt-dlp supports far more sites than the list below",
+                ),
                 self._site_grid,
                 site_buttons,
             ),
-            title=f"Sites ({len(POPULAR_SITES)} popular)",
+            title=f"Sites ({len(SITES)})",
             subtitle="yt-dlp supports well over a thousand sites and any of "
-            "them can be captured; these are the popular ones you can filter "
-            "by. YouTube, YouTube Music and Spotify are always captured.",
+            "them can be captured. Ticked sites are always captured; "
+            "everything else follows the Unlisted sites setting above. "
+            "YouTube, YouTube Music and Spotify are always captured.",
         )
 
         return self._page(enable_card, format_card, sites_card)
 
-    def _on_allowlist_toggled(self, enabled: bool) -> None:
+    def _on_allowlist_toggled(self, _enabled: object = None) -> None:
+        # The per-site checkboxes only matter when unlisted sites are not
+        # queued unconditionally.
+        enabled = self.watcher_unlisted.currentIndex() != 0
         for widget in self._site_controls:
             widget.setEnabled(enabled)
 
@@ -1355,7 +1372,7 @@ class PreferencesDialog(QDialog):
         self.cookies_status.setText(f"Last imported: {last}" if last else "")
 
         self._on_subs_toggled(self.subs_enabled.isChecked())
-        self._on_allowlist_toggled(self.watcher_only_known.isChecked())
+        self._on_allowlist_toggled()
         self._on_scheduler_toggled(self.scheduler_enabled.isChecked())
         self._on_startup_toggled(self.run_on_startup.isChecked())
         for widget in (self.tray_minimize, self.tray_close, self.tray_notifications):

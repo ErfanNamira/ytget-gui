@@ -16,7 +16,7 @@ import subprocess
 import time
 import webbrowser
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import (
     QRect,
@@ -48,11 +48,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ytget_gui import _version
-from ytget_gui.dialogs.about_dialog import AboutDialog
-from ytget_gui.dialogs.advanced import AdvancedOptionsDialog
-from ytget_gui.dialogs.preferences import PreferencesDialog
-from ytget_gui.dialogs.update_manager import UpdateManager
+from ytget_gui import _version, formats, naming
 from ytget_gui.queue.controller import QueueController
 from ytget_gui.queue.model import QueueItem, QueueModel, Status
 from ytget_gui.settings import AppSettings
@@ -60,13 +56,16 @@ from ytget_gui.styles import AppStyles, Palette
 from ytget_gui import autostart
 from ytget_gui.scheduler import Scheduler
 from ytget_gui.tray import TrayController
+from ytget_gui.sites import host_of
 from ytget_gui.watcher import ClipboardWatcher
 from ytget_gui.theme import main_window_qss
 from ytget_gui.utils import opener
 from ytget_gui.utils.text import short
 from ytget_gui.utils.validators import is_supported_url
 from ytget_gui.widgets.queue_card import QueueCard
-from ytget_gui.workers.cover_crop_worker import CoverCropWorker
+
+if TYPE_CHECKING:  # imported lazily at runtime, see _start_cover_crop
+    from ytget_gui.workers.cover_crop_worker import CoverCropWorker
 from ytget_gui.workers.thumb_fetcher import ThumbManager
 from ytget_gui.workers.title_fetch_manager import TitleFetchQueue
 
@@ -98,7 +97,14 @@ class MainWindow(QMainWindow):
         self.controller = QueueController(self.model, self.settings, parent=self)
 
         self._cards: Dict[str, QListWidgetItem] = {}
+        # Lower-cased search text per URL. Rebuilding it for every row on
+        # every keystroke made filtering a long queue quadratic.
+        self._search_index: Dict[str, str] = {}
         self._pending_fetch: set[str] = set()
+        # Advanced options waiting to be stamped onto the next items added.
+        # They are never written to the shared settings, which is what used
+        # to make a clip range apply to every item in the queue.
+        self._pending_options: Dict[str, object] = {}
         self._log_entries: List[Tuple[str, str, str]] = []
         self._console_pending: List[Tuple[str, str]] = []
 
@@ -121,7 +127,9 @@ class MainWindow(QMainWindow):
         self._title_thread: Optional[QThread] = None
         self._title_queue: Optional[TitleFetchQueue] = None
         self._cover_thread: Optional[QThread] = None
-        self._cover_worker: Optional[CoverCropWorker] = None
+        self._cover_worker: Optional["CoverCropWorker"] = None
+        # Files waiting to be cropped because a crop pass is already busy.
+        self._crop_backlog: List[Path] = []
         self._cover_running = False
         self._pending_post_action: Optional[str] = None
         self._normal_geometry: Optional[QRect] = None
@@ -134,10 +142,16 @@ class MainWindow(QMainWindow):
         self._start_title_queue()
         self._restore_geometry()
         self._load_queue()
-        self._log_environment()
+        # Deferred to the first idle tick: none of this is needed to paint
+        # the window, and _log_environment alone shells out to yt-dlp and
+        # ffmpeg, which cost most of the old start-up delay.
+        QTimer.singleShot(0, self._deferred_startup)
+
+    def _deferred_startup(self) -> None:
         self._start_watcher()
         self._start_scheduler()
         self._apply_tray_settings()
+        self._log_environment()
 
     # ==================================================================
     # Construction
@@ -283,6 +297,7 @@ class MainWindow(QMainWindow):
         self.btn_advanced.setObjectName("BtnTopbar")
         self.btn_advanced.setCursor(Qt.PointingHandCursor)
         self.btn_advanced.clicked.connect(self._show_advanced)
+        self._refresh_advanced_button()
 
         btn_settings = QPushButton("SETTINGS")
         btn_settings.setObjectName("BtnTopbar")
@@ -577,6 +592,7 @@ class MainWindow(QMainWindow):
     def _connect_controller(self) -> None:
         self.controller.log_message.connect(self._on_worker_log)
         self.controller.item_changed.connect(self._on_item_changed)
+        self.controller.item_completed.connect(self._on_item_completed)
         self.controller.queue_changed.connect(self._rebuild_queue_list)
         self.controller.overall_progress.connect(self.global_progress.setValue)
         self.controller.running_changed.connect(lambda _: self._update_buttons())
@@ -755,8 +771,8 @@ class MainWindow(QMainWindow):
             parts.append(f"limit {s.LIMIT_RATE}")
         if s.CROP_AUDIO_COVERS:
             parts.append("crop covers")
-        if s.CLIP_START and s.CLIP_END:
-            parts.append(f"clip {s.CLIP_START}\u2013{s.CLIP_END}")
+        if self._pending_options:
+            parts.append("next item: " + self._describe_options(self._pending_options))
         if s.FILENAME_FORMAT != "default":
             parts.append(f"naming {s.FILENAME_FORMAT}")
         return parts
@@ -794,6 +810,28 @@ class MainWindow(QMainWindow):
         if self.enqueue_urls([url]):
             self.url_input.clear()
 
+    def _name_suffix_for(
+        self, url: str, code: str, label: str, pending: Sequence[QueueItem]
+    ) -> str:
+        """Quality tag for this item, or "" when nothing would collide.
+
+        Two formats of one URL only overwrite each other when they share a
+        container, so 1080p + 4K (both .mkv) get disambiguated while
+        1080p + MP3 both keep the plain default name.
+        """
+        container = naming.container_key(code, self.settings)
+        siblings = [
+            item
+            for item in list(self.model.items_for_url(url)) + list(pending)
+            if item.url == url
+            and naming.container_key(item.format_code, self.settings) == container
+        ]
+        if not siblings:
+            return ""
+        return naming.suffix_for(
+            label, code, [item.name_suffix for item in siblings]
+        )
+
     def enqueue_urls(
         self, urls: Sequence[str], format_label: Optional[str] = None
     ) -> int:
@@ -805,7 +843,7 @@ class MainWindow(QMainWindow):
         """
         accepted: List[str] = []
         items = []
-        seen = set()
+        seen: set[str] = set()
         label = format_label or self.format_box.currentText()
         if label not in self.settings.RESOLUTIONS:
             label = self.format_box.currentText()
@@ -815,8 +853,14 @@ class MainWindow(QMainWindow):
             url = (raw or "").strip()
             if not is_supported_url(url):
                 continue
-            if self.model.contains(url) or url in seen:
-                self.log(f"Already queued: {short(url, 60)}", AppStyles.INFO_COLOR)
+            # Same URL in a different format is a new download; only the
+            # exact url+format pair counts as a duplicate.
+            key = f"{url}\n{code}"
+            if self.model.contains(key) or key in seen:
+                self.log(
+                    f"Already queued as {label}: {short(url, 50)}",
+                    AppStyles.INFO_COLOR,
+                )
                 continue
 
             # The item enters the model immediately, with the URL standing in for
@@ -829,20 +873,43 @@ class MainWindow(QMainWindow):
                 title="",
                 format_code=code,
                 format_label=label,
+                options=dict(self._pending_options),
+                name_suffix=self._name_suffix_for(url, code, label, items),
             )
+            # Another format of this URL may already have metadata; reuse
+            # it so the new row is not blank while the fetch runs.
+            twin = next(iter(self.model.items_for_url(url)), None)
+            if twin is not None:
+                item.title = twin.title
+                item.video_id = twin.video_id
+                item.thumbnail_url = twin.thumbnail_url
+                item.thumb_path = twin.thumb_path
+                item.is_playlist = twin.is_playlist
+                item.duration = twin.duration
+                item.uploader = twin.uploader
             items.append(item)
-            seen.add(url)
+            seen.add(key)
             accepted.append(url)
 
         if not accepted:
             return 0
 
         self.controller.add_items(items)
-        self._pending_fetch.update(accepted)
-        self.request_fetch.emit(accepted)
-        for url in accepted:
+        # Metadata and thumbnails are per URL, so fetch each URL once even
+        # when several formats of it were just queued.
+        unique_urls = list(dict.fromkeys(accepted))
+        self._pending_fetch.update(unique_urls)
+        self.request_fetch.emit(unique_urls)
+        for url in unique_urls:
             self.thumbs.enqueue(url)
         self.log(f"\u2795 Queued {len(accepted)} item(s); fetching details\u2026")
+        for item in items:
+            if item.name_suffix:
+                self.log(
+                    "Same link already queued in this container \u2014 this one "
+                    f"will be saved with \u201c {item.name_suffix}\u201d appended.",
+                    AppStyles.INFO_COLOR,
+                )
         return len(accepted)
 
     # ==================================================================
@@ -853,31 +920,46 @@ class MainWindow(QMainWindow):
     def _on_fetch_started(self, url: str) -> None:
         log.debug("Fetching metadata for %s", url)
 
-    @Slot(str, str, str, str, bool)
-    def _on_metadata(
-        self, url: str, title: str, video_id: str, thumb_url: str, is_playlist: bool
-    ) -> None:
+    @Slot(str, object)
+    def _on_metadata(self, url: str, payload: object) -> None:
         self._pending_fetch.discard(url)
-        item = self.model.get(url)
-        if item is None:
+        data = payload if isinstance(payload, dict) else {}
+        items = self.model.items_for_url(url)
+        if not items:
             # Removed while the fetch was in flight; nothing to update.
             return
 
-        item.title = title or item.title
-        item.video_id = video_id
-        item.thumbnail_url = thumb_url
-        item.is_playlist = is_playlist
+        title = str(data.get("title") or "")
+        video_sizes = data.get("video_sizes") or {}
+        audio_size = data.get("audio_size")
+        duration = data.get("duration")
+        is_playlist = bool(data.get("is_playlist"))
+
+        # One fetch per URL feeds every queued format of that URL.
+        for item in items:
+            item.title = title or item.title
+            item.video_id = str(data.get("video_id") or "")
+            item.thumbnail_url = str(data.get("thumb_url") or "")
+            item.is_playlist = is_playlist
+            item.uploader = str(data.get("uploader") or "")
+            item.duration = duration if isinstance(duration, (int, float)) else None
+            item.filesize = (
+                None
+                if is_playlist
+                else formats.estimate_download_size(
+                    video_sizes, audio_size, item.format_code
+                )
+            )
+            self._on_item_changed(item.key)
         self.model.save()
-        self._on_item_changed(url)
-        self.log(f"\u2705 {short(item.display_title, 60)}")
+        self.log(f"\u2705 {short(items[0].display_title, 60)}")
 
     @Slot(str, str)
     def _on_metadata_error(self, url: str, message: str) -> None:
         self._pending_fetch.discard(url)
-        item = self.model.get(url)
-        if item is not None:
+        for item in self.model.items_for_url(url):
             item.last_error = message
-            self._on_item_changed(url)
+            self._on_item_changed(item.key)
         # Non-fatal: the item stays queued and the download may still succeed,
         # since yt-dlp resolves metadata again at download time.
         self.log(
@@ -890,13 +972,11 @@ class MainWindow(QMainWindow):
     def _on_thumb_ready(self, url: str, path: str) -> None:
         if not path:
             return
-        item = self.model.get(url)
-        if item is None:
-            return
-        item.thumb_path = path
-        card = self._card_for(url)
-        if card is not None:
-            card.set_thumbnail_path(path)
+        for item in self.model.items_for_url(url):
+            item.thumb_path = path
+            card = self._card_for(item.key)
+            if card is not None:
+                card.set_thumbnail_path(path)
 
     @Slot(str, str)
     def _on_thumb_error(self, url: str, message: str) -> None:
@@ -911,42 +991,105 @@ class MainWindow(QMainWindow):
     # Queue list rendering
     # ==================================================================
 
-    def _card_for(self, url: str) -> Optional[QueueCard]:
-        list_item = self._cards.get(url)
+    def _card_for(self, key: str) -> Optional[QueueCard]:
+        list_item = self._cards.get(key)
         if list_item is None:
             return None
         widget = self.queue_list.itemWidget(list_item)
         return widget if isinstance(widget, QueueCard) else None
 
     def _rebuild_queue_list(self) -> None:
-        selected = {
-            self._url_of(self.queue_list.item(row))
-            for row in range(self.queue_list.count())
-            if self.queue_list.item(row).isSelected()
-        }
+        """Bring the list view in line with the model.
 
-        # Suppressing updates collapses N layout+repaint cycles into one; each
-        # card carries its own hover shadow, so an unsuppressed rebuild of a
-        # long queue is visibly janky.
+        Adding or removing one item used to destroy and re-create every
+        card, which is O(queue) widget churn on each of the many
+        queue_changed emissions during a run. The common cases -- rows
+        removed, rows appended -- are now patched in place; anything else
+        (a reorder) still falls back to a full rebuild.
+        """
         self.queue_list.setUpdatesEnabled(False)
         try:
-            self.queue_list.clear()
-            self._cards.clear()
-            for item in self.model:
-                self._append_card(item)
-                if item.url in selected:
-                    self._cards[item.url].setSelected(True)
+            if not self._sync_rows():
+                self._full_rebuild()
         finally:
             self.queue_list.setUpdatesEnabled(True)
 
-        self.count_badge.setText(str(len(self.model)))
-        self.empty_state.setVisible(len(self.model) == 0)
+        count = len(self.model)
+        self.count_badge.setText(str(count))
+        self.empty_state.setVisible(count == 0)
         self._apply_filter(self.search_box.text())
         self._update_buttons()
 
+    def _row_keys(self) -> List[str]:
+        return [
+            self._key_of(self.queue_list.item(row))
+            for row in range(self.queue_list.count())
+        ]
+
+    def _sync_rows(self) -> bool:
+        """Patch the view in place. False means a full rebuild is needed."""
+        model_keys = [item.key for item in self.model]
+        rows = self._row_keys()
+        if rows == model_keys:
+            return True
+
+        surviving = set(model_keys)
+        kept = [key for key in rows if key in surviving]
+        # Only removals and appends can be expressed as row edits; if the
+        # remaining rows no longer prefix the model, the order changed.
+        if kept != model_keys[: len(kept)]:
+            return False
+
+        for row in reversed(range(self.queue_list.count())):
+            if self._key_of(self.queue_list.item(row)) not in surviving:
+                self._destroy_row(row)
+
+        for key in model_keys[len(kept):]:
+            item = self.model.get(key)
+            if item is None:
+                return False
+            self._append_card(item)
+        return True
+
+    def _full_rebuild(self) -> None:
+        selected = {
+            self._key_of(self.queue_list.item(row))
+            for row in range(self.queue_list.count())
+            if self.queue_list.item(row).isSelected()
+        }
+        for row in reversed(range(self.queue_list.count())):
+            self._destroy_row(row)
+        self.queue_list.clear()
+        self._cards.clear()
+        for item in self.model:
+            self._append_card(item)
+            if item.key in selected:
+                self._cards[item.key].setSelected(True)
+
+    def _destroy_row(self, row: int) -> None:
+        """Remove one row and free the card widget it owns.
+
+        takeItem() alone drops the QListWidgetItem but leaves the card (and
+        its thumbnail pixmap) parented to the viewport, so the image stayed
+        on screen and in memory after the item was removed.
+        """
+        list_item = self.queue_list.item(row)
+        if list_item is None:
+            return
+        key = self._key_of(list_item)
+        widget = self.queue_list.itemWidget(list_item)
+        if widget is not None:
+            self.queue_list.removeItemWidget(list_item)
+            widget.setParent(None)
+            widget.deleteLater()
+        self.queue_list.takeItem(row)
+        if self._cards.get(key) is list_item:
+            self._cards.pop(key, None)
+        self._search_index.pop(key, None)
+
     def _append_card(self, item: QueueItem) -> None:
         card = QueueCard(item)
-        card.removed.connect(self._remove_url)
+        card.removed.connect(self._remove_key)
         card.open_requested.connect(self._open_output)
         card.reveal_requested.connect(self._reveal_output)
 
@@ -956,49 +1099,51 @@ class MainWindow(QMainWindow):
         ]
         if item.output_path:
             actions += [
-                ("Play file", lambda u=item.url: self._open_output(u)),
-                ("Show in folder", lambda u=item.url: self._reveal_output(u)),
-                ("Copy file path", lambda u=item.url: self._copy_output_path(u)),
+                ("Play file", lambda k=item.key: self._open_output(k)),
+                ("Show in folder", lambda k=item.key: self._reveal_output(k)),
+                ("Copy file path", lambda k=item.key: self._copy_output_path(k)),
             ]
         actions += [
-            ("Retry", lambda u=item.url: self._retry_url(u)),
-            ("Remove", lambda u=item.url: self._remove_url(u)),
+            ("Retry", lambda k=item.key: self._retry_key(k)),
+            ("Remove", lambda k=item.key: self._remove_key(k)),
         ]
         card.set_context_actions(actions)
 
         list_item = QListWidgetItem()
         list_item.setSizeHint(card.sizeHint())
-        list_item.setData(Qt.UserRole, item.url)
+        list_item.setData(Qt.UserRole, item.key)
         self.queue_list.addItem(list_item)
         self.queue_list.setItemWidget(list_item, card)
-        self._cards[item.url] = list_item
+        self._cards[item.key] = list_item
 
         if item.thumb_path and Path(item.thumb_path).is_file():
             card.set_thumbnail_path(item.thumb_path)
 
     @staticmethod
-    def _url_of(list_item: Optional[QListWidgetItem]) -> str:
+    def _key_of(list_item: Optional[QListWidgetItem]) -> str:
         if list_item is None:
             return ""
         return str(list_item.data(Qt.UserRole) or "")
 
     @Slot(str)
-    def _on_item_changed(self, url: str) -> None:
-        item = self.model.get(url)
-        card = self._card_for(url)
+    def _on_item_changed(self, key: str) -> None:
+        # Title, status and uploader all feed the search text.
+        self._search_index.pop(key, None)
+        item = self.model.get(key)
+        card = self._card_for(key)
         if item is None or card is None:
             return
         card.update_from(item)
 
-    def _selected_urls(self) -> List[str]:
+    def _selected_keys(self) -> List[str]:
         return [
-            url
-            for url in (
-                self._url_of(self.queue_list.item(row))
+            key
+            for key in (
+                self._key_of(self.queue_list.item(row))
                 for row in range(self.queue_list.count())
                 if self.queue_list.item(row).isSelected()
             )
-            if url
+            if key
         ]
 
     def _on_selection_changed(self) -> None:
@@ -1008,72 +1153,106 @@ class MainWindow(QMainWindow):
 
     def _on_rows_moved(self, *_args) -> None:
         order = [
-            self._url_of(self.queue_list.item(row))
+            self._key_of(self.queue_list.item(row))
             for row in range(self.queue_list.count())
         ]
-        self.controller.apply_visual_order([u for u in order if u])
+        self.controller.apply_visual_order([k for k in order if k])
+
+    def _search_text(self, key: str) -> str:
+        """Lower-cased searchable text for a row, memoised per item."""
+        cached = self._search_index.get(key)
+        if cached is not None:
+            return cached
+        item = self.model.get(key)
+        haystack = (
+            " ".join(
+                filter(
+                    None,
+                    (
+                        item.display_title,
+                        item.url,
+                        item.status.value,
+                        item.uploader,
+                        item.format_label,
+                    ),
+                )
+            ).lower()
+            if item is not None
+            else ""
+        )
+        self._search_index[key] = haystack
+        return haystack
 
     def _apply_filter(self, text: str) -> None:
         needle = (text or "").strip().lower()
         for row in range(self.queue_list.count()):
             list_item = self.queue_list.item(row)
             if not needle:
-                list_item.setHidden(False)
+                if list_item.isHidden():
+                    list_item.setHidden(False)
                 continue
-            item = self.model.get(self._url_of(list_item))
-            haystack = " ".join(
-                filter(
-                    None,
-                    (
-                        item.display_title if item else "",
-                        item.url if item else "",
-                        item.status.value if item else "",
-                        item.uploader if item else "",
-                    ),
-                )
-            ).lower()
-            list_item.setHidden(needle not in haystack)
+            hidden = needle not in self._search_text(self._key_of(list_item))
+            if hidden != list_item.isHidden():
+                list_item.setHidden(hidden)
 
     # ==================================================================
     # Queue edits
     # ==================================================================
 
-    def _remove_url(self, url: str) -> None:
-        self._drop_urls([url])
+    def _remove_key(self, key: str) -> None:
+        self._drop_keys([key])
 
     def _remove_selected(self) -> None:
-        urls = self._selected_urls()
-        if urls:
-            self._drop_urls(urls)
+        keys = self._selected_keys()
+        if keys:
+            self._drop_keys(keys)
 
-    def _drop_urls(self, urls: Sequence[str]) -> None:
-        for url in urls:
-            if url in self._pending_fetch:
-                # Cancel the backend fetch too. Without this the fetch kept
-                # running and its success handler re-created the card the user
-                # had just deleted.
-                self.request_fetch_cancel.emit(url)
-                self._pending_fetch.discard(url)
-            self.thumbs.cancel(url)
-        removed = self.controller.remove_items(list(urls))
+    def _drop_keys(self, keys: Sequence[str]) -> None:
+        # dict.fromkeys: de-duplicate while keeping the click order, so a
+        # repeated row cannot be counted twice in the removal log.
+        unique = [key for key in dict.fromkeys(keys) if key]
+        if not unique:
+            return
+        doomed = {id(i) for i in (self.model.get(k) for k in unique) if i is not None}
+        for key in unique:
+            item = self.model.get(key)
+            url = item.url if item is not None else key
+            # Another format of the same URL may still be queued; its
+            # metadata fetch and thumbnail must survive.
+            siblings = [
+                i for i in self.model.items_for_url(url) if id(i) not in doomed
+            ]
+            if not siblings:
+                if url in self._pending_fetch:
+                    # Cancel the backend fetch too. Without this the fetch
+                    # kept running and its success handler re-created the
+                    # card the user had just deleted.
+                    self.request_fetch_cancel.emit(url)
+                    self._pending_fetch.discard(url)
+                # Cancel *and* delete the cached image: no card is left, so
+                # the file is dead weight, and a fetch finishing a moment
+                # later must not leave a thumbnail behind.
+                self.thumbs.purge(url, item.thumb_path if item is not None else "")
+            self._search_index.pop(key, None)
+        removed = self.controller.remove_items(unique)
         if removed:
             self.log(f"\U0001f5d1\ufe0f Removed {removed} item(s).")
 
-    def _retry_url(self, url: str) -> None:
-        item = self.model.get(url)
+    def _retry_key(self, key: str) -> None:
+        item = self.model.get(key)
         if item is None:
             return
         item.reset_for_retry()
         item.queue_attempts = 0
         item.last_error = ""
         self.model.save()
-        self._on_item_changed(url)
+        self._on_item_changed(key)
         self.log(f"\u21bb Re-queued {short(item.display_title, 60)}")
 
     def _move_selected(self, *, to_top: bool) -> None:
-        urls = self._selected_urls()
-        if urls:
-            self.controller.move_selection(urls, to_top=to_top)
+        keys = self._selected_keys()
+        if keys:
+            self.controller.move_selection(keys, to_top=to_top)
 
     def _clear_completed(self) -> None:
         count = self.controller.clear_completed()
@@ -1206,6 +1385,7 @@ class MainWindow(QMainWindow):
     def _start_watcher(self) -> None:
         self.watcher = ClipboardWatcher(self.settings, parent=self)
         self.watcher.urls_ready.connect(self._on_watcher_urls)
+        self.watcher.unlisted_ready.connect(self._on_watcher_unlisted)
         self.watcher.message.connect(self._on_watcher_message)
         self.watcher.running_changed.connect(self._on_watcher_running)
         if self.settings.CLIPBOARD_WATCHER_ENABLED:
@@ -1274,6 +1454,35 @@ class MainWindow(QMainWindow):
         if self.settings.WATCHER_AUTO_START and self.controller.can_start:
             self.controller.start()
 
+    @Slot(list)
+    def _on_watcher_unlisted(self, batch: List[Tuple[str, str]]) -> None:
+        """Confirm links from sites outside the watcher's list.
+
+        Reached only when Preferences \u203a Watcher is set to ask. The hosts
+        are listed rather than the raw URLs so a long batch stays readable.
+        """
+        if not batch:
+            return
+        hosts = list(dict.fromkeys(host_of(url) or url for url, _ in batch))
+        preview = ", ".join(hosts[:5]) + ("\u2026" if len(hosts) > 5 else "")
+        answer = QMessageBox.question(
+            self,
+            "Queue links from an unlisted site?",
+            f"{len(batch)} copied link(s) come from sites that are not in "
+            f"your watcher list:\n\n{preview}\n\nQueue them?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer != QMessageBox.Yes:
+            self.log(
+                f"Skipped {len(batch)} link(s) from unlisted site(s).",
+                AppStyles.INFO_COLOR,
+            )
+            return
+        if self.watcher is not None:
+            self.watcher.accept_unlisted([url for url, _ in batch])
+        self._on_watcher_urls(batch)
+
     # ==================================================================
     # Drag and drop
     # ==================================================================
@@ -1328,6 +1537,8 @@ class MainWindow(QMainWindow):
         self.format_box.blockSignals(False)
 
     def _show_preferences(self) -> None:
+        from ytget_gui.dialogs.preferences import PreferencesDialog
+
         try:
             dialog = PreferencesDialog(self, self.settings)
         except Exception as exc:  # noqa: BLE001
@@ -1375,21 +1586,74 @@ class MainWindow(QMainWindow):
             )
 
     def _show_advanced(self) -> None:
+        from ytget_gui.dialogs.advanced import AdvancedOptionsDialog
+
         try:
-            dialog = AdvancedOptionsDialog(self, self.settings)
+            dialog = AdvancedOptionsDialog(self, self.settings, self._pending_options)
         except Exception as exc:  # noqa: BLE001
             log.exception("Advanced options failed to open")
             QMessageBox.warning(self, "Advanced", f"Could not open Advanced:\n{exc}")
             return
         if dialog.exec():
-            self.settings.apply(dialog.get_options())
-            self.settings.save_config()
-            self.log("\u2705 Advanced options applied.", AppStyles.SUCCESS_COLOR)
+            self._set_pending_options(dialog.get_options())
+
+    def _set_pending_options(self, options: Dict[str, object]) -> None:
+        """Hold Advanced options for the items added next.
+
+        Defaults are dropped so an item only carries what the user actually
+        set; an empty dict means "behave exactly like the global settings".
+        """
+        pending = {
+            key: value
+            for key, value in options.items()
+            if value not in ("", None, False)
+        }
+        self._pending_options = pending
+        self._refresh_advanced_button()
+        if pending:
+            self.log(
+                "\u2705 Advanced options armed: "
+                + self._describe_options(pending)
+                + " \u2014 applied to the items you add next only.",
+                AppStyles.SUCCESS_COLOR,
+            )
+        else:
+            self.log("Advanced options cleared.", AppStyles.INFO_COLOR)
+
+    @staticmethod
+    def _describe_options(options: Dict[str, object]) -> str:
+        parts: List[str] = []
+        start = str(options.get("CLIP_START", "") or "")
+        end = str(options.get("CLIP_END", "") or "")
+        if start or end:
+            parts.append(f"clip {start or '0'}\u2013{end or 'end'}")
+        if options.get("PLAYLIST_ITEMS"):
+            parts.append(f"items {options['PLAYLIST_ITEMS']}")
+        if options.get("PLAYLIST_REVERSE"):
+            parts.append("reversed")
+        return ", ".join(parts) or "none"
+
+    def _refresh_advanced_button(self) -> None:
+        button = getattr(self, "btn_advanced", None)
+        if button is None:
+            return
+        armed = bool(self._pending_options)
+        button.setText("ADVANCED \u2022" if armed else "ADVANCED")
+        button.setToolTip(
+            "Applies to the next items added: "
+            + self._describe_options(self._pending_options)
+            if armed
+            else "Clip extraction and playlist selection for the items you add next"
+        )
 
     def _show_about(self) -> None:
+        from ytget_gui.dialogs.about_dialog import AboutDialog
+
         AboutDialog(self.settings, self._app_icon, self).exec()
 
     def _show_updates(self) -> None:
+        from ytget_gui.dialogs.update_manager import UpdateManager
+
         UpdateManager(self.settings, self).exec()
 
     def _choose_download_dir(self) -> None:
@@ -1426,8 +1690,8 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             self.log(f"Could not open {directory}: {exc}", AppStyles.ERROR_COLOR, "Error")
 
-    def _open_output(self, url: str) -> None:
-        item = self.model.get(url)
+    def _open_output(self, key: str) -> None:
+        item = self.model.get(key)
         if item is None or not item.output_path:
             return
 
@@ -1439,13 +1703,13 @@ class MainWindow(QMainWindow):
                 AppStyles.WARNING_COLOR,
                 "Warning",
             )
-            self._reveal_output(url)
+            self._reveal_output(key)
             return
 
         self._handle_missing_output(item)
 
-    def _reveal_output(self, url: str) -> None:
-        item = self.model.get(url)
+    def _reveal_output(self, key: str) -> None:
+        item = self.model.get(key)
         if item is None or not item.output_path:
             return
         if item.has_output:
@@ -1473,12 +1737,12 @@ class MainWindow(QMainWindow):
             AppStyles.WARNING_COLOR,
             "Warning",
         )
-        self.controller.forget_output(item.url)
+        self.controller.forget_output(item.key)
         if folder is not None:
             opener.open_path(folder)
 
-    def _copy_output_path(self, url: str) -> None:
-        item = self.model.get(url)
+    def _copy_output_path(self, key: str) -> None:
+        item = self.model.get(key)
         if item is not None and item.output_path:
             QGuiApplication.clipboard().setText(item.output_path)
 
@@ -1507,9 +1771,26 @@ class MainWindow(QMainWindow):
         self._rebuild_queue_list()
         if count:
             self.log(f"\U0001f4e5 Restored {count} queued item(s).")
+        stale: List[str] = []
         for item in self.model:
             if not (item.thumb_path and Path(item.thumb_path).is_file()):
                 self.thumbs.enqueue(item.url)
+            # Queues saved before sizes existed -- and items whose fetch
+            # failed -- carry no size. Only unfinished items are
+            # refreshed: a completed download has nothing to estimate.
+            if (
+                item.filesize is None
+                and not item.is_playlist
+                and not item.is_terminal
+                and not formats.is_spotify_code(item.format_code)
+                and item.url not in stale
+            ):
+                stale.append(item.url)
+        if stale:
+            # Deferred with the rest of start-up so the window still
+            # paints immediately.
+            self._pending_fetch.update(stale)
+            QTimer.singleShot(0, lambda: self.request_fetch.emit(stale))
 
     def _export_queue(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -1550,6 +1831,49 @@ class MainWindow(QMainWindow):
     # Cover cropping / post-queue
     # ==================================================================
 
+    def _on_item_completed(self, key: str) -> None:
+        """Crop this item's album art as soon as it finishes downloading.
+
+        Doing it per item means stopping the queue no longer leaves
+        already-downloaded audio uncropped, and only the new files are
+        touched instead of rescanning the whole downloads folder.
+        """
+        if not self.settings.CROP_AUDIO_COVERS:
+            return
+        item = self.model.get(key)
+        if item is None:
+            return
+        paths = self._audio_outputs(item)
+        if not paths:
+            return
+        if self._cover_running:
+            # A pass is already running (the manual folder scan, or the
+            # previous item). Queue these rather than starting a second
+            # thread that could rewrite the same tags concurrently.
+            self._crop_backlog.extend(paths)
+            return
+        self._start_cover_crop(paths)
+
+    def _audio_outputs(self, item: QueueItem) -> List[Path]:
+        """Audio files produced by an item, for cover cropping."""
+        from ytget_gui.workers.cover_crop_worker import SUPPORTED_SUFFIXES
+
+        raw = (item.output_path or "").strip()
+        if not raw:
+            return []
+        try:
+            target = Path(raw)
+            if target.is_file():
+                files = [target]
+            elif target.is_dir():
+                # Playlists record their destination folder, not a file.
+                files = [p for p in target.rglob("*") if p.is_file()]
+            else:
+                return []
+        except OSError:
+            return []
+        return [p for p in files if p.suffix.lower() in SUPPORTED_SUFFIXES]
+
     def _on_queue_finished(self) -> None:
         self.log(
             f"\U0001f3c1 Queue complete. After: {self._post_queue_action}.",
@@ -1557,28 +1881,36 @@ class MainWindow(QMainWindow):
         )
         self._update_buttons()
 
-        if self.settings.CROP_AUDIO_COVERS:
+        if self._cover_running or self._crop_backlog:
             # Chain the post-queue action behind the crop pass so a shutdown
             # cannot kill the machine mid-rewrite of a file's tags.
             self._pending_post_action = self._post_queue_action
-            if self._start_cover_crop():
-                return
-            self._pending_post_action = None
+            return
 
         self._run_post_action(self._post_queue_action)
 
-    def _start_cover_crop(self) -> bool:
+    def _start_cover_crop(self, paths: Optional[Sequence[Path]] = None) -> bool:
+        """Run a crop pass. With `paths`, only those files are touched."""
         if self._cover_running:
+            if paths:
+                self._crop_backlog.extend(paths)
+                return True
             self.log("\u2139\ufe0f Cover cropping is already running.")
             return False
 
         self._cover_running = True
         self.action_crop.setEnabled(False)
-        self.log("\U0001f5bc\ufe0f Cropping audio covers to 1:1\u2026")
+        if not paths:
+            self.log("\U0001f5bc\ufe0f Cropping audio covers to 1:1\u2026")
+
+        from ytget_gui.workers.cover_crop_worker import CoverCropWorker
 
         thread = QThread(self)
         thread.setObjectName("cover-crop")
-        worker = CoverCropWorker(self.settings.DOWNLOADS_DIR)
+        worker = CoverCropWorker(
+            self.settings.DOWNLOADS_DIR,
+            paths=list(paths) if paths else None,
+        )
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
@@ -1598,6 +1930,12 @@ class MainWindow(QMainWindow):
         self._cover_worker = None
         self._cover_running = False
         self.action_crop.setEnabled(True)
+
+        if self._crop_backlog:
+            # Items that finished while this pass was running.
+            pending, self._crop_backlog = self._crop_backlog, []
+            if self._start_cover_crop(pending):
+                return
 
         action, self._pending_post_action = self._pending_post_action, None
         if action is not None:
@@ -1710,7 +2048,7 @@ class MainWindow(QMainWindow):
             list(self.settings.RESOLUTIONS.keys()),
             self.format_box.currentText(),
             source=Path(path).name,
-            already_queued=[item.url for item in self.model.items],
+            already_queued=[item.url for item in self.model.items],  # informational
         )
         if not dialog.exec():
             return
@@ -1732,10 +2070,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Export Links", "The queue is empty.")
             return
 
-        selected = set(self._selected_urls())
+        selected = set(self._selected_keys())
         counts = {
             "all": len(items),
-            "selected": len([i for i in items if i.url in selected]),
+            "selected": len([i for i in items if i.key in selected]),
             "pending": len([i for i in items if i.status == Status.PENDING]),
             "completed": len([i for i in items if i.status == Status.COMPLETED]),
             "error": len([i for i in items if i.status == Status.ERROR]),
@@ -1747,7 +2085,7 @@ class MainWindow(QMainWindow):
 
         scope = dialog.scope
         if scope == "selected":
-            chosen = [i for i in items if i.url in selected]
+            chosen = [i for i in items if i.key in selected]
         elif scope == "pending":
             chosen = [i for i in items if i.status == Status.PENDING]
         elif scope == "completed":

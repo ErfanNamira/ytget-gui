@@ -25,6 +25,9 @@ _DATE_RE = re.compile(r"^\d{8}$")
 # on every call once the internal cache is evicted by other call sites.
 _ITEM_SINGLE_RE = re.compile(r"[1-9]\d*")
 _ITEM_RANGE_RE = re.compile(r"[1-9]\d*\s*-\s*[1-9]\d*")
+# Open-ended forms yt-dlp accepts: "5-" (from 5 to the end) and "-4"
+# (from the start to 4).
+_ITEM_RANGE_OPEN_RE = re.compile(r"(?:[1-9]\d*\s*-)|(?:-\s*[1-9]\d*)")
 _ITEM_SLICE_RE = re.compile(r"-?\d*:-?\d*(?::-?\d*)?")
 _RATE_LIMIT_RE = re.compile(r"\d+(?:\.\d+)?[KkMmGgTtPpEeZzYy]?")
 _RATE_SUFFIX_RE = re.compile(r"[A-Za-z]$")
@@ -126,6 +129,8 @@ def is_valid_playlist_items(text: str) -> bool:
             a, b = map(int, part.split("-"))
             if b < a:
                 return False
+            continue
+        if _ITEM_RANGE_OPEN_RE.fullmatch(part):
             continue
         if not _ITEM_SLICE_RE.fullmatch(part):
             return False

@@ -87,10 +87,32 @@ jobs:
           7z a -t7z -mx=9 ../YTGet-windows.7z YTGet
           cd ..
 
+      - name: Build Windows installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          choco install innosetup --no-progress -y
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          if [ ! -f "$ISCC" ]; then
+            echo "ISCC.exe not found at $ISCC"; exit 1
+          fi
+
+          VERSION=$(python -c "import ytget_gui._version as v; print(v.__version__)")
+          echo "Installer version: $VERSION"
+          "$ISCC" //DAppVersion="$VERSION" "packaging/windows/ytget.iss"
+
+          SETUP="YTGet-$VERSION-windows-setup.exe"
+          if [ ! -f "$SETUP" ]; then
+            echo "Installer was not produced"; ls -la; exit 1
+          fi
+          cp "$SETUP" YTGet-windows-setup.exe
+          ./YTGet-windows-setup.exe //HELP >/dev/null
+
       - name: Generate SHA-256 checksum
         shell: bash
         run: |
           certutil -hashfile YTGet-windows.7z SHA256 > YTGet-windows-7z.sha256
+          certutil -hashfile YTGet-windows-setup.exe SHA256 > YTGet-windows-setup.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
@@ -99,3 +121,5 @@ jobs:
           path: |
             YTGet-windows.7z
             YTGet-windows-7z.sha256
+            YTGet-windows-setup.exe
+            YTGet-windows-setup.sha256

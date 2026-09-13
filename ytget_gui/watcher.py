@@ -106,6 +106,7 @@ class ClipboardWatcher(QObject):
     """
 
     urls_ready = Signal(list)          # [(url, format_label), ...]
+    unlisted_ready = Signal(list)      # [(url, format_label), ...] needing consent
     message = Signal(str, str)         # text, level ("Info"/"Warning")
     running_changed = Signal(bool)
 
@@ -235,6 +236,27 @@ class ClipboardWatcher(QObject):
             return ""
         return label
 
+    def _unlisted_policy(self) -> str:
+        """Policy for sites outside the curated list.
+
+        The pre-policy builds only had a boolean allowlist switch, so a
+        config carrying WATCHER_ONLY_KNOWN_SITES=True is honoured as
+        "block" rather than silently loosening to the new default.
+        """
+        policy = str(getattr(self.settings, "WATCHER_UNLISTED_POLICY", "allow") or "allow")
+        if policy not in ("allow", "ask", "block"):
+            policy = "allow"
+        if policy == "allow" and bool(
+            getattr(self.settings, "WATCHER_ONLY_KNOWN_SITES", False)
+        ):
+            return "block"
+        return policy
+
+    def accept_unlisted(self, urls: List[str]) -> None:
+        """Mark consented links as seen so they are not offered again."""
+        for url in urls:
+            self._remember(url)
+
     def _check(self) -> None:
         if not self._running:
             return
@@ -248,23 +270,30 @@ class ClipboardWatcher(QObject):
         if not urls:
             return
 
-        only_known = bool(getattr(self.settings, "WATCHER_ONLY_KNOWN_SITES", False))
+        policy = self._unlisted_policy()
         skip_playlists = bool(getattr(self.settings, "WATCHER_SKIP_PLAYLISTS", False))
         ignore_dupes = bool(getattr(self.settings, "WATCHER_IGNORE_DUPLICATES", True))
         enabled_sites = list(getattr(self.settings, "WATCHER_ENABLED_SITES", []) or [])
 
         batch: List[Tuple[str, str]] = []
+        needs_consent: List[Tuple[str, str]] = []
         rejected_site = 0
         for url in urls[:MAX_URLS_PER_PASS]:
             if ignore_dupes and url in self._seen_set:
                 continue
-            if only_known and not is_site_enabled(url, enabled_sites):
-                rejected_site += 1
-                continue
             if skip_playlists and is_playlist_url(url):
                 continue
             category = classify(url)
-            batch.append((url, self._format_label_for(category)))
+            label = self._format_label_for(category)
+            if policy != "allow" and not is_site_enabled(url, enabled_sites):
+                if policy == "block":
+                    rejected_site += 1
+                    continue
+                # "ask": the window prompts once per batch. Not remembered
+                # here, so declining and re-copying asks again.
+                needs_consent.append((url, label))
+                continue
+            batch.append((url, label))
             self._remember(url)
 
         if len(urls) > MAX_URLS_PER_PASS:
@@ -281,3 +310,5 @@ class ClipboardWatcher(QObject):
             )
         if batch:
             self.urls_ready.emit(batch)
+        if needs_consent:
+            self.unlisted_ready.emit(needs_consent)

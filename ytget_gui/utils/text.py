@@ -11,9 +11,18 @@ _UNSAFE_CACHE_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def short(text: str, n: int = 50, suffix: str = "...") -> str:
-    """Truncate for log lines."""
+    """Truncate for log lines, never exceeding `n` characters in total.
+
+    The suffix used to be appended *after* the cut, so the result was
+    n + len(suffix) long and callers that sized a field to n still
+    overflowed it.
+    """
     text = text or ""
-    return text if len(text) <= n else text[:n] + suffix
+    if len(text) <= n:
+        return text
+    if n <= len(suffix):
+        return text[:n]
+    return text[: n - len(suffix)] + suffix
 
 
 def clamp(text: str, n: int) -> str:

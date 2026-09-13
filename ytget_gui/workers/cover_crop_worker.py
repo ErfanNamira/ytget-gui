@@ -12,7 +12,7 @@ import io
 import logging
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from PySide6.QtCore import QObject, Signal
 
@@ -30,9 +30,20 @@ class CoverCropWorker(QObject):
     progress = Signal(int, int)  # processed, total
     finished = Signal()
 
-    def __init__(self, downloads_dir: Path, parent: Optional[QObject] = None) -> None:
+    def __init__(
+        self,
+        downloads_dir: Path,
+        paths: Optional[Iterable[Path]] = None,
+        parent: Optional[QObject] = None,
+    ) -> None:
         super().__init__(parent)
         self.downloads_dir = Path(downloads_dir)
+        # When `paths` is given only those files are considered. This is
+        # the per-item mode used right after a download finishes; the
+        # folder-wide scan is reserved for the manual menu action.
+        self._paths: Optional[List[Path]] = (
+            [Path(p) for p in paths] if paths is not None else None
+        )
         self._cancel = threading.Event()
 
     def cancel(self) -> None:
@@ -56,7 +67,22 @@ class CoverCropWorker(QObject):
         suffixes = [s.lower() for s in path.suffixes]
         return len(suffixes) >= 2 and suffixes[-2] == ".temp"
 
+    @property
+    def targeted(self) -> bool:
+        return self._paths is not None
+
     def _collect(self) -> List[Path]:
+        if self._paths is not None:
+            seen: List[Path] = []
+            for path in self._paths:
+                if (
+                    path.suffix.lower() in SUPPORTED_SUFFIXES
+                    and not self._is_temp_artifact(path)
+                    and path.is_file()
+                    and path not in seen
+                ):
+                    seen.append(path)
+            return seen
         if not self.downloads_dir.is_dir():
             return []
         return sorted(
@@ -76,10 +102,11 @@ class CoverCropWorker(QObject):
             return
 
         if not files:
-            self.log.emit(
-                "\u2139\ufe0f No audio files found for cover cropping.\n",
-                AppStyles.INFO_COLOR,
-            )
+            if not self.targeted:
+                self.log.emit(
+                    "\u2139\ufe0f No audio files found for cover cropping.\n",
+                    AppStyles.INFO_COLOR,
+                )
             self.finished.emit()
             return
 
@@ -108,10 +135,12 @@ class CoverCropWorker(QObject):
             processed += 1
             self.progress.emit(processed, total)
 
-        self.log.emit(
-            f"\u2705 Cover cropping complete. Processed {processed}, updated {changed}.\n",
-            AppStyles.SUCCESS_COLOR,
-        )
+        if not self.targeted:
+            self.log.emit(
+                f"\u2705 Cover cropping complete. Processed {processed}, "
+                f"updated {changed}.\n",
+                AppStyles.SUCCESS_COLOR,
+            )
         self.finished.emit()
 
     # ------------------------------------------------------------------
