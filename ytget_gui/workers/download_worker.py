@@ -726,6 +726,11 @@ class DownloadWorker(BaseDownloadWorker):
             "--print", "after_move:~~YTGFILE~~%(filepath)j",
             "--newline",
             "--progress",
+            # --print implies --quiet, which is why the download trail
+            # disappeared: yt-dlp emitted nothing but progress records and
+            # errors, so there was no output for the log panel to show, with
+            # or without a setting. --no-quiet puts the normal output back.
+            *(["--no-quiet"] if getattr(s, "SHOW_YTDLP_LOGS", False) else []),
             "--progress-template", _PROGRESS_TEMPLATE,
             "--output-na-placeholder", "Unknown",
             "--ffmpeg-location", str(Path(s.FFMPEG_PATH).parent),
