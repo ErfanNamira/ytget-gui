@@ -405,7 +405,20 @@ def form_row(
     is_toggle = isinstance(widget, (QCheckBox, QRadioButton)) and not is_switch
     is_field = isinstance(widget, (QLineEdit, QComboBox, QSpinBox))
 
-    if description and (is_switch or is_toggle):
+    # A switch sits in column 2, so its description can share the row in
+    # column 1. A checkbox carries its own label and is itself placed in
+    # column 1 (spanning 2), so a description there would be drawn in the
+    # same cell -- the two texts overlapped on screen. Put it underneath.
+    if description and is_toggle:
+        note = QLabel(description)
+        note.setObjectName("formDescription")
+        note.setWordWrap(True)
+        note.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        grid.addWidget(note, 1, 1, 1, 2)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        grid.addWidget(spacer, 0, 1)
+    elif description and is_switch:
         note = QLabel(description)
         note.setObjectName("formDescription")
         note.setWordWrap(True)
