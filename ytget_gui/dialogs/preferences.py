@@ -1318,6 +1318,14 @@ class PreferencesDialog(QDialog):
         self.log_thumbnails = self._bind_check(
             "LOG_THUMBNAILS", ui.check("Log thumbnail failures")
         )
+        self.show_ytdlp_logs = self._bind_check(
+            "SHOW_YTDLP_LOGS", ui.check("Show yt-dlp output in the log panel")
+        )
+        self.show_ytdlp_logs.setToolTip(
+            "Off by default: per-item progress is shown on the queue card. "
+            "Turn this on to see yt-dlp's own line-by-line output, including "
+            "each entry of a playlist. Errors and warnings are always logged."
+        )
         self.confirm_quit = self._bind_check(
             "CONFIRM_ON_QUIT", ui.check("Ask before quitting during a download")
         )
@@ -1350,6 +1358,11 @@ class PreferencesDialog(QDialog):
             ui.card(
                 self._column(
                     self._row("Console history", self.max_log_lines),
+                    self._row(
+                        "",
+                        self.show_ytdlp_logs,
+                        "Verbose download log, including every playlist entry",
+                    ),
                     self._row("", self.log_thumbnails),
                     self._row("", self.confirm_quit),
                 ),

@@ -626,6 +626,28 @@ class ThumbManager(QObject):
         except TypeError:  # pragma: no cover - Python < 3.9
             self._executor.shutdown(wait=False)
 
+        if wait:
+            self.join(timeout=0.5)
+
+    def join(self, timeout: float = 1.0) -> None:
+        """Wait, briefly, for the pool threads themselves to end.
+
+        `shutdown(wait=False)` returns before the worker threads do. These are
+        plain Python threads that touch Qt objects, so Qt allocates
+        thread-local storage for them; if they outlive QCoreApplication's
+        teardown Qt prints "QThreadStorage: entry N destroyed before end of
+        thread" on the way out. Bounded on purpose: a request stuck in a
+        socket read must not hold up the exit, and the hard-exit watchdog in
+        app.py is the backstop for that case.
+        """
+        deadline = time.monotonic() + max(0.0, timeout)
+        for thread in list(getattr(self._executor, "_threads", ()) or ()):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            if thread.is_alive() and thread is not threading.current_thread():
+                thread.join(left)
+
     def purge(self, url: str, thumb_path: str = "") -> None:
         """Cancel any fetch for `url` and delete its cached image.
 

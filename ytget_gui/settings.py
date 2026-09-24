@@ -142,6 +142,7 @@ _PLAIN_KEYS: tuple[str, ...] = (
     "PREFER_HLS",
     "HLS_PREFERRED_DOMAINS",
     "LOG_THUMBNAILS",
+    "SHOW_YTDLP_LOGS",
     "MAX_LOG_LINES",
     "CONFIRM_ON_QUIT",
     "POST_QUEUE_ACTION",
@@ -339,6 +340,11 @@ class AppSettings:
 
     # --- Diagnostics / UX ---
     LOG_THUMBNAILS: bool = False
+    # yt-dlp's own console output. Off by default: per-item progress is
+    # shown on the queue card, and a playlist run otherwise floods the
+    # console with thousands of lines. Errors and warnings are always
+    # logged regardless of this setting.
+    SHOW_YTDLP_LOGS: bool = False
     MAX_LOG_LINES: int = MAX_LOG_LINES
     CONFIRM_ON_QUIT: bool = True
     # Remembered between runs, so an unattended overnight queue keeps the

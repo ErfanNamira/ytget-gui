@@ -73,6 +73,15 @@ class QueueItem:
     filesize: Optional[int] = None
     queue_attempts: int = 0
     last_error: str = ""
+    # Metadata bookkeeping. `metadata_ok` is the single source of truth for
+    # "this item's details were resolved"; without it every restart re-fetched
+    # titles that were already known (any item lacking a size looked unfetched)
+    # while items whose fetch had failed were never retried at all.
+    metadata_ok: bool = False
+    metadata_attempts: int = 0
+    # Unix time of the earliest allowed retry, so a rate-limited fetch backs
+    # off instead of hammering the site.
+    metadata_retry_at: float = 0.0
     added_at: float = field(default_factory=time.time)
     output_path: str = ""
     output_count: int = 0
@@ -148,6 +157,9 @@ class QueueItem:
             "uploader": self.uploader,
             "queue_attempts": self.queue_attempts,
             "last_error": self.last_error,
+            "metadata_ok": self.metadata_ok,
+            "metadata_attempts": self.metadata_attempts,
+            "metadata_retry_at": self.metadata_retry_at,
             "added_at": self.added_at,
             "output_path": self.output_path,
             "output_count": self.output_count,
@@ -197,6 +209,15 @@ class QueueItem:
             uploader=str(data.get("uploader") or ""),
             queue_attempts=max(0, as_int(data.get("queue_attempts"))),
             last_error=str(data.get("last_error") or ""),
+            # Queues written before 2.8.1 carry no flag: a stored title is
+            # proof enough that the fetch had already succeeded.
+            metadata_ok=(
+                bool(data["metadata_ok"])
+                if "metadata_ok" in data
+                else bool(str(data.get("title") or "").strip())
+            ),
+            metadata_attempts=max(0, as_int(data.get("metadata_attempts"))),
+            metadata_retry_at=as_float(data.get("metadata_retry_at"), 0.0) or 0.0,
             added_at=as_float(data.get("added_at"), time.time()),
             output_path=str(data.get("output_path") or ""),
             output_count=max(0, as_int(data.get("output_count"))),

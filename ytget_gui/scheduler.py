@@ -30,6 +30,11 @@ log = logging.getLogger(__name__)
 # a machine that was asleep at 03:00 does not shut down the moment it wakes.
 CATCH_UP_SECONDS = 300
 
+# A gap between ticks longer than this means the machine slept, hibernated or
+# was otherwise frozen. Events inside such a gap are treated as missed rather
+# than fired late, so waking at noon does not trigger the 03:00 action.
+SLEEP_GAP_SECONDS = 120
+
 _TICK_MS = 15000
 
 DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -61,6 +66,12 @@ class Scheduler(QObject):
         super().__init__(parent)
         self.settings = settings
         self._fired: Dict[str, date] = {}
+        # Wall-clock time of the previous tick. Ticks can be much further
+        # apart than the interval (a busy GUI thread, a suspended machine, a
+        # clock change), and an event that fell into such a gap used to be
+        # lost entirely: by the time the next tick ran, its minute -- and the
+        # catch-up window with it -- had already passed.
+        self._last_tick: Optional[datetime] = None
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_MS)
         self._timer.timeout.connect(self._tick)
@@ -92,6 +103,7 @@ class Scheduler(QObject):
         # Anything already past when the scheduler starts is treated as
         # handled, so enabling the scheduler never fires a stale event.
         self._seed_fired()
+        self._last_tick = datetime.now()
         self._timer.start()
         self.message.emit(f"Scheduler active - {self.describe()}", "Info")
 
@@ -191,10 +203,30 @@ class Scheduler(QObject):
             return False
         scheduled = datetime.combine(now.date(), self._time_for(key))
         delta = (now - scheduled).total_seconds()
-        return 0 <= delta <= CATCH_UP_SECONDS
+        if delta < 0:
+            return False
+        if delta <= CATCH_UP_SECONDS:
+            return True
+        # Past the catch-up window, but still due if the scheduled minute fell
+        # between the previous tick and this one *while the app was awake* --
+        # i.e. the tick was merely late, not skipped by a sleeping machine.
+        last = self._last_tick
+        if last is None or last > scheduled:
+            return False
+        gap = (now - last).total_seconds()
+        return gap <= SLEEP_GAP_SECONDS
 
     def _tick(self) -> None:
         now = datetime.now()
+        previous = self._last_tick
+        self._last_tick = now
+
+        # A clock moved backwards (manual change, DST, NTP correction) would
+        # otherwise leave _fired holding a future date and mute the scheduler.
+        if previous is not None and now < previous:
+            self._fired.clear()
+            self._seed_fired(now)
+            return
 
         # Order matters: a power action in the same minute as a stop should
         # see the queue already stopped.

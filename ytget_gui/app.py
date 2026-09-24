@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
+import threading
+import time
 
 # AppUserModelID must be set before QApplication is constructed, or Windows
 # groups the window under the generic python.exe taskbar entry.
@@ -17,9 +20,11 @@ if sys.platform == "win32":
     import ctypes
 
     try:
-        from ytget_gui._version import __version__ as _v
+        from ytget_gui._version import APP_USER_MODEL_ID
 
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(f"YTGet.{_v}")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            APP_USER_MODEL_ID
+        )
     except Exception:  # noqa: BLE001 - cosmetic only, never fatal
         pass
 
@@ -74,7 +79,13 @@ def build_dark_palette() -> QPalette:
 
 
 def find_icon() -> QIcon | None:
-    """Locate the app icon in both source and frozen layouts."""
+    """Locate the app icon in both source and frozen layouts.
+
+    Every size stored in the .ico is loaded, not just the one Qt happens to
+    pick: Windows asks for a 16px icon for the taskbar button, and an icon
+    that only carries a large bitmap is rejected as "no icon" the first time
+    it is requested after a cold boot, before the shell icon cache is warm.
+    """
     from PySide6.QtGui import QIcon
     from ytget_gui.utils.paths import get_base_path, get_bundle_path, is_macos
 
@@ -87,7 +98,9 @@ def find_icon() -> QIcon | None:
         for name in names:
             candidate = root / name
             if candidate.is_file():
-                return QIcon(str(candidate))
+                icon = QIcon(str(candidate))
+                if not icon.isNull():
+                    return icon
     return None
 
 
@@ -194,4 +207,38 @@ def main(argv: list[str] | None = None) -> int:
     if args.urls:
         window.enqueue_urls(args.urls)
 
-    return app.exec()
+    code = app.exec()
+
+    # Normal teardown runs first: killing the process outright while Qt still
+    # has live thread-local storage makes it complain on the way out
+    # ("QThreadStorage: entry N destroyed before end of thread").
+    #
+    # The watchdog is the backstop for the case that caused the hard exit in
+    # the first place: a background helper parked in a socket read, which
+    # concurrent.futures' atexit hook then waits on forever, leaving YTGet in
+    # Task Manager with no window. Everything that must be persisted has
+    # already been written by MainWindow.closeEvent, so if the interpreter is
+    # still here a few seconds later there is nothing left to lose.
+    _arm_exit_watchdog(int(code))
+    return int(code)
+
+
+# Seconds allowed for a clean interpreter shutdown before the process is
+# terminated outright.
+_EXIT_WATCHDOG_S = 5.0
+
+
+def _arm_exit_watchdog(code: int) -> None:
+    def _bail() -> None:
+        time.sleep(_EXIT_WATCHDOG_S)
+        log.warning("Shutdown stalled after %.0fs; exiting.", _EXIT_WATCHDOG_S)
+        try:
+            logging.shutdown()
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(code)
+
+    # Daemon: it must never be the reason the process stays up.
+    threading.Thread(target=_bail, name="ExitWatchdog", daemon=True).start()

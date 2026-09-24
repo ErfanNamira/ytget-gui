@@ -493,6 +493,12 @@ class DownloadWorker(BaseDownloadWorker):
             colour = AppStyles.WARNING_COLOR
         else:
             colour = AppStyles.TEXT_COLOR
+            # Routine yt-dlp chatter is opt-in (Preferences > Advanced >
+            # Interface). Problems are never hidden: only plain output is
+            # dropped, and the line is still parsed for the output path and
+            # playlist position above.
+            if not getattr(self.settings, "SHOW_YTDLP_LOGS", False):
+                return
         self.add_log(stripped, colour)
 
     def _capture_output(self, line: str) -> None:

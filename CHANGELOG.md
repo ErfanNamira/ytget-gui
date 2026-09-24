@@ -1,3 +1,82 @@
+### v 2.8.1
+
+A maintenance release: the scheduler now actually runs its power action, the
+tray's Exit really ends the process, the taskbar icon is correct on the first
+launch after a boot, metadata is no longer re-fetched on every start (and is
+retried when it failed), yt-dlp's own log can be turned back on, and queue
+items can show their thumbnail.
+
+#### Scheduler
+
+- A scheduled shutdown/sleep/restart no longer cancels itself. The power
+  action shared the post-queue guard that refuses to act unless every item in
+  the queue completed, so a scheduled 07:00 sleep did nothing whenever items
+  were still pending -- which is the normal state for a scheduled run. A
+  scheduled action is now carried out as instructed; the post-queue action
+  keeps its guard.
+- Events are no longer lost when a tick arrives late. The scheduler compares
+  each scheduled time against the previous tick as well as the current one,
+  so a busy moment or a stalled timer can no longer step over the five-minute
+  catch-up window.
+- A gap longer than two minutes between ticks is treated as the machine having
+  slept rather than the app having been late, so waking at noon does not fire
+  the 03:00 action.
+- A clock moved backwards (DST, a manual change, an NTP correction) now resets
+  the day's bookkeeping instead of muting the scheduler until the next day.
+- `Close` as a post-queue or scheduled action now exits the app properly
+  instead of closing the window into the tray.
+
+#### Queue metadata
+
+- Titles are no longer re-fetched at every start. Whether an item had been
+  resolved was inferred from the absence of a download size, so every item on
+  a site that does not advertise one looked unfetched forever and was queried
+  again on each launch. Items now record that their details were resolved, and
+  that flag is stored with the queue.
+- Details that could not be fetched are retried. A fetch that failed -- almost
+  always a temporary rate-limit -- used to be abandoned permanently, leaving a
+  card showing nothing but its URL until the link was removed and re-added.
+  Failed items are now retried with a growing backoff (1, 5, 15, 30 minutes,
+  then hourly) and the retry schedule survives a restart.
+- Retries go out in small batches, so a long queue coming back from an outage
+  cannot fire hundreds of yt-dlp calls at once.
+- The warning now says when the next attempt will be made.
+
+#### Interface
+
+- New **Preferences -> Advanced -> Interface -> Show yt-dlp output in the log
+  panel**. Off by default, since per-item progress is already on the queue
+  card and a playlist run otherwise floods the console. Turn it on for the
+  full line-by-line trail, including every entry of a playlist. Errors and
+  warnings are always logged either way.
+- New **View thumbnail** entry in a queue card's `...` menu. It shows the
+  cached image at a size bounded by the screen, with its dimensions, the cache
+  path and an "Open in viewer" button. An item with no cached thumbnail logs a
+  note and requests the image again instead of failing.
+
+#### Windows
+
+- Exit from the tray now ends the process. Qt only reports "last window
+  closed" for a visible window, so quitting while the window was hidden in the
+  tray left the event loop running and YTGet sitting in Task Manager with no
+  UI. The app now quits explicitly and exits hard once its state is saved, so
+  a background helper parked in a socket read cannot hold the process open.
+- The taskbar icon is correct on the first launch after a boot. The app
+  registered a version-specific Application User Model ID, so every release
+  introduced an identity Windows had never seen and, with a cold icon cache,
+  showed the placeholder icon. The ID is now the stable `ErfanNamira.YTGet`
+  and the installer stamps the same ID onto the Start menu, desktop and
+  startup shortcuts.
+- The icon is validated when loaded, so an unreadable file falls through to
+  the next candidate rather than installing an empty icon.
+- No more `QThreadStorage: entry N destroyed before end of thread` on exit.
+  The thumbnail pool's workers are plain Python threads that touch Qt
+  objects, so Qt keeps thread-local storage for them; they are now joined
+  (briefly, on a budget) before the application tears that storage down. The
+  hard exit is a five-second watchdog rather than the normal path, so a clean
+  shutdown runs to completion while a helper stuck in a socket read still
+  cannot keep the process alive.
+
 ### v 2.8.0
 
 System tray, clipboard watcher, scheduler, run-at-login, plain-text link

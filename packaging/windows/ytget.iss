@@ -5,7 +5,7 @@
 ; .zip and .7z archives.
 ;
 ; Build from the repository root:
-;   iscc /DAppVersion=2.8.0 packaging\windows\ytget.iss
+;   iscc /DAppVersion=2.8.1 packaging\windows\ytget.iss
 ;
 ; Expects:
 ;   dist\YTGet\YTGet.exe   PyInstaller onedir build
@@ -27,6 +27,10 @@
 #define AppPublisher "Erfan Namira"
 #define AppURL "https://github.com/ErfanNamira/ytget-gui"
 #define AppExeName "YTGet.exe"
+; Must match APP_USER_MODEL_ID in ytget_gui/_version.py, or Windows
+; cannot match the running window to its shortcut and falls back to the
+; placeholder taskbar icon.
+#define AppUserModelID "ErfanNamira.YTGet"
 
 [Setup]
 ; Stable AppId: lets a newer version upgrade an existing install in place
@@ -93,10 +97,10 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Type: filesandordirs; Name: "{app}\_internal"
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; AppUserModelID: "{#AppUserModelID}"
 Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
-Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--minimized"; Tasks: startupicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon; AppUserModelID: "{#AppUserModelID}"
+Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--minimized"; Tasks: startupicon; AppUserModelID: "{#AppUserModelID}"
 
 [Registry]
 ; YTGet writes this itself when "run at login" is enabled in

@@ -28,9 +28,20 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QIcon, QTextCursor
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QGuiApplication,
+    QIcon,
+    QPixmap,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -81,6 +92,18 @@ _POST_ACTIONS = ("Keep", "Shutdown", "Sleep", "Restart", "Close")
 # into a window frozen for four or more seconds on exit.
 _SHUTDOWN_BUDGET_S = 2.0
 
+# How often the queue is scanned for items still missing their details.
+_METADATA_RETRY_TICK_MS = 60_000
+
+# Backoff between metadata retries: 1, 5, 15, 30 minutes, then hourly. A
+# rate-limited host stays rate-limited for a while, so retrying tightly only
+# extends the block.
+_METADATA_BACKOFF_S = (60, 300, 900, 1800, 3600)
+
+# Items retried per tick, so a queue of hundreds cannot fire hundreds of
+# yt-dlp calls at once after a long offline spell.
+_METADATA_RETRY_BATCH = 5
+
 
 class MainWindow(QMainWindow):
     # Cross-thread requests into the title-fetch queue, which lives in its own
@@ -101,6 +124,13 @@ class MainWindow(QMainWindow):
         # every keystroke made filtering a long queue quadratic.
         self._search_index: Dict[str, str] = {}
         self._pending_fetch: set[str] = set()
+        # Retries metadata for items whose fetch failed (typically a
+        # rate-limit). Without it a throttled item kept showing its bare URL
+        # forever: nothing ever asked for its details again, not even after a
+        # restart.
+        self._metadata_retry_timer = QTimer(self)
+        self._metadata_retry_timer.setInterval(_METADATA_RETRY_TICK_MS)
+        self._metadata_retry_timer.timeout.connect(self._retry_missing_metadata)
         # Advanced options waiting to be stamped onto the next items added.
         # They are never written to the shared settings, which is what used
         # to make a clip range apply to every item in the queue.
@@ -952,6 +982,12 @@ class MainWindow(QMainWindow):
                     video_sizes, audio_size, item.format_code
                 )
             )
+            if title:
+                # Resolved for good: no later start re-fetches this item.
+                item.metadata_ok = True
+                item.metadata_attempts = 0
+                item.metadata_retry_at = 0.0
+                item.last_error = ""
             self._on_item_changed(item.key)
         self.model.save()
         self.log(f"\u2705 {short(items[0].display_title, 60)}")
@@ -959,13 +995,21 @@ class MainWindow(QMainWindow):
     @Slot(str, str)
     def _on_metadata_error(self, url: str, message: str) -> None:
         self._pending_fetch.discard(url)
+        delay = 0
         for item in self.model.items_for_url(url):
             item.last_error = message
+            item.metadata_attempts += 1
+            delay = self._metadata_backoff(item)
+            item.metadata_retry_at = time.time() + delay
             self._on_item_changed(item.key)
+        self.model.save()
         # Non-fatal: the item stays queued and the download may still succeed,
-        # since yt-dlp resolves metadata again at download time.
+        # since yt-dlp resolves metadata again at download time. The details
+        # are asked for again later -- a rate-limit is temporary.
+        retry = f" Retrying in {max(1, delay // 60)} min." if delay else ""
         self.log(
-            f"Could not fetch details for {short(url, 50)}: {short(message, 90)}",
+            f"Could not fetch details for {short(url, 50)}: "
+            f"{short(message, 90)}.{retry}",
             AppStyles.WARNING_COLOR,
             "Warning",
         )
@@ -1098,6 +1142,7 @@ class MainWindow(QMainWindow):
         actions = [
             ("Open in browser", lambda u=item.url: webbrowser.open(u)),
             ("Copy URL", lambda u=item.url: QGuiApplication.clipboard().setText(u)),
+            ("View thumbnail", lambda k=item.key: self._view_thumbnail(k)),
         ]
         if item.output_path:
             actions += [
@@ -1386,7 +1431,11 @@ class MainWindow(QMainWindow):
             )
             self.controller.stop_all()
         self._notify("Scheduled " + action, "Running now.", warning=True)
-        self._run_post_action(action)
+        # force=True: a scheduled power action is an explicit instruction with
+        # a time attached. The post-queue guard ("only when everything
+        # completed") silently cancelled every scheduled shutdown/sleep,
+        # because a scheduled run almost always has items still pending.
+        self._run_post_action(action, force=True)
 
     def _start_watcher(self) -> None:
         self.watcher = ClipboardWatcher(self.settings, parent=self)
@@ -1760,6 +1809,74 @@ class MainWindow(QMainWindow):
         if folder is not None:
             opener.open_path(folder)
 
+    def _view_thumbnail(self, key: str) -> None:
+        """Show the cached thumbnail for one queue item.
+
+        Deliberately forgiving: an item whose thumbnail was never fetched (or
+        whose cache file was cleaned up) logs a note and, when possible, asks
+        for the image again instead of raising.
+        """
+        item = self.model.get(key)
+        if item is None:
+            return
+
+        path = item.thumb_path
+        if not (path and Path(path).is_file()):
+            self.log(
+                f"No thumbnail saved yet for {short(item.display_title, 50)}.",
+                AppStyles.WARNING_COLOR,
+                "Warning",
+            )
+            # Ask for it now, so the next attempt has something to show.
+            self.thumbs.enqueue(item.url)
+            return
+
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self.log(
+                f"The saved thumbnail for {short(item.display_title, 50)} "
+                "could not be read.",
+                AppStyles.WARNING_COLOR,
+                "Warning",
+            )
+            self.thumbs.enqueue(item.url, force=True)
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(short(item.display_title, 70) or "Thumbnail")
+        dialog.setAttribute(Qt.WA_DeleteOnClose)
+        if self._app_icon is not None:
+            dialog.setWindowIcon(self._app_icon)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        label = QLabel()
+        label.setAlignment(Qt.AlignCenter)
+        # Bounded so a maxres image cannot open a window larger than the screen.
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        limit = screen.availableGeometry().size() * 0.8 if screen else QSize(960, 540)
+        shown = pixmap
+        if pixmap.width() > limit.width() or pixmap.height() > limit.height():
+            shown = pixmap.scaled(limit, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        label.setPixmap(shown)
+        layout.addWidget(label)
+
+        caption = QLabel(f"{pixmap.width()} x {pixmap.height()}  \u00b7  {path}")
+        caption.setObjectName("muted")
+        caption.setWordWrap(True)
+        caption.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(caption)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        open_btn = buttons.addButton("Open in viewer", QDialogButtonBox.ActionRole)
+        open_btn.clicked.connect(lambda: opener.open_path(Path(path)))
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        dialog.show()
+
     def _copy_output_path(self, key: str) -> None:
         item = self.model.get(key)
         if item is not None and item.output_path:
@@ -1794,22 +1911,62 @@ class MainWindow(QMainWindow):
         for item in self.model:
             if not (item.thumb_path and Path(item.thumb_path).is_file()):
                 self.thumbs.enqueue(item.url)
-            # Queues saved before sizes existed -- and items whose fetch
-            # failed -- carry no size. Only unfinished items are
-            # refreshed: a completed download has nothing to estimate.
-            if (
-                item.filesize is None
-                and not item.is_playlist
-                and not item.is_terminal
-                and not formats.is_spotify_code(item.format_code)
-                and item.url not in stale
-            ):
+            # Only items whose details were never resolved are fetched again.
+            # Keying this off a missing size re-fetched titles that were
+            # already on screen after every single start, because plenty of
+            # sites never advertise a size at all.
+            if self._needs_metadata(item) and item.url not in stale:
                 stale.append(item.url)
         if stale:
             # Deferred with the rest of start-up so the window still
-            # paints immediately.
-            self._pending_fetch.update(stale)
-            QTimer.singleShot(0, lambda: self.request_fetch.emit(stale))
+            # paints immediately. Only the first batch goes out now; the
+            # rest follow on the retry timer, one small batch at a time.
+            first = stale[:_METADATA_RETRY_BATCH]
+            self._pending_fetch.update(first)
+            QTimer.singleShot(0, lambda: self.request_fetch.emit(first))
+        self._metadata_retry_timer.start()
+
+    def _needs_metadata(self, item: QueueItem) -> bool:
+        """True when this item's details were never successfully fetched."""
+        if item.metadata_ok or item.is_terminal:
+            return False
+        if formats.is_spotify_code(item.format_code):
+            return False
+        return True
+
+    def _retry_missing_metadata(self) -> None:
+        """Re-ask for details that never arrived, with a growing backoff.
+
+        A fetch that failed once (almost always a temporary rate-limit) used
+        to be abandoned permanently, leaving a card showing nothing but its
+        URL until the user removed and re-added the link.
+        """
+        now = time.time()
+        due: List[str] = []
+        for item in self.model:
+            if not self._needs_metadata(item):
+                continue
+            if item.url in self._pending_fetch or item.url in due:
+                continue
+            if item.metadata_retry_at and item.metadata_retry_at > now:
+                continue
+            due.append(item.url)
+            if len(due) >= _METADATA_RETRY_BATCH:
+                break
+        if not due:
+            return
+        # Reserve the next slot up front: a fetch that fails again must not
+        # come straight back on the following tick.
+        for url in due:
+            for item in self.model.items_for_url(url):
+                item.metadata_retry_at = now + self._metadata_backoff(item)
+        self._pending_fetch.update(due)
+        self.request_fetch.emit(due)
+
+    @staticmethod
+    def _metadata_backoff(item: QueueItem) -> int:
+        index = min(max(0, item.metadata_attempts), len(_METADATA_BACKOFF_S) - 1)
+        return _METADATA_BACKOFF_S[index]
 
     def _export_queue(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -1960,14 +2117,14 @@ class MainWindow(QMainWindow):
         if action is not None:
             self._run_post_action(action)
 
-    def _run_post_action(self, action: str) -> None:
+    def _run_post_action(self, action: str, *, force: bool = False) -> None:
         if action == "Keep":
             return
         if action == "Close":
-            QTimer.singleShot(0, self.close)
+            QTimer.singleShot(0, self.quit_application)
             return
 
-        if any(item.status is not Status.COMPLETED for item in self.model):
+        if not force and any(item.status is not Status.COMPLETED for item in self.model):
             self.log("Power action cancelled: the queue contains failed, cancelled or unfinished items.", AppStyles.WARNING_COLOR)
             return
         command = self._post_action_command(action)
@@ -2319,7 +2476,22 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(200, self.close)
             return
 
+        self._metadata_retry_timer.stop()
+        # Give the thumbnail pool's plain Python threads a moment to end
+        # before Qt tears down its thread-local storage under them, which is
+        # what printed "QThreadStorage: entry N destroyed before end of
+        # thread" at exit. Bounded by whatever is left of the shutdown budget.
+        try:
+            self.thumbs.join(timeout=min(1.0, remaining_ms() / 1000))
+        except Exception:  # noqa: BLE001 - never block exit on cleanup
+            log.debug("Thumbnail pool did not join cleanly", exc_info=True)
         if self.tray is not None:
             self.tray.shutdown()
             self.tray = None
         super().closeEvent(event)
+        # Qt only emits lastWindowClosed for a *visible* window, so quitting
+        # from the tray while the window was hidden closed nothing the event
+        # loop noticed: the process stayed alive, invisible, in Task Manager.
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
