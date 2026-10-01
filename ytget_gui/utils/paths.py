@@ -6,6 +6,7 @@ import os
 import platform
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Optional, Union
 
@@ -18,6 +19,26 @@ def is_windows() -> bool:
 
 def is_macos() -> bool:
     return sys.platform == "darwin"
+
+
+def replace_with_retry(src: PathLike, dst: PathLike, *, attempts: int = 6,
+                       delay: float = 0.05) -> None:
+    """os.replace() that rides out a briefly locked target on Windows.
+
+    Antivirus scanners, the search indexer and cloud-sync clients open freshly
+    written files for a few milliseconds; os.replace() then fails with
+    PermissionError (WinError 5/32) and the queue or settings save was lost.
+    Retries with a short backoff (~1.5 s worst case) and re-raises the last
+    error, so callers keep their existing error handling.
+    """
+    for attempt in range(max(1, attempts)):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(delay * (2 ** attempt))
 
 
 def is_frozen() -> bool:

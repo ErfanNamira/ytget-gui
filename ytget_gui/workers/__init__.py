@@ -17,6 +17,7 @@ __all__ = [
     "proc",
     "spotdl_worker",
     "ssl_utils",
+    "tag_guard",
     "thumb_fetcher",
     "title_fetch_manager",
     "title_fetcher",

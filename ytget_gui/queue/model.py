@@ -15,6 +15,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
 
+from ytget_gui.utils.paths import replace_with_retry
 from ytget_gui.utils.validators import is_supported_url
 
 log = logging.getLogger(__name__)
@@ -562,7 +563,7 @@ class QueueModel:
             # Atomic: the queue is written after every state change, so a crash
             # mid-write previously produced an unparseable queue.json and the
             # entire queue was lost on next launch.
-            os.replace(tmp_path, target)
+            replace_with_retry(tmp_path, target)
             tmp_path = None
             return True
         except OSError as exc:

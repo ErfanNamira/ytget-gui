@@ -34,7 +34,7 @@ from ytget_gui.utils.validators import (
     is_youtube_music_url,
     is_youtube_url,
 )
-from ytget_gui.workers import fetch_core, proc, ssl_utils
+from ytget_gui.workers import fetch_core, proc, ssl_utils, tag_guard
 from ytget_gui.workers.base import CANCELLED_EXIT, BaseDownloadWorker
 
 log = logging.getLogger(__name__)
@@ -161,8 +161,13 @@ _ERROR_LINE_RE = re.compile(
     r"^ERROR:\s*(?:\[(?P<ie>[^\]]+)\]\s*(?P<id>[A-Za-z0-9_-]+):)?\s*(?P<msg>.*)$"
 )
 _NON_ENTRY_TAGS = frozenset({"info", "download", "debug"})
-# Tag keys in which yt-dlp's --add-metadata stores the source page URL.
-_SOURCE_TAG_HINTS = ("purl", "comment", "cmt", "comm", "website", "wxxx")
+# yt-dlp prints this right before it re-runs post-processing on a file that
+# is already on disk. Matched on raw bytes in the reader thread.
+_EXISTING_MARKER = b"has already been downloaded"
+# A partial line kept between reads while looking for that marker. Generous
+# enough for a long Windows path, bounded so a newline-free stream cannot grow
+# it without limit.
+_MARKER_TAIL_LIMIT = 8192
 
 
 def _source_tag_text(path: Path) -> Optional[str]:
@@ -174,32 +179,18 @@ def _source_tag_text(path: Path) -> Optional[str]:
     same filename; yt-dlp then treats the second as "already downloaded" and
     re-tags -- or, for Opus, fails to re-tag -- the first one's file.
     """
-    try:
-        import mutagen
+    return tag_guard.probe(path, with_snapshot=False).source_text
 
-        audio = mutagen.File(path)
-    except Exception as exc:  # noqa: BLE001 - probing is best-effort
-        log.debug("Could not read tags of %s: %s", path, exc)
-        return None
-    if audio is None or not getattr(audio, "tags", None):
-        return ""
-    parts: List[str] = []
-    try:
-        items = list(audio.tags.items())
-    except Exception:  # noqa: BLE001 - some tag types are not mappings
-        return ""
-    for key, value in items:
-        if not any(h in str(key).lower() for h in _SOURCE_TAG_HINTS):
-            continue
-        values = value if isinstance(value, (list, tuple)) else [value]
-        for entry in values:
-            text = getattr(entry, "text", None) or getattr(entry, "url", None) or entry
-            if isinstance(text, (list, tuple)):
-                text = " ".join(str(t) for t in text)
-            text = str(text)
-            if len(text) < 4096:
-                parts.append(text)
-    return "\n".join(parts)
+
+def _owner_of(text: Optional[str], entry: str) -> str:
+    """"same" / "other" / "unknown" for an existing file's source tags."""
+    if text is None or not text.strip():
+        return "unknown"
+    if entry in text:
+        return "same"
+    if "http" in text:
+        return "other"
+    return "unknown"
 
 # EBU R128 two-pass-equivalent single-pass normalisation. AUDIO_NORMALIZE was
 # persisted, surfaced in Preferences and announced at startup in the previous
@@ -282,6 +273,13 @@ class DownloadWorker(BaseDownloadWorker):
         self._followup_failures = 0
         self._current_followup: Optional[Dict[str, Any]] = None
         self._produced: Dict[str, str] = {}     # final path -> entry id
+        # Existing-file probes taken by the reader thread the moment yt-dlp
+        # announces "has already been downloaded" -- before its metadata step
+        # can rewrite that file's tags. Keyed by the printed path.
+        self._probes: Dict[str, tag_guard.Probe] = {}
+        self._probe_lock = threading.Lock()
+        # Lines of the download archive, read once per job on first use.
+        self._archive_lines: Optional[set] = None
         self._reset_entry_tracking()
 
         # Video-only + audio-only formats (e.g. "399+251") download as two
@@ -312,6 +310,8 @@ class DownloadWorker(BaseDownloadWorker):
         self._existing: Dict[str, Dict[str, Any]] = {}
         self._error_ids: List[Optional[str]] = []
         self._followups.clear()
+        with self._probe_lock:
+            self._probes.clear()
 
     def _start(self) -> None:
         self._raw_output.connect(self._on_output)
@@ -413,6 +413,7 @@ class DownloadWorker(BaseDownloadWorker):
         if stream is None:
             self._process_exited.emit(CANCELLED_EXIT)
             return
+        tail = b""
         try:
             # 64 KiB reads: each emit crosses threads as a queued Qt event, and
             # the old 4 KiB size produced 16x the event traffic for the same
@@ -421,6 +422,7 @@ class DownloadWorker(BaseDownloadWorker):
                 chunk = stream.read(65536)
                 if not chunk:
                     break
+                tail = self._scan_for_existing(tail, chunk)
                 self._raw_output.emit(chunk)
         except (OSError, ValueError):
             pass
@@ -431,6 +433,42 @@ class DownloadWorker(BaseDownloadWorker):
                 code = CANCELLED_EXIT
             stream.close()
             self._process_exited.emit(code if code is not None else 2)
+
+    def _scan_for_existing(self, tail: bytes, chunk: bytes) -> bytes:
+        """Reader-thread hook: probe an existing file before yt-dlp re-tags it.
+
+        Runs before the chunk is forwarded, so the snapshot is taken while
+        yt-dlp is still probing the file (ffprobe) and has not started its
+        metadata rewrite. Doing this on the worker thread instead left a race
+        in which MP3/M4A/FLAC tags could already have been overwritten.
+        Returns the new partial-line tail. Cheap when the marker is absent:
+        one substring search per read.
+        """
+        data = tail + chunk if tail else chunk
+        if _EXISTING_MARKER not in data:
+            cut = data.rfind(b"\n")
+            rest = data[cut + 1:] if cut >= 0 else data
+            return rest[-_MARKER_TAIL_LIMIT:]
+        lines = data.split(b"\n")
+        rest = lines.pop()
+        for raw in lines:
+            if _EXISTING_MARKER not in raw:
+                continue
+            text = raw.decode("utf-8", errors="replace").strip()
+            match = _OUTPUT_PATTERNS[1].match(text)
+            if not match:
+                continue
+            path_text = (match.group("path") or "").strip().strip('"')
+            if not path_text:
+                continue
+            try:
+                result = tag_guard.probe(Path(path_text))
+            except Exception as exc:  # noqa: BLE001 - never kill the reader
+                log.debug("Existing-file probe failed: %s", exc)
+                continue
+            with self._probe_lock:
+                self._probes[path_text] = result
+        return rest[-_MARKER_TAIL_LIMIT:]
 
     def _on_output(self, data: bytes) -> None:
         text = self._decoder.decode(data)
@@ -574,10 +612,16 @@ class DownloadWorker(BaseDownloadWorker):
             return
         self._track_entry(stripped)
         self._capture_output(stripped)
+        if stripped.startswith("ERROR: Postprocessing") and self._explain_existing_error():
+            return
         lowered = stripped.lower()
-        if "error" in lowered:
+        # Classified by yt-dlp's own "ERROR:"/"WARNING:" markers. A bare
+        # substring test showed every track whose *title* contained "error"
+        # or "warning" (e.g. "Fatal Error.opus") as a red error, even with
+        # yt-dlp output hidden.
+        if lowered.startswith(("error", "traceback")) or "error:" in lowered:
             colour = AppStyles.ERROR_COLOR
-        elif "warning" in lowered:
+        elif lowered.startswith("warning") or "warning:" in lowered:
             colour = AppStyles.WARNING_COLOR
         else:
             colour = AppStyles.TEXT_COLOR
@@ -624,6 +668,36 @@ class DownloadWorker(BaseDownloadWorker):
                 meta.setdefault("url", self._pending_url)
                 self._pending_url = ""
 
+    def _explain_existing_error(self) -> bool:
+        """Replace yt-dlp's post-processing error for an already-present file.
+
+        "ERROR: Postprocessing: Conversion failed!" after "has already been
+        downloaded" is yt-dlp failing to re-tag a file that is already on
+        disk (ffmpeg cannot stream-copy cover art inside Ogg/Opus). It is
+        handled after the run, so a red error line per track only alarmed
+        people. Unknown cases are still shown verbatim.
+        """
+        if self._phase != "main":
+            return False
+        info = self._existing.get(self._entry_id)
+        if not info or info.get("explained") or info["owner"] == "unknown":
+            return False
+        info["explained"] = True
+        name = short(Path(info["path"]).name, 60)
+        if info["owner"] == "other":
+            text = (
+                f"\u2139\ufe0f '{name}' already exists from a different upload with "
+                f"the same title; the existing file is kept and "
+                f"{self._entry_id} will be saved separately."
+            )
+        else:
+            text = (
+                f"\u2139\ufe0f '{name}' was already downloaded; yt-dlp's attempt "
+                "to re-tag it failed harmlessly and it is recorded as done."
+            )
+        self.add_log(text, AppStyles.INFO_COLOR)
+        return True
+
     def _note_existing(self, path_text: str) -> None:
         """Record an entry whose target file already exists on disk.
 
@@ -635,20 +709,19 @@ class DownloadWorker(BaseDownloadWorker):
         if not entry or entry in self._existing:
             return
         path = Path(path_text)
+        with self._probe_lock:
+            probe = self._probes.pop(path_text, None)
+        if probe is None:
+            # Reader-thread probe missed (unusual output encoding): read now.
+            probe = tag_guard.probe(path)
         producer = self._produced.get(path_text)
         if producer:
             owner = "same" if producer == entry else "other"
         else:
-            text = _source_tag_text(path)
-            if text is None or not text.strip():
-                owner = "unknown"
-            elif entry in text:
-                owner = "same"
-            elif "http" in text:
-                owner = "other"
-            else:
-                owner = "unknown"
-        self._existing[entry] = {"path": path_text, "owner": owner}
+            owner = _owner_of(probe.source_text, entry)
+        self._existing[entry] = {
+            "path": path_text, "owner": owner, "snapshot": probe.snapshot,
+        }
 
     def _capture_output(self, line: str) -> None:
         """Record the produced file, so the queue card can open it later."""
@@ -747,8 +820,8 @@ class DownloadWorker(BaseDownloadWorker):
 
         if code != 0 and self._main_ok:
             self.add_log(
-                "\u2139\ufe0f The post-processing errors above were for files that "
-                "already existed; they have been reconciled.",
+                "\u2139\ufe0f yt-dlp's post-processing errors in this run were all "
+                "for files that already existed; every one has been handled.",
                 AppStyles.INFO_COLOR,
             )
 
@@ -797,7 +870,9 @@ class DownloadWorker(BaseDownloadWorker):
           file is complete, so it is recorded as done.
         * The file belongs to a different entry with the same title: that
           entry's audio was never downloaded. It is fetched again under a
-          disambiguated name ("Title [id]").
+          disambiguated name ("Title [id]"). If yt-dlp managed to re-tag the
+          other upload's file with this entry's metadata and cover (it does
+          for MP3/M4A/FLAC), the original tags are put back first.
         """
         handled: set = set()
         archive = None if self._name_suffix else self.settings.archive_target()
@@ -806,6 +881,7 @@ class DownloadWorker(BaseDownloadWorker):
             failed = entry in self._error_ids
             meta = self._id_meta.get(entry, {})
             if info["owner"] == "other":
+                self._restore_tags(path, info.get("snapshot"))
                 url = meta.get("url") or self._entry_url(entry, meta.get("ie", ""))
                 if url:
                     self._followups.append(
@@ -813,17 +889,35 @@ class DownloadWorker(BaseDownloadWorker):
                          "path": path, "index": meta.get("index", 0)}
                     )
                     handled.add(entry)
-                    self.add_log(
-                        f"\U0001f500 '{short(path.name, 60)}' belongs to another upload "
-                        f"with the same title; {entry} will be saved separately.",
-                        AppStyles.WARNING_COLOR,
-                    )
+                    if not info.get("explained"):
+                        self.add_log(
+                            f"\U0001f500 '{short(path.name, 60)}' belongs to another upload "
+                            f"with the same title; {entry} will be saved separately.",
+                            AppStyles.WARNING_COLOR,
+                        )
             elif failed:
                 handled.add(entry)
                 if archive is not None:
                     self._record_archive(archive, meta.get("ie", ""), entry)
             self._cleanup_leftovers(path)
         return handled
+
+    def _restore_tags(self, path: Path, snapshot: Optional[tag_guard.TagSnapshot]) -> None:
+        if snapshot is None or not tag_guard.changed_since(path, snapshot):
+            return
+        if tag_guard.restore(path, snapshot):
+            self.add_log(
+                f"\U0001f6e1\ufe0f Restored the original tags and cover of "
+                f"'{short(path.name, 60)}' (yt-dlp had re-tagged it for a "
+                "different upload with the same title).",
+                AppStyles.INFO_COLOR,
+            )
+        else:
+            self.add_log(
+                f"\u26a0\ufe0f Could not restore the original tags of "
+                f"'{short(path.name, 60)}'; it may carry another upload's metadata.",
+                AppStyles.WARNING_COLOR,
+            )
 
     @staticmethod
     def _entry_url(entry: str, ie: str) -> str:
@@ -837,14 +931,52 @@ class DownloadWorker(BaseDownloadWorker):
         if not ie or not re.fullmatch(r"[a-z0-9]+", ie):
             return
         line = f"{ie} {entry}"
+        lines = self._load_archive(archive)
+        if line in lines:
+            return
         try:
-            existing = archive.read_text(encoding="utf-8", errors="replace").splitlines()
-            if line in (l.strip() for l in existing):
-                return
             with open(archive, "a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
+            lines.add(line)
         except OSError as exc:
             log.debug("Could not update archive %s: %s", archive, exc)
+
+    def _load_archive(self, archive: Path) -> set:
+        """Archive lines, read once per job (archives can hold 100k entries,
+        and every reconciled entry used to re-read and re-split the file).
+
+        Read only after yt-dlp has exited, so its own additions are included.
+        """
+        if self._archive_lines is None:
+            try:
+                text = archive.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+            self._archive_lines = {l.strip() for l in text.splitlines() if l.strip()}
+        return self._archive_lines
+
+    def _unrecord_archive(self, archive: Path, ie: str, entry: str) -> None:
+        """Drop an entry yt-dlp archived although its own file never got made.
+
+        For MP3/M4A/FLAC the main pass "succeeds" on the other upload's file
+        and yt-dlp archives this entry. If the separate download then fails,
+        leaving that record would skip the track on every future run.
+        """
+        line = f"{ie} {entry}"
+        try:
+            text = archive.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        kept = [l for l in text.splitlines() if l.strip() != line]
+        if len(kept) == len(text.splitlines()):
+            return
+        try:
+            archive.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+        except OSError as exc:
+            log.debug("Could not update archive %s: %s", archive, exc)
+            return
+        if self._archive_lines is not None:
+            self._archive_lines.discard(line)
 
     def _cleanup_leftovers(self, path: Path) -> None:
         """Remove ffmpeg intermediates and orphan thumbnails of `path`."""
@@ -878,11 +1010,27 @@ class DownloadWorker(BaseDownloadWorker):
     def _on_followup_exit(self, code: int) -> None:
         job = self._current_followup or {}
         self._current_followup = None
+        archive = None if self._name_suffix else self.settings.archive_target()
+        target = job.get("path")
+        if isinstance(target, Path) and job.get("id"):
+            self._cleanup_leftovers(
+                target.with_name(f"{target.stem} [{job['id']}]{target.suffix}")
+            )
+        if code != 0 and self._followup_target_exists(job):
+            # "Title [id]" is already on disk from an earlier run that stopped
+            # before archiving it; yt-dlp's re-tag of it is what failed.
+            self.add_log(
+                f"\u2139\ufe0f {job.get('id')} was already saved separately; "
+                "recorded as done.",
+                AppStyles.INFO_COLOR,
+            )
+            code = 0
         if code == 0:
-            archive = None if self._name_suffix else self.settings.archive_target()
             if archive is not None:
                 self._record_archive(archive, job.get("ie", ""), job.get("id", ""))
         else:
+            if archive is not None:
+                self._unrecord_archive(archive, job.get("ie", ""), job.get("id", ""))
             self._followup_failures += 1
             self.add_log(
                 f"\u26a0\ufe0f Could not download {job.get('id')} separately (exit {code}).",
@@ -892,6 +1040,24 @@ class DownloadWorker(BaseDownloadWorker):
             self._start_next_followup()
             return
         self._finish(getattr(self, "_main_exit_code", 0))
+
+    @staticmethod
+    def _followup_target_exists(job: Dict[str, Any]) -> bool:
+        """True when "Title [id].*" exists and its tags name this entry."""
+        path = job.get("path")
+        entry = str(job.get("id") or "")
+        if not isinstance(path, Path) or not entry:
+            return False
+        stem = f"{path.stem} [{entry}]"
+        try:
+            candidates = [
+                p for p in path.parent.glob(f"{glob.escape(stem)}.*")
+                if p.is_file() and p.suffix.lower() not in (".png", ".jpg", ".webp", ".part")
+                and ".temp" not in p.suffixes
+            ]
+        except OSError:
+            return False
+        return any(_owner_of(_source_tag_text(p), entry) == "same" for p in candidates)
 
     def _followup_command(self, job: Dict[str, Any]) -> List[str]:
         """The main command, retargeted at one entry with a unique filename."""
@@ -1080,11 +1246,15 @@ class DownloadWorker(BaseDownloadWorker):
             "--print", 'after_move:~~YTGFILE~~{"id": %(id)j, "path": %(filepath)j}',
             "--newline",
             "--progress",
-            # --print implies --quiet, which is why the download trail
-            # disappeared: yt-dlp emitted nothing but progress records and
-            # errors, so there was no output for the log panel to show, with
-            # or without a setting. --no-quiet puts the normal output back.
-            *(["--no-quiet"] if getattr(s, "SHOW_YTDLP_LOGS", False) else []),
+            # --print implies --quiet, which also silences the lines the
+            # worker parses: "[info] <id>: Downloading", "has already been
+            # downloaded", "Downloading item N of M", Destination/Merger.
+            # Passing --no-quiet only when "Show yt-dlp output" was on meant
+            # that, with the default setting, duplicate-title reconciliation
+            # never ran (the item just failed with "Conversion failed!") and
+            # playlist position fell back to per-file progress. The output is
+            # always parsed; SHOW_YTDLP_LOGS only decides what is displayed.
+            "--no-quiet",
             "--progress-template", _PROGRESS_TEMPLATE,
             "--output-na-placeholder", "Unknown",
             "--ffmpeg-location", str(Path(s.FFMPEG_PATH).parent),

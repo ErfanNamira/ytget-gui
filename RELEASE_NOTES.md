@@ -45,7 +45,14 @@ carry over untouched.
 
 - Playlists with two uploads sharing a title (a single and its album version)
   no longer fail forever with "Postprocessing: Conversion failed!"; the second
-  one is saved as "Title [id]".
+  one is saved as "Title [id]". This now works with the default settings too,
+  not only with **Show yt-dlp output** turned on.
+- MP3/M4A/FLAC: the first track's file keeps its own title, source URL and
+  cover instead of being silently re-tagged with the second track's.
+- The scary red "Conversion failed!" line for an already-existing file is
+  replaced by a short explanation of what happens to that track.
+- Playlist progress advances smoothly across the whole playlist, and the
+  video bar no longer stalls at 50% between the video and audio streams.
 - Audio normalisation works again instead of breaking every download.
 - Cover cropping covers every track of a playlist, even when the playlist
   partly failed.

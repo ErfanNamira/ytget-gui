@@ -253,6 +253,10 @@ sudo apt update && sudo apt install ffmpeg
 - 🎵 Audio downloads include:
   - Embedded album art  
   - Metadata tags (artist, title, etc.)  
+- 🔀 Two different uploads with the same title (for example a single and the
+  album version on a YouTube Music "Topic" channel) are both kept: the second
+  one is saved as `Title [video-id].ext`. You may see a one-line note about
+  this in the log — it is expected, and the existing file is left untouched.
 
 ---
 

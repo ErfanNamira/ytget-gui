@@ -36,6 +36,31 @@ All existing features, settings and queue files carry over unchanged.
   finished file missing from the archive), it's recorded as done.
 - Leftover `*.temp.opus` intermediates and orphaned thumbnails from failed
   post-processing are cleaned up.
+- Duplicate-title handling now works with the default settings. It parses
+  yt-dlp's per-entry lines, but those were only printed when **Show yt-dlp
+  output** was on (`--print` implies `--quiet`), so with the option off the
+  item still failed with "Conversion failed!" and was retried until marked
+  Error. yt-dlp's output is now always parsed; the setting only controls what
+  is displayed. The same change fixes playlist progress (the bar now advances
+  across the playlist) and the two-stream video bar, which stalled at 50%.
+- MP3, M4A and FLAC files are no longer silently re-tagged with another
+  upload's metadata. For those formats yt-dlp's re-tag of the other upload's
+  file *succeeds*, overwriting its title, source URL and cover. The tags are
+  now snapshotted the moment yt-dlp announces the existing file (in the
+  reader thread, before its metadata step can run) and restored afterwards.
+- If the separate "Title [id]" download fails, the entry is removed from the
+  download archive again, so it is retried next time instead of being
+  skipped forever. A "Title [id]" file that already exists from an earlier,
+  interrupted run is recognised and recorded as done, and its `.temp`
+  leftovers are removed.
+- The red "ERROR: Postprocessing: Conversion failed!" line for a file that
+  already exists is replaced with a one-line explanation of what happens to
+  that track. Errors YTGet can't explain are still shown verbatim.
+- Log lines are classified by yt-dlp's `ERROR:`/`WARNING:` markers, so a
+  track whose title contains "error" or "warning" is no longer shown as a red
+  error.
+- The download archive is read once per job instead of once per reconciled
+  entry.
 - Audio normalisation no longer breaks every download. `-af loudnorm` was
   passed to every ffmpeg post-processor, including the stream-copying metadata
   and merge steps, where ffmpeg rejects filters. It's now limited to the
@@ -53,6 +78,9 @@ All existing features, settings and queue files carry over unchanged.
   for 81 items in testing), and scaled thumbnails are cached.
 - Queue saves are debounced and written on a background thread instead of
   serialising and fsyncing on the GUI thread after every change.
+- Queue and settings saves ride out a target file that is briefly locked by
+  antivirus, the search indexer or a cloud-sync client on Windows
+  (`PermissionError` on the atomic rename), instead of losing that save.
 
 #### Queue
 
@@ -118,6 +146,8 @@ All existing features, settings and queue files carry over unchanged.
 - Unused imports removed; type-only Qt imports in the launcher are declared
   for type checkers, keeping `--version` and `--doctor` Qt-free.
 - New regression tests (`tests/test_v282_fixes.py`) cover the fixes above.
+- `tests/test_tag_guard.py` covers tag snapshot/restore for MP3, Opus, FLAC
+  and M4A, the duplicate-title log handling and archive bookkeeping.
 - Version bumped to 2.8.2 in `_version.py`, `pyproject.toml`, `Info.plist`,
   `version_info.txt`, the installer script and the website.
 

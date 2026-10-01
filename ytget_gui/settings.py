@@ -35,6 +35,7 @@ from ytget_gui.utils.paths import (
     get_base_path,
     get_data_path,
     is_usable_file,
+    replace_with_retry,
     resolve_tool,
 )
 
@@ -612,7 +613,7 @@ class AppSettings:
                 fh.write(payload)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(tmp_path, self.CONFIG_PATH)
+            replace_with_retry(tmp_path, self.CONFIG_PATH)
             tmp_path = None
             return True
         except OSError as exc:
