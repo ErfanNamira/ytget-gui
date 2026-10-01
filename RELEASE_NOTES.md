@@ -89,7 +89,7 @@ carry over untouched.
       <td rowspan="3">🪟 <strong>Windows</strong></td>
       <td rowspan="3"><code>x86_64</code></td>
       <td>Installer</td>
-      <td><strong>165 MB</strong></td>
+      <td><strong>205 MB</strong></td>
       <td>
         <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-2.8.2-windows-setup.exe">
           <img src="https://img.shields.io/badge/Download-Setup-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows Installer Download">
