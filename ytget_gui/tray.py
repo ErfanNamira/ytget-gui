@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Dict, Optional
 
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QObject
 from PySide6.QtGui import QAction, QActionGroup, QIcon
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 

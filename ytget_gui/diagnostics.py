@@ -54,7 +54,7 @@ def main() -> int:
         found = importlib.util.find_spec(module) is not None
         print(f"{'OK  ' if found else 'INFO'} {label}: {'installed' if found else 'optional extra not installed'}")
     print("Network access, desktop rendering, and real-site downloads are not tested by this check.")
-    print("See START_HERE.md for setup and TROUBLESHOOTING.md for fixes.")
+    print("See README.md (How to Install / Requirements) for setup, or report problems at https://github.com/ErfanNamira/ytget-gui/issues")
     return 2 if failed else 0
 
 if __name__ == "__main__":

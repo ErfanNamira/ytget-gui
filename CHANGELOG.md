@@ -1,3 +1,126 @@
+### v 2.8.2
+
+A performance and reliability release. Long queues stay responsive after a
+failure, update checks no longer hang when GitHub rate-limits you, Stop and
+quit react immediately, cached thumbnails load without touching the network,
+and several queue bugs that could remove or hide the wrong thing are fixed.
+All existing features, settings and queue files carry over unchanged.
+
+#### Update Manager
+
+- No more freezing when GitHub is rate-limiting you or you're offline. The
+  check ran four network lookups one after another on a QThread that had to
+  be joined before the dialog could close, so closing it (or the app) waited
+  out every socket timeout. Checks now run in parallel on daemon threads, the
+  dialog closes instantly, and each row shows its installed version even when
+  the network lookup fails.
+- GitHub API rate limit: detected (403/429 with `X-RateLimit-Remaining: 0`)
+  and bypassed by reading the latest tag from the release page redirect,
+  which is not rate-limited. Download URLs are built from the tag. Results are
+  cached for 10 minutes; `GITHUB_TOKEN`/`GH_TOKEN` is used when set.
+- Clear offline, timeout, proxy, and SSL messages instead of raw exceptions.
+- The post-install version probe (spotdl `--version` can take many seconds)
+  no longer runs on the GUI thread. The dialog is deleted on close instead
+  of leaking one instance per opening.
+
+#### Downloads
+
+- Playlists with two uploads that share a title (e.g. a single and the album
+  version on a YouTube Music "Topic" channel) no longer fail forever with
+  "Postprocessing: Conversion failed!". The second entry resolved to the first
+  one's file, yt-dlp called it "already downloaded" and tried to re-tag it;
+  for Opus, ffmpeg can't copy embedded cover art into Ogg, so it failed every
+  time and the entry never reached the archive. The worker now reads the
+  existing file's source-URL tag: if it's a different upload, that entry is
+  downloaded separately as "Title [id]". If it's the same upload (a
+  finished file missing from the archive), it's recorded as done.
+- Leftover `*.temp.opus` intermediates and orphaned thumbnails from failed
+  post-processing are cleaned up.
+- Audio normalisation no longer breaks every download. `-af loudnorm` was
+  passed to every ffmpeg post-processor, including the stream-copying metadata
+  and merge steps, where ffmpeg rejects filters. It's now limited to the
+  encoding steps, and YouTube Opus gets re-encoded so the filter actually runs.
+- Cover cropping now covers every track of a playlist, not just the last file,
+  and also runs on the tracks that finished in a playlist that failed.
+- Playlist items record their folder as the output, so Open shows the folder.
+
+#### Responsiveness
+
+- Moving one item in the queue (such as a failed item going to the back) no
+  longer destroys and rebuilds every card on the GUI thread. That rebuild
+  decoded every full-size thumbnail again and froze the window after a
+  failure in a long queue. Only moved rows are re-created now (~300 ms → ~4 ms
+  for 81 items in testing), and scaled thumbnails are cached.
+- Queue saves are debounced and written on a background thread instead of
+  serialising and fsyncing on the GUI thread after every change.
+
+#### Queue
+
+- **Clear completed** could delete the wrong row. With two formats of one link
+  queued (say 1080p and MP3), removing the finished MP3 looked the item up by
+  URL, which resolved to the *first* format, so the still-pending 1080p row
+  disappeared instead. Items are now removed by their own key.
+- Removing many rows at once (bulk delete, Clear completed) is a single O(n)
+  pass instead of one list scan per row.
+- The card menu now offers **Play file**, **Show in folder** and **Copy file
+  path** as soon as a download finishes. The menu was built when the card was
+  created, so those entries only appeared after a restart.
+- Removing queued rows while their details are still being fetched now really
+  cancels those lookups. The cancel request was queued behind the fetch loop,
+  so it only arrived after every pending lookup had already run -- deleting
+  100 rows still fired 100 yt-dlp metadata calls. A cancel arriving just as a
+  lookup starts is no longer lost either.
+- Loading a queue file no longer leaves links stuck as "fetching" forever, so
+  their details are retried like any other item's.
+
+#### Performance and memory
+
+- Thumbnails already in the cache are used directly. The cache was checked
+  only after up to five HEAD requests per video, so every start re-probed the
+  network for images already on disk (and showed nothing while offline).
+- Console history is a bounded deque: once full, each new log line used to
+  shift the whole history (up to 50 000 lines). Large bursts are trimmed
+  before they reach the text widget, and changing **Console history** in
+  Preferences now resizes the in-memory history as well.
+- Queue cards stat the output file once per refresh instead of three times.
+- yt-dlp output parsing skips the progress regexes for lines that cannot be
+  progress, and output-path tracking uses a set instead of list scans, which
+  matters for playlists with thousands of entries.
+- Single-document metadata (`--dump-single-json`, often several MB) is parsed
+  directly instead of being split into lines first.
+- Cover cropping de-duplicates its file list in linear time.
+- Cancelled thumbnail jobs no longer stay in the pool's bookkeeping forever.
+
+#### Stability
+
+- Stop, Skip and quitting now interrupt the YouTube Music "Top songs / Mix /
+  Radio" detection probe. It ran untracked, so it could hold the worker and
+  app shutdown for up to 30 seconds.
+- The post-queue and scheduled power actions run without blocking the window.
+  They used `subprocess.run` on the GUI thread (up to 30 s; a sleep command
+  may only return after the machine wakes) and flashed a console window on
+  Windows.
+- Quitting is bounded. If a background thread ignores cancellation, the app
+  gives it about ten seconds and then exits cleanly with the queue and
+  settings already saved, instead of sitting forever as a disabled window.
+  Each retry also polls instead of blocking the UI for a full budget.
+- macOS **Run at login**: install paths containing `&` or `<` no longer
+  produce an invalid LaunchAgent, and `launchctl` calls are time-limited.
+- Linux **Show in folder**: file paths are sent to the file manager as proper
+  `file://` URIs, so names with spaces, `#` or non-ASCII characters are
+  selected correctly.
+
+#### Code quality
+
+- `--doctor` and the missing-Qt startup message pointed to `START_HERE.md`,
+  `TROUBLESHOOTING.md` and `install.py`, none of which exist. They now give
+  the real install command and the README / issue tracker.
+- Unused imports removed; type-only Qt imports in the launcher are declared
+  for type checkers, keeping `--version` and `--doctor` Qt-free.
+- New regression tests (`tests/test_v282_fixes.py`) cover the fixes above.
+- Version bumped to 2.8.2 in `_version.py`, `pyproject.toml`, `Info.plist`,
+  `version_info.txt`, the installer script and the website.
+
 ### v 2.8.1
 
 A maintenance release: the scheduler now actually runs its power action, the

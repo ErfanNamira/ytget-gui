@@ -229,7 +229,8 @@ sudo apt update && sudo apt install ffmpeg
 - 🧪 **Custom FFmpeg Args** — Add advanced arguments for power users.  
 - 🔊 **Audio Normalization** — Uniform volume for all downloads.  
 - 🗃 **Channel Organization** — Auto-sort videos into uploader folders.  
-- ⚡ **Performance Enhancements** — Smart rate limiting, retry logic, and a fast cold start.
+- ⚡ **Performance Enhancements** — Smart rate limiting, retry logic, a fast cold start, background queue saves, and a queue that stays smooth with hundreds of items.
+- 🛑 **Instant Stop & Quit** — Stopping, skipping or closing interrupts every helper process (yt-dlp, ffmpeg, metadata and thumbnail lookups) right away.
 - 🌐 **Unlisted Site Policy** — Links from sites outside your watcher list can be queued automatically, confirmed first, or ignored.
 
 

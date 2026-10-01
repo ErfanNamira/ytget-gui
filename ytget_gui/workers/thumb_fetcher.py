@@ -208,11 +208,19 @@ class ThumbFetcher(QObject):
         if self._cancelled():
             return None
 
+        video_id = extract_video_id(self.url)
+        # Cache first. The lookup used to run only after the network probe,
+        # so every restart re-sent up to five HEAD requests per queued video
+        # whose thumbnail was already on disk -- and showed nothing at all
+        # while offline.
+        cached = self._existing_cache_entry(cache_key(video_id or url_digest(self.url)))
+        if cached is not None:
+            return str(cached)
+
         self._maybe_refresh_cookies()
         if self._cancelled():
             return None
 
-        video_id = extract_video_id(self.url)
         thumb_url = self._probe_ytimg(video_id) if video_id else None
 
         if not thumb_url and not self._cancelled():
@@ -587,8 +595,12 @@ class ThumbManager(QObject):
             fetcher = self._active.get(url)
             future = self._futures.get(url)
             self._pending.discard(url)
-        if future is not None:
-            future.cancel()
+        if future is not None and future.cancel():
+            # A future cancelled before it ran never reaches _run_one's
+            # cleanup, so its entry would otherwise stay in _futures forever.
+            with self._lock:
+                if self._futures.get(url) is future:
+                    del self._futures[url]
         if fetcher is not None:
             fetcher.request_cancel()
 

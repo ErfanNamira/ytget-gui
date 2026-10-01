@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
-from typing import Iterable, List, Mapping, Optional
+from typing import List, Mapping, Optional
 
 # Audio-only pseudo-codes used by the UI; resolved by the download worker.
 AUDIO_FORMAT_CODES = frozenset(

@@ -73,16 +73,16 @@ class CoverCropWorker(QObject):
 
     def _collect(self) -> List[Path]:
         if self._paths is not None:
-            seen: List[Path] = []
-            for path in self._paths:
-                if (
-                    path.suffix.lower() in SUPPORTED_SUFFIXES
-                    and not self._is_temp_artifact(path)
-                    and path.is_file()
-                    and path not in seen
-                ):
-                    seen.append(path)
-            return seen
+            # dict.fromkeys de-duplicates in O(n) while keeping order; the
+            # previous list membership test was quadratic on big playlists.
+            unique = dict.fromkeys(self._paths)
+            return [
+                path
+                for path in unique
+                if path.suffix.lower() in SUPPORTED_SUFFIXES
+                and not self._is_temp_artifact(path)
+                and path.is_file()
+            ]
         if not self.downloads_dir.is_dir():
             return []
         return sorted(

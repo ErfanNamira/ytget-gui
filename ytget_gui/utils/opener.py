@@ -119,7 +119,9 @@ def _dbus_show_item(resolved: str) -> bool:
                 "--type=method_call",
                 "/org/freedesktop/FileManager1",
                 "org.freedesktop.FileManager1.ShowItems",
-                f"array:string:file://{resolved}",
+                # Percent-encoded: a raw "file://" + path broke on spaces,
+                # "#" and non-ASCII names, so the file manager ignored it.
+                f"array:string:{Path(resolved).as_uri()}",
                 "string:",
             ],
             capture_output=True,

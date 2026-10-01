@@ -28,7 +28,12 @@ if sys.platform == "win32":
     except Exception:  # noqa: BLE001 - cosmetic only, never fatal
         pass
 
+from typing import TYPE_CHECKING
+
 from ytget_gui import _version
+
+if TYPE_CHECKING:  # Qt is imported lazily so --version/--doctor work without it.
+    from PySide6.QtGui import QIcon, QPalette
 
 log = logging.getLogger("ytget")
 
@@ -142,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         from PySide6.QtCore import QLockFile
         from ytget_gui.styles import global_font, refresh_styles
     except ImportError as exc:
-        print(f"YTGet cannot open the desktop interface: {exc}\nRun install.py with Python, or python -m pip install .", file=sys.stderr)
+        print(f"YTGet cannot open the desktop interface: {exc}\nInstall the dependencies with: python -m pip install -r requirements.txt (or: python -m pip install ytget-gui)", file=sys.stderr)
         return 2
 
     logging.basicConfig(
@@ -153,8 +158,6 @@ def main(argv: list[str] | None = None) -> int:
     # Sleep before Qt starts: at login the network and the tray host
     # are often not ready yet, and no window exists to look frozen.
     if args.delay > 0:
-        import time
-
         time.sleep(min(600, args.delay))
 
     app = QApplication(sys.argv)

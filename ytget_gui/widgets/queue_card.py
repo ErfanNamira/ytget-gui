@@ -19,7 +19,9 @@ Performance characteristics that matter in a long, scrolling list:
 
 from __future__ import annotations
 
-from typing import Callable, List, Optional, Sequence, Tuple
+import os
+
+from typing import Callable, List, Optional, Sequence, Tuple, Union
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPixmap
@@ -76,6 +78,44 @@ def _format_duration(seconds: Optional[float]) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+class _PixmapCache:
+    """Small LRU of card-sized thumbnails, keyed by path + mtime."""
+
+    def __init__(self, limit: int = 400) -> None:
+        from collections import OrderedDict
+
+        self._limit = limit
+        self._data: "OrderedDict[tuple, QPixmap]" = OrderedDict()
+
+    @staticmethod
+    def _key(path: str):
+        try:
+            return (path, os.stat(path).st_mtime_ns)
+        except OSError:
+            return None
+
+    def get(self, path: str) -> Optional[QPixmap]:
+        key = self._key(path)
+        if key is None:
+            return None
+        pixmap = self._data.get(key)
+        if pixmap is not None:
+            self._data.move_to_end(key)
+        return pixmap
+
+    def put(self, path: str, pixmap: QPixmap) -> None:
+        key = self._key(path)
+        if key is None:
+            return
+        self._data[key] = pixmap
+        self._data.move_to_end(key)
+        while len(self._data) > self._limit:
+            self._data.popitem(last=False)
+
+
+_THUMB_CACHE = _PixmapCache()
+
+
 class QueueCard(QFrame):
     removed = Signal(str)
     retry_requested = Signal(str)
@@ -103,6 +143,9 @@ class QueueCard(QFrame):
         self._active = False
 
         self._context_actions: List[Tuple[str, Callable[[], None]]] = []
+        self._context_provider: Optional[
+            Callable[[], Sequence[Tuple[str, Callable[[], None]]]]
+        ] = None
         self._menu: Optional[QMenu] = None
         self._last_status: Optional[Status] = None
         self._last_percent = -1
@@ -239,16 +282,36 @@ class QueueCard(QFrame):
         self._set_title(item.display_title)
         self._set_status(item.status)
         self._set_progress(item.progress)
-        self._set_meta(self._compose_meta(item))
+        # One filesystem check per refresh. has_output and output_missing
+        # each stat the file, and _compose_meta asked a third time, so every
+        # progress tick on a finished row cost three stat() calls.
+        has_output = item.has_output
+        missing = bool(item.output_path) and not has_output
+        self._set_meta(self._compose_meta(item, missing=missing))
         self._set_active(item.status is Status.DOWNLOADING)
-        self._set_playable(item.has_output, item.output_missing)
+        self._set_playable(has_output, missing)
         if item.thumb_path:
             self.set_thumbnail_path(item.thumb_path)
 
     def set_context_actions(
-        self, actions: Sequence[Tuple[str, Callable[[], None]]]
+        self,
+        actions: Union[
+            Sequence[Tuple[str, Callable[[], None]]],
+            Callable[[], Sequence[Tuple[str, Callable[[], None]]]],
+        ],
     ) -> None:
-        self._context_actions = list(actions)
+        """A fixed action list, or a callable evaluated each time the menu opens.
+
+        A callable keeps the menu in step with the item: a list built when the
+        card was created never offered "Play file" / "Show in folder" for a
+        download that finished later in the session.
+        """
+        if callable(actions):
+            self._context_provider = actions
+            self._context_actions = []
+        else:
+            self._context_provider = None
+            self._context_actions = list(actions)
 
     def _set_playable(self, playable: bool, missing: bool) -> None:
         if playable == self._playable and missing == self._missing:
@@ -271,11 +334,18 @@ class QueueCard(QFrame):
     def set_thumbnail_path(self, path: str) -> None:
         if not path or path == self._thumb_path:
             return
-        pixmap = QPixmap(path)
-        if pixmap.isNull():
-            return
+        fitted = _THUMB_CACHE.get(path)
+        if fitted is None:
+            # Thumbnails are cached at full resolution; decoding and smooth-
+            # scaling one costs tens of milliseconds on the GUI thread, and
+            # every re-created card used to pay it again.
+            pixmap = QPixmap(path)
+            if pixmap.isNull():
+                return
+            fitted = self._fit(pixmap)
+            _THUMB_CACHE.put(path, fitted)
         self._thumb_path = path
-        self.thumb.setPixmap(self._fit(pixmap))
+        self.thumb.setPixmap(fitted)
 
     # ------------------------------------------------------------------
     # Field updates
@@ -309,7 +379,7 @@ class QueueCard(QFrame):
         self.percent_lbl.setText(f"{value}%")
 
     @staticmethod
-    def _compose_meta(item: QueueItem) -> str:
+    def _compose_meta(item: QueueItem, *, missing: Optional[bool] = None) -> str:
         parts: List[str] = []
         if item.stage:
             parts.append(item.stage)
@@ -329,7 +399,7 @@ class QueueCard(QFrame):
             parts.append(item.uploader)
         if item.last_error and item.status is Status.ERROR:
             parts.append(clamp(item.last_error, 70))
-        if item.output_missing:
+        if item.output_missing if missing is None else missing:
             parts.append("file moved or deleted")
         if not parts:
             parts.append(item.url)
@@ -374,7 +444,13 @@ class QueueCard(QFrame):
         # Without this, every invocation leaves a QMenu parented to the card.
         menu.setAttribute(Qt.WA_DeleteOnClose)
 
-        actions = self._context_actions or [
+        actions: Sequence[Tuple[str, Callable[[], None]]] = self._context_actions
+        if self._context_provider is not None:
+            try:
+                actions = list(self._context_provider())
+            except Exception:  # noqa: BLE001 - a menu must always open
+                actions = []
+        actions = actions or [
             ("Remove", lambda: self.removed.emit(self.key))
         ]
         for label, callback in actions:

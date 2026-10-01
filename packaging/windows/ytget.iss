@@ -5,7 +5,7 @@
 ; .zip and .7z archives.
 ;
 ; Build from the repository root:
-;   iscc /DAppVersion=2.8.1 packaging\windows\ytget.iss
+;   iscc /DAppVersion=2.8.2 packaging\windows\ytget.iss
 ;
 ; Expects:
 ;   dist\YTGet\YTGet.exe   PyInstaller onedir build

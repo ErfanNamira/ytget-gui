@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import platform
 import shutil
 import subprocess
+import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
+from collections import deque
+from typing import TYPE_CHECKING, Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import (
     QRect,
@@ -63,7 +66,7 @@ from ytget_gui import _version, formats, naming
 from ytget_gui.queue.controller import QueueController
 from ytget_gui.queue.model import QueueItem, QueueModel, Status
 from ytget_gui.settings import AppSettings
-from ytget_gui.styles import AppStyles, Palette
+from ytget_gui.styles import AppStyles
 from ytget_gui import autostart
 from ytget_gui.scheduler import Scheduler
 from ytget_gui.tray import TrayController
@@ -91,6 +94,10 @@ _POST_ACTIONS = ("Keep", "Shutdown", "Sleep", "Restart", "Close")
 # manager, the title queue and the cover-crop thread ~2s each, which stacked
 # into a window frozen for four or more seconds on exit.
 _SHUTDOWN_BUDGET_S = 2.0
+# After the first budget, close is retried this often, this many times
+# (10 s in total) while background threads unwind.
+_CLOSE_RETRY_MS = 200
+_CLOSE_RETRY_LIMIT = 50
 
 # How often the queue is scanned for items still missing their details.
 _METADATA_RETRY_TICK_MS = 60_000
@@ -135,7 +142,13 @@ class MainWindow(QMainWindow):
         # They are never written to the shared settings, which is what used
         # to make a clip range apply to every item in the queue.
         self._pending_options: Dict[str, object] = {}
-        self._log_entries: List[Tuple[str, str, str]] = []
+        # Bounded deque: trimming a list from the front once it was full
+        # shifted every remaining entry, i.e. O(MAX_LOG_LINES) per log line.
+        self._log_entries: Deque[Tuple[str, str, str]] = deque(
+            maxlen=self._log_cap()
+        )
+        # Close attempts made while background threads were still unwinding.
+        self._close_attempts = 0
         self._console_pending: List[Tuple[str, str]] = []
 
         # Restored from config, so an unattended queue keeps the power action
@@ -491,9 +504,7 @@ class MainWindow(QMainWindow):
         self.console.setAccessibleName("Output log")
         # Hard cap in the document itself, so even a runaway worker cannot grow
         # the QTextDocument without bound.
-        self.console.document().setMaximumBlockCount(
-            max(100, int(self.settings.MAX_LOG_LINES))
-        )
+        self.console.document().setMaximumBlockCount(self._log_cap())
         layout.addWidget(self.console, 1)
         return pane
 
@@ -625,6 +636,7 @@ class MainWindow(QMainWindow):
         self.controller.log_message.connect(self._on_worker_log)
         self.controller.item_changed.connect(self._on_item_changed)
         self.controller.item_completed.connect(self._on_item_completed)
+        self.controller.item_partial.connect(self._on_item_completed)
         self.controller.queue_changed.connect(self._rebuild_queue_list)
         self.controller.overall_progress.connect(self.global_progress.setValue)
         self.controller.running_changed.connect(lambda _: self._update_buttons())
@@ -647,7 +659,11 @@ class MainWindow(QMainWindow):
         queue.moveToThread(thread)
 
         self.request_fetch.connect(queue.enqueue_many, Qt.QueuedConnection)
-        self.request_fetch_cancel.connect(queue.cancel, Qt.QueuedConnection)
+        # Direct, not queued: cancel() is thread-safe, and the queue's thread
+        # is busy inside its blocking drain loop, so a queued cancel was only
+        # delivered after the *whole* backlog had been fetched -- removing
+        # 100 rows mid-fetch still ran all 100 yt-dlp lookups.
+        self.request_fetch_cancel.connect(queue.cancel, Qt.DirectConnection)
         queue.metadata_fetched.connect(self._on_metadata, Qt.QueuedConnection)
         queue.error.connect(self._on_metadata_error, Qt.QueuedConnection)
         queue.started_one.connect(self._on_fetch_started, Qt.QueuedConnection)
@@ -676,10 +692,6 @@ class MainWindow(QMainWindow):
                 added.append((line, colour, level))
         self._log_entries.extend(added)
 
-        cap = max(100, int(self.settings.MAX_LOG_LINES))
-        if len(self._log_entries) > cap:
-            del self._log_entries[: len(self._log_entries) - cap]
-
         selected = self.filter_box.currentText()
         for line, line_colour, line_level in added:
             if selected in ("All", line_level):
@@ -705,6 +717,11 @@ class MainWindow(QMainWindow):
         if not self._console_pending:
             return
         pending, self._console_pending = self._console_pending, []
+        # The document keeps at most MAX_LOG_LINES blocks anyway; inserting
+        # a larger burst only for Qt to delete it again is wasted layout work.
+        cap = self._log_cap()
+        if len(pending) > cap:
+            pending = pending[-cap:]
 
         scrollbar = self.console.verticalScrollBar()
         at_bottom = scrollbar is None or scrollbar.value() >= scrollbar.maximum() - 4
@@ -728,6 +745,18 @@ class MainWindow(QMainWindow):
             # reading back through history is not yanked away mid-download.
             self.console.moveCursor(QTextCursor.End)
             self.console.ensureCursorVisible()
+
+    def _log_cap(self) -> int:
+        try:
+            return max(100, min(50_000, int(self.settings.MAX_LOG_LINES)))
+        except (TypeError, ValueError):
+            return 1000
+
+    def _apply_log_cap(self) -> None:
+        cap = self._log_cap()
+        self.console.document().setMaximumBlockCount(cap)
+        if self._log_entries.maxlen != cap:
+            self._log_entries = deque(self._log_entries, maxlen=cap)
 
     def _rerender_console(self) -> None:
         self._console_timer.stop()
@@ -989,7 +1018,7 @@ class MainWindow(QMainWindow):
                 item.metadata_retry_at = 0.0
                 item.last_error = ""
             self._on_item_changed(item.key)
-        self.model.save()
+        self.controller.save_soon()
         self.log(f"\u2705 {short(items[0].display_title, 60)}")
 
     @Slot(str, str)
@@ -1002,7 +1031,7 @@ class MainWindow(QMainWindow):
             delay = self._metadata_backoff(item)
             item.metadata_retry_at = time.time() + delay
             self._on_item_changed(item.key)
-        self.model.save()
+        self.controller.save_soon()
         # Non-fatal: the item stays queued and the download may still succeed,
         # since yt-dlp resolves metadata again at download time. The details
         # are asked for again later -- a rate-limit is temporary.
@@ -1079,23 +1108,60 @@ class MainWindow(QMainWindow):
         if rows == model_keys:
             return True
 
-        surviving = set(model_keys)
-        kept = [key for key in rows if key in surviving]
-        # Only removals and appends can be expressed as row edits; if the
-        # remaining rows no longer prefix the model, the order changed.
-        if kept != model_keys[: len(kept)]:
+        if len(set(rows)) != len(rows):
             return False
+        surviving = set(model_keys)
+        position = {key: index for index, key in enumerate(model_keys)}
+
+        # Reorders (a failed item moved to the back, send-to-top, drag) used
+        # to fall back to destroying and rebuilding *every* card, decoding
+        # every thumbnail again on the GUI thread -- the multi-second hang
+        # after a playlist failed in a long queue. Keeping the longest run of
+        # rows that is already in model order means only the rows that
+        # actually moved are re-created.
+        kept = [key for key in rows if key in surviving]
+        stay = self._longest_ordered_subset([position[key] for key in kept])
+        stay_keys = {kept[i] for i in stay}
+        selected = set(self._selected_keys())
 
         for row in reversed(range(self.queue_list.count())):
-            if self._key_of(self.queue_list.item(row)) not in surviving:
+            if self._key_of(self.queue_list.item(row)) not in stay_keys:
                 self._destroy_row(row)
 
-        for key in model_keys[len(kept):]:
+        for index, key in enumerate(model_keys):
+            if key in stay_keys:
+                continue
             item = self.model.get(key)
             if item is None:
                 return False
-            self._append_card(item)
+            self._append_card(item, row=index)
+            if key in selected:
+                self._cards[key].setSelected(True)
         return True
+
+    @staticmethod
+    def _longest_ordered_subset(sequence: List[int]) -> List[int]:
+        """Indices of a longest strictly increasing subsequence (O(n log n))."""
+        import bisect
+
+        tails: List[int] = []
+        tail_index: List[int] = []
+        parent = [-1] * len(sequence)
+        for i, value in enumerate(sequence):
+            slot = bisect.bisect_left(tails, value)
+            if slot == len(tails):
+                tails.append(value)
+                tail_index.append(i)
+            else:
+                tails[slot] = value
+                tail_index[slot] = i
+            parent[i] = tail_index[slot - 1] if slot else -1
+        result: List[int] = []
+        current = tail_index[-1] if tail_index else -1
+        while current != -1:
+            result.append(current)
+            current = parent[current]
+        return result[::-1]
 
     def _full_rebuild(self) -> None:
         selected = {
@@ -1133,38 +1199,50 @@ class MainWindow(QMainWindow):
             self._cards.pop(key, None)
         self._search_index.pop(key, None)
 
-    def _append_card(self, item: QueueItem) -> None:
+    def _append_card(self, item: QueueItem, row: Optional[int] = None) -> None:
         card = QueueCard(item)
         card.removed.connect(self._remove_key)
         card.open_requested.connect(self._open_output)
         card.reveal_requested.connect(self._reveal_output)
 
-        actions = [
-            ("Open in browser", lambda u=item.url: webbrowser.open(u)),
-            ("Copy URL", lambda u=item.url: QGuiApplication.clipboard().setText(u)),
-            ("View thumbnail", lambda k=item.key: self._view_thumbnail(k)),
-        ]
-        if item.output_path:
-            actions += [
-                ("Play file", lambda k=item.key: self._open_output(k)),
-                ("Show in folder", lambda k=item.key: self._reveal_output(k)),
-                ("Copy file path", lambda k=item.key: self._copy_output_path(k)),
-            ]
-        actions += [
-            ("Retry", lambda k=item.key: self._retry_key(k)),
-            ("Remove", lambda k=item.key: self._remove_key(k)),
-        ]
-        card.set_context_actions(actions)
+        # Built when the menu opens, not now: a download that finishes later
+        # must offer Play / Show in folder without the card being re-created.
+        card.set_context_actions(lambda k=item.key: self._context_actions_for(k))
 
         list_item = QListWidgetItem()
         list_item.setSizeHint(card.sizeHint())
         list_item.setData(Qt.UserRole, item.key)
-        self.queue_list.addItem(list_item)
+        if row is None or row >= self.queue_list.count():
+            self.queue_list.addItem(list_item)
+        else:
+            self.queue_list.insertItem(row, list_item)
         self.queue_list.setItemWidget(list_item, card)
         self._cards[item.key] = list_item
 
         if item.thumb_path and Path(item.thumb_path).is_file():
             card.set_thumbnail_path(item.thumb_path)
+
+    def _context_actions_for(self, key: str) -> List[Tuple[str, Callable[[], None]]]:
+        item = self.model.get(key)
+        if item is None:
+            return [("Remove", lambda k=key: self._remove_key(k))]
+        url = item.url
+        actions: List[Tuple[str, Callable[[], None]]] = [
+            ("Open in browser", lambda u=url: webbrowser.open(u)),
+            ("Copy URL", lambda u=url: QGuiApplication.clipboard().setText(u)),
+            ("View thumbnail", lambda k=key: self._view_thumbnail(k)),
+        ]
+        if item.output_path:
+            actions += [
+                ("Play file", lambda k=key: self._open_output(k)),
+                ("Show in folder", lambda k=key: self._reveal_output(k)),
+                ("Copy file path", lambda k=key: self._copy_output_path(k)),
+            ]
+        actions += [
+            ("Retry", lambda k=key: self._retry_key(k)),
+            ("Remove", lambda k=key: self._remove_key(k)),
+        ]
+        return actions
 
     @staticmethod
     def _key_of(list_item: Optional[QListWidgetItem]) -> str:
@@ -1292,7 +1370,7 @@ class MainWindow(QMainWindow):
         item.reset_for_retry()
         item.queue_attempts = 0
         item.last_error = ""
-        self.model.save()
+        self.controller.save_soon()
         self._on_item_changed(key)
         self.log(f"\u21bb Re-queued {short(item.display_title, 60)}")
 
@@ -1620,9 +1698,7 @@ class MainWindow(QMainWindow):
         dialog.apply()
         self.settings.save_config()
         self.path_button.setText(str(self.settings.DOWNLOADS_DIR))
-        self.console.document().setMaximumBlockCount(
-            max(100, int(self.settings.MAX_LOG_LINES))
-        )
+        self._apply_log_cap()
         self._refresh_format_box()
         # Watcher and tray are live objects, so Preferences has to be pushed
         # into them rather than waiting for a restart.
@@ -1996,8 +2072,13 @@ class MainWindow(QMainWindow):
         if self._title_queue is not None:
             for item in self.model:
                 self._title_queue.cancel(item.url)
+        # A cancelled fetch reports nothing back, so its URL would stay in
+        # _pending_fetch forever and the retry timer would skip that URL for
+        # good if the imported queue contains it again.
+        self._pending_fetch.clear()
+        self._search_index.clear()
         self.model.replace_all(incoming.items)
-        self.model.save()
+        self.controller.save_soon()
         self._rebuild_queue_list()
         self.log(f"\U0001f4e5 Loaded {count} item(s) from {path}", AppStyles.SUCCESS_COLOR)
         for item in self.model:
@@ -2034,6 +2115,13 @@ class MainWindow(QMainWindow):
         """Audio files produced by an item, for cover cropping."""
         from ytget_gui.workers.cover_crop_worker import SUPPORTED_SUFFIXES
 
+        if item.produced_files:
+            # Exactly this job's files. output_path alone only named the last
+            # file of a playlist, so every other track stayed uncropped.
+            return [
+                Path(p) for p in item.produced_files
+                if Path(p).suffix.lower() in SUPPORTED_SUFFIXES
+            ]
         raw = (item.output_path or "").strip()
         if not raw:
             return []
@@ -2137,10 +2225,20 @@ class MainWindow(QMainWindow):
             return
 
         self.log(f"\u23fb {action} requested: {' '.join(command)}", AppStyles.WARNING_COLOR)
+        # Launched without waiting. subprocess.run() blocked the GUI thread for
+        # up to 30 s (a suspend command can return only after the machine
+        # wakes) and, on Windows, flashed a console window for shutdown.exe.
         try:
-            subprocess.run(command, check=False, timeout=30)
-        except (OSError, subprocess.SubprocessError) as exc:
+            from ytget_gui.workers import proc
+
+            child = proc.spawn(command, capture=False, own_process_group=False)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             self.log(f"Could not {action.lower()}: {exc}", AppStyles.ERROR_COLOR, "Error")
+            return
+        # Reaped off-thread so the child never lingers as a zombie.
+        threading.Thread(
+            target=child.wait, name="power-action", daemon=True
+        ).start()
 
     @staticmethod
     def _post_action_command(action: str) -> List[str]:
@@ -2435,7 +2533,10 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
-        deadline = time.monotonic() + _SHUTDOWN_BUDGET_S
+        # Only the first attempt gets the full budget; retries just poll, so
+        # the retry loop cannot block the GUI for a full budget every 200 ms.
+        budget = _SHUTDOWN_BUDGET_S if not self._close_attempts else 0.05
+        deadline = time.monotonic() + budget
 
         def remaining_ms() -> int:
             return max(0, int((deadline - time.monotonic()) * 1000))
@@ -2450,7 +2551,7 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - never block exit on bookkeeping
             log.debug("Could not save window geometry", exc_info=True)
 
-        self.model.save()
+        self.controller.flush_save()
 
         # Request cancellation everywhere first, then spend the remaining budget
         # waiting. Cancelling and waiting per-subsystem serialises the waits.
@@ -2468,13 +2569,27 @@ class MainWindow(QMainWindow):
 
         live = [t for t in (self.controller.thread, self._title_thread, self._cover_thread)
                 if t is not None and t.isRunning()]
-        if live:
+        if live and self._close_attempts < _CLOSE_RETRY_LIMIT:
+            self._close_attempts += 1
             event.ignore()
             self.settings.CONFIRM_ON_QUIT = False
             self.setEnabled(False)
             self.setWindowTitle("YTGet — stopping background work…")
-            QTimer.singleShot(200, self.close)
+            QTimer.singleShot(_CLOSE_RETRY_MS, self.close)
             return
+        if live:
+            # Something is wedged in native code and ignored cancellation.
+            # Retrying forever left a disabled window that could never close.
+            # The queue and config are already on disk, so end the process
+            # rather than letting Qt destroy a QThread that is still running
+            # (which aborts with a crash dialog).
+            log.warning(
+                "Background work did not stop after %.0fs; exiting.",
+                _CLOSE_RETRY_LIMIT * _CLOSE_RETRY_MS / 1000,
+            )
+            self.controller.flush_save()
+            logging.shutdown()
+            os._exit(0)
 
         self._metadata_retry_timer.stop()
         # Give the thumbnail pool's plain Python threads a moment to end

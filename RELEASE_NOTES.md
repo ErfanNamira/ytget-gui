@@ -1,61 +1,68 @@
-# ✨ What's New v2.8.1
+# ✨ What's New v2.8.2
 
 ## Release summary
 
-YTGet 2.8.1 is a fix-up release for 2.8.0. The scheduler now really performs
-its power action, Exit from the tray really closes the app, Windows shows the
-right taskbar icon on the first launch after a boot, the queue stops
-re-fetching titles it already has and starts retrying the ones it failed to
-fetch, yt-dlp's own log can be switched back on, and any queue item can show
-its thumbnail.
+YTGet 2.8.2 is a performance and reliability release. Long queues stay
+responsive, update checks no longer freeze when GitHub rate-limits you or
+you're offline, Stop and quit react immediately, cached thumbnails load
+without touching the network, and a handful of queue bugs are fixed.
+Everything you already use works exactly as before; your settings and queue
+carry over untouched.
 
 ---
 
 ## ⚡ Highlights
 
-### ⏰ The scheduler does what it says
+### 🏎️ A queue that stays smooth
 
-- A scheduled shutdown, sleep or restart is no longer cancelled. It shared the
-  "only when the whole queue completed" rule with the post-queue action, so a
-  scheduled 07:00 sleep quietly did nothing whenever anything was still
-  pending. A scheduled action now runs as instructed.
-- A late tick can no longer step over a scheduled minute, a machine waking up
-  hours later does not fire the missed action, and moving the clock backwards
-  no longer mutes the scheduler for the rest of the day.
+- A failed item moving to the back of a long queue no longer freezes the
+  window. Only the rows that moved are redrawn (~300 ms → ~4 ms for 81 items
+  in testing), and scaled thumbnails are cached.
+- The queue is saved in the background, a few hundred milliseconds after the
+  last change, instead of after every single change on the UI thread.
+- Removing many rows at once, and Clear completed, now take one pass.
 
-### ❌ Exit really exits
+### 🛑 Stop and quit mean now
 
-- Quitting from the tray while the window was hidden left YTGet running
-  invisibly in Task Manager. The app now shuts down its event loop explicitly
-  and exits for good once the queue and settings are saved.
+- Stop, Skip and quitting interrupt every helper process, including the
+  YouTube Music "Top songs / Mix / Radio" probe that could hold things up for
+  30 seconds.
+- Removing rows whose details are still loading cancels those lookups right
+  away, instead of after every pending lookup has already run.
+- If something refuses to stop, YTGet now exits cleanly after about ten
+  seconds (queue and settings already saved) instead of hanging.
+- Shutdown, restart and sleep after the queue (or on a schedule) no longer
+  freeze the window and no longer flash a console window on Windows.
 
-### 🖼️ The right taskbar icon, every time
+### 🔄 Update Manager that never hangs
 
-- YTGet identified itself to Windows with a different ID in every release, so
-  the first launch after a boot showed the generic placeholder icon. The ID is
-  now stable and the installer stamps it onto every shortcut.
+- Checks run in parallel and the dialog closes instantly, even offline.
+- GitHub rate limits are detected and bypassed; results are cached for 10
+  minutes, and `GITHUB_TOKEN`/`GH_TOKEN` is used when set.
+- Clear messages for offline, timeout, proxy and SSL problems.
 
-### 📝 A queue that remembers what it fetched
+### 🎵 Download fixes
 
-- Titles are no longer re-fetched at every start. Items now record that their
-  details were resolved instead of guessing from a missing size, which never
-  arrives on many sites.
-- Items that could not be fetched because of a rate-limit are retried
-  automatically, with a growing backoff (1, 5, 15, 30 minutes, then hourly)
-  that survives a restart. No more cards showing nothing but a URL forever.
+- Playlists with two uploads sharing a title (a single and its album version)
+  no longer fail forever with "Postprocessing: Conversion failed!"; the second
+  one is saved as "Title [id]".
+- Audio normalisation works again instead of breaking every download.
+- Cover cropping covers every track of a playlist, even when the playlist
+  partly failed.
 
-### 🖥️ Optional yt-dlp log
+### 🧹 Queue fixes
 
-- **Preferences → Advanced → Interface → Show yt-dlp output in the log panel**
-  brings back the full download trail, including every entry of a playlist.
-  Off by default: the queue card already shows per-item progress. Errors and
-  warnings are always logged.
+- **Clear completed** no longer removes the pending 1080p row when the MP3 of
+  the same link is the one that finished.
+- **Play file**, **Show in folder** and **Copy file path** appear in the card
+  menu as soon as a download finishes, not only after a restart.
+- Thumbnails already on disk are shown immediately, without network requests.
 
-### 🖼️ View a thumbnail from the queue
+### 🍎🐧 Platform fixes
 
-- The `...` menu on a queue card has a new **View thumbnail** entry, with the
-  image size, its cache path and an "Open in viewer" button. Items with no
-  cached image just log a note and ask for it again.
+- macOS: Run at login works for install paths containing `&` or `<`.
+- Linux: Show in folder selects files whose names contain spaces, `#` or
+  non-ASCII characters.
 
 ---
 
@@ -77,7 +84,7 @@ its thumbnail.
       <td>Installer</td>
       <td><strong>165 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.1/YTGet-2.8.1-windows-setup.exe">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-2.8.2-windows-setup.exe">
           <img src="https://img.shields.io/badge/Download-Setup-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows Installer Download">
         </a>
       </td>
@@ -86,7 +93,7 @@ its thumbnail.
       <td>ZIP</td>
       <td><strong>255 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.1/YTGet-windows.zip">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-windows.zip">
           <img src="https://img.shields.io/badge/Download-ZIP-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows ZIP Download">
         </a>
       </td>
@@ -95,7 +102,7 @@ its thumbnail.
       <td>7z</td>
       <td><strong>165</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.1/YTGet-windows.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-windows.7z">
           <img src="https://img.shields.io/badge/Download-7z-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows 7z Download">
         </a>
       </td>
@@ -106,7 +113,7 @@ its thumbnail.
       <td>tar.gz</td>
       <td><strong>255 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.1/YTGet-linux.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-linux.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux tar.gz Download">
         </a>
       </td>
@@ -115,7 +122,7 @@ its thumbnail.
       <td>7z</td>
       <td><strong>190</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.1/YTGet-linux.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-linux.7z">
           <img src="https://img.shields.io/badge/Download-7z-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux 7z Download">
         </a>
       </td>
@@ -126,7 +133,7 @@ its thumbnail.
       <td>tar.gz</td>
       <td><strong>155 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.1/YTGet-macOS-arm64.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-macOS-arm64.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS ARM tar.gz Download">
         </a>
       </td>
@@ -135,7 +142,7 @@ its thumbnail.
       <td>7z</td>
       <td><strong>105</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.1/YTGet-macOS-arm64.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-macOS-arm64.7z">
           <img src="https://img.shields.io/badge/Download-7z-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS ARM 7z Download">
         </a>
       </td>
@@ -146,7 +153,7 @@ its thumbnail.
       <td>tar.gz</td>
       <td><strong>155 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.1/YTGet-macOS-x86_64.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-macOS-x86_64.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS Intel tar.gz Download">
         </a>
       </td>
@@ -155,7 +162,7 @@ its thumbnail.
       <td>7z</td>
       <td><strong>110</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.1/YTGet-macOS-x86_64.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-macOS-x86_64.7z">
           <img src="https://img.shields.io/badge/Download-7z-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS Intel 7z Download">
         </a>
       </td>

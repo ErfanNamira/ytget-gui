@@ -25,7 +25,7 @@ from ytget_gui.settings import AppSettings
 from ytget_gui.spotdl_settings import SpotDLSettings
 from ytget_gui.styles import AppStyles
 from ytget_gui.utils.paths import executable_name, is_usable_file
-from ytget_gui.workers import fetch_core, proc, ssl_utils
+from ytget_gui.workers import proc, ssl_utils
 from ytget_gui.workers.base import CANCELLED_EXIT, BaseDownloadWorker
 
 log = logging.getLogger(__name__)

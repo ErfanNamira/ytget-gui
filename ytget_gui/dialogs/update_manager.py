@@ -13,7 +13,8 @@ from __future__ import annotations
 import logging
 import html
 import threading
-from urllib.parse import urlsplit
+import time
+from urllib.parse import unquote, urlsplit
 import os
 import re
 import shutil
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from PySide6.QtCore import QThread, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QDialog,
@@ -53,10 +54,39 @@ from ytget_gui.workers import proc, ssl_utils
 log = logging.getLogger(__name__)
 
 GITHUB_LATEST = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
+# Not part of the REST API, so not subject to its 60-requests/hour anonymous
+# limit: it answers with a redirect to ".../releases/tag/<tag>".
+GITHUB_LATEST_WEB = "https://github.com/{owner}/{repo}/releases/latest"
+GITHUB_ASSET = "https://github.com/{owner}/{repo}/releases/download/{tag}/{name}"
 PYPI_JSON = "https://pypi.org/pypi/{package}/json"
 
-REQUEST_TIMEOUT = 15
-DOWNLOAD_TIMEOUT = (5, 15)
+# (connect, read). A single 15 s figure applied to each phase separately and,
+# with four tools checked one after another, an offline machine sat on
+# "Checking..." for a minute or more.
+REQUEST_TIMEOUT = (6, 12)
+DOWNLOAD_TIMEOUT = (6, 20)
+
+# Successful lookups are reused for a while so reopening the dialog does not
+# burn the anonymous GitHub API quota. "Re-check all" bypasses it.
+_CACHE_TTL_S = 600
+_release_cache: Dict[Tuple[str, str], Tuple[float, str, Optional[Dict[str, str]]]] = {}
+_cache_lock = threading.Lock()
+
+
+class UpdateCheckError(Exception):
+    """A check failure with a message fit for the user."""
+
+
+def _friendly_network_error(exc: Exception) -> str:
+    if isinstance(exc, requests.exceptions.ProxyError):
+        return "Could not connect through the configured proxy."
+    if isinstance(exc, requests.exceptions.SSLError):
+        return "Secure connection failed (SSL). Check the certificate settings."
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "Timed out \u2014 GitHub did not answer in time."
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "No connection \u2014 you appear to be offline or GitHub is unreachable."
+    return f"Network error: {exc}"
 
 
 @dataclass(frozen=True)
@@ -197,13 +227,31 @@ def deno_asset_name() -> str:
 # ----------------------------------------------------------------------
 
 
-class UpdateChecker(QThread):
-    result = Signal(str, str, str, str)  # key, installed, latest, url
-    failed = Signal(str, str)
+class UpdateChecker(QObject):
+    """Looks up installed and latest versions without ever blocking the GUI.
 
-    def __init__(self, settings: AppSettings, parent=None) -> None:
+    Runs on plain daemon threads, one per tool, so a slow or unreachable
+    endpoint delays only its own row and closing the dialog never has to wait
+    for a socket timeout (the old QThread had to be joined before the dialog
+    could be destroyed, which is what froze the window when offline or
+    rate-limited).
+    """
+
+    installed = Signal(str, str)              # key, installed version
+    result = Signal(str, str, str, str)       # key, installed, latest, url
+    failed = Signal(str, str)
+    notice = Signal(str)
+    done = Signal()
+
+    def __init__(self, settings: AppSettings, *, use_cache: bool = True, parent=None) -> None:
         super().__init__(parent)
         self.settings = settings
+        self._use_cache = use_cache
+        self._stop = threading.Event()
+        self._running = threading.Event()
+        self._api_limited = threading.Event()
+        self._notice_lock = threading.Lock()
+        self._noticed: set = set()
         self._session = requests.Session()
         self._session.headers["User-Agent"] = f"YTGet/{_version.__version__}"
         self._verify, _args, _env = ssl_utils.resolve_ssl_config(settings)
@@ -211,97 +259,179 @@ class UpdateChecker(QThread):
             self._verify = True  # Software update trust cannot be switched off.
         proxy = (getattr(settings, "PROXY_URL", "") or "").strip()
         if proxy:
-            # The previous revision ignored the proxy entirely here, so update
-            # checks failed on every proxied connection while downloads worked.
             self._session.proxies.update({"http": proxy, "https": proxy})
+        self._token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
 
-    def _latest_release(self, owner: str, repo: str) -> Tuple[str, List[dict]]:
-        response = self._session.get(
-            GITHUB_LATEST.format(owner=owner, repo=repo),
-            timeout=REQUEST_TIMEOUT,
-            verify=self._verify,
+    # -- thread control ------------------------------------------------
+
+    def start(self) -> None:
+        self._running.set()
+        threading.Thread(target=self._run, name="update-check", daemon=True).start()
+
+    def isRunning(self) -> bool:  # noqa: N802 - mirrors the QThread API it replaced
+        return self._running.is_set()
+
+    def requestInterruption(self) -> None:  # noqa: N802
+        self._stop.set()
+
+    def isInterruptionRequested(self) -> bool:  # noqa: N802
+        return self._stop.is_set()
+
+    def _emit(self, signal, *args) -> None:
+        if self._stop.is_set():
+            return
+        try:
+            signal.emit(*args)
+        except RuntimeError:
+            # The dialog is gone; nothing left to report to.
+            self._stop.set()
+
+    def _notice_once(self, key: str, text: str) -> None:
+        with self._notice_lock:
+            if key in self._noticed:
+                return
+            self._noticed.add(key)
+        self._emit(self.notice, text)
+
+    def _run(self) -> None:
+        threads = [
+            threading.Thread(target=self._check_safe, args=(tool,), daemon=True,
+                             name=f"update-check-{tool.key}")
+            for tool in TOOLS
+        ]
+        try:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                while thread.is_alive() and not self._stop.is_set():
+                    thread.join(0.25)
+        finally:
+            self._running.clear()
+            if not self._stop.is_set():
+                self._emit(self.done)
+            try:
+                self._session.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _check_safe(self, tool: Tool) -> None:
+        try:
+            self._check(tool)
+        except UpdateCheckError as exc:
+            self._emit(self.failed, tool.key, str(exc))
+        except requests.RequestException as exc:
+            self._emit(self.failed, tool.key, _friendly_network_error(exc))
+        except Exception as exc:  # noqa: BLE001 - a check must never kill the dialog
+            log.exception("Update check crashed for %s", tool.key)
+            self._emit(self.failed, tool.key, str(exc))
+
+    # -- lookups -------------------------------------------------------
+
+    def _get(self, url: str, **kwargs):
+        return self._session.get(url, timeout=REQUEST_TIMEOUT, verify=self._verify, **kwargs)
+
+    def _latest_release(self, owner: str, repo: str) -> Tuple[str, str, Optional[Dict[str, str]]]:
+        """(version, raw tag, {asset name: url} or None when unknown)."""
+        cache_key = (owner.lower(), repo.lower())
+        if self._use_cache:
+            with _cache_lock:
+                cached = _release_cache.get(cache_key)
+            if cached and time.monotonic() - cached[0] < _CACHE_TTL_S and cached[2] is not None:
+                tag, assets = cached[1], cached[2]
+                return tag.lstrip("v"), tag, assets
+
+        if not self._api_limited.is_set():
+            headers = {"Accept": "application/vnd.github+json"}
+            if self._token:
+                headers["Authorization"] = f"Bearer {self._token}"
+            response = self._get(GITHUB_LATEST.format(owner=owner, repo=repo), headers=headers)
+            if response.status_code in (403, 429) and (
+                response.headers.get("X-RateLimit-Remaining") == "0"
+                or "rate limit" in response.text.lower()
+            ):
+                self._api_limited.set()
+                reset = response.headers.get("X-RateLimit-Reset", "")
+                when = ""
+                if reset.isdigit():
+                    when = " until " + time.strftime("%H:%M", time.localtime(int(reset)))
+                self._notice_once(
+                    "rate",
+                    f"GitHub API rate limit reached{when}; using the release pages instead.",
+                )
+            else:
+                response.raise_for_status()
+                payload = response.json()
+                tag = str(payload.get("tag_name", ""))
+                assets = {
+                    str(a.get("name", "")): str(a.get("browser_download_url", ""))
+                    for a in payload.get("assets", []) or []
+                }
+                with _cache_lock:
+                    _release_cache[cache_key] = (time.monotonic(), tag, assets)
+                return tag.lstrip("v"), tag, assets
+
+        # Fallback: the web redirect is not API-limited.
+        response = self._get(
+            GITHUB_LATEST_WEB.format(owner=owner, repo=repo), allow_redirects=False
         )
-        response.raise_for_status()
-        payload = response.json()
-        return str(payload.get("tag_name", "")).lstrip("v"), payload.get("assets", [])
+        location = response.headers.get("Location", "")
+        response.close()
+        match = re.search(r"/releases/tag/([^/?#]+)/?$", location)
+        if not match:
+            if response.status_code in (403, 429):
+                raise UpdateCheckError("GitHub is rate-limiting this network; try again later.")
+            raise UpdateCheckError("Could not determine the latest release.")
+        tag = unquote(match.group(1))
+        return tag.lstrip("v"), tag, None
 
     def _pypi_latest(self, package: str) -> str:
-        response = self._session.get(
-            PYPI_JSON.format(package=package),
-            timeout=REQUEST_TIMEOUT,
-            verify=self._verify,
-        )
+        response = self._get(PYPI_JSON.format(package=package))
         response.raise_for_status()
         return str(response.json()["info"]["version"])
 
     @staticmethod
-    def _asset_url(assets: List[dict], predicate) -> str:
-        return next(
-            (a["browser_download_url"] for a in assets if predicate(a.get("name", ""))),
-            "",
-        )
-
-    def run(self) -> None:
-        try:
-            for tool in TOOLS:
-                if self.isInterruptionRequested():
-                    return
-                try:
-                    self._check(tool)
-                except requests.RequestException as exc:
-                    self.failed.emit(tool.key, f"Network error: {exc}")
-                except Exception as exc:  # noqa: BLE001
-                    self.failed.emit(tool.key, str(exc))
-        finally:
-            # Each re-check builds a new session; without closing it the
-            # connection pool's sockets are only reclaimed by GC, leaking file
-            # descriptors across a long session of manual re-checks.
-            self._session.close()
+    def _asset_url(assets: Dict[str, str], predicate) -> str:
+        return next((url for name, url in assets.items() if predicate(name)), "")
 
     def _check(self, tool: Tool) -> None:
+        # Local probe first, so the row shows what is installed even when the
+        # network lookup fails.
         current = installed_version(tool.key, self.settings)
+        self._emit(self.installed, tool.key, current)
+        if self._stop.is_set():
+            return
+
+        if tool.key == "spotdl" and not is_windows():
+            self._emit(self.result, tool.key, current, self._pypi_latest(tool.package), "pip")
+            return
+
+        latest, tag, assets = self._latest_release(tool.owner, tool.repo)
+        if self._stop.is_set():
+            return
+
+        def asset(name: str) -> str:
+            if assets is not None:
+                return assets.get(name, "")
+            return GITHUB_ASSET.format(owner=tool.owner, repo=tool.repo, tag=tag, name=name)
 
         if tool.key == "ytget":
-            latest, _assets = self._latest_release(tool.owner, tool.repo)
-            self.result.emit(
-                tool.key, current, latest,
-                f"https://github.com/{tool.owner}/{tool.repo}/releases/latest",
-            )
-            return
-
-        if tool.key == "yt-dlp":
-            latest, assets = self._latest_release(tool.owner, tool.repo)
-            wanted = ytdlp_asset_name()
-            self.result.emit(
-                tool.key, current, latest,
-                self._asset_url(assets, lambda n: n == wanted),
-            )
-            return
-
-        if tool.key == "deno":
-            latest, assets = self._latest_release(tool.owner, tool.repo)
-            wanted = deno_asset_name()
-            self.result.emit(
-                tool.key, current, latest,
-                self._asset_url(assets, lambda n: n == wanted),
-            )
-            return
-
-        if tool.key == "spotdl":
-            if is_windows():
-                # Match the standalone binary the app actually runs, not the
-                # pip package. Asset names are version-stamped, e.g.
-                # "spotdl-4.5.0-win32.exe".
-                latest, assets = self._latest_release(tool.owner, tool.repo)
+            url = f"https://github.com/{tool.owner}/{tool.repo}/releases/latest"
+        elif tool.key == "yt-dlp":
+            url = asset(ytdlp_asset_name())
+        elif tool.key == "deno":
+            url = asset(deno_asset_name())
+        elif tool.key == "spotdl":
+            # The standalone binary the app actually runs; names are
+            # version-stamped, e.g. "spotdl-4.5.0-win32.exe".
+            if assets is not None:
                 url = self._asset_url(
-                    assets,
-                    lambda n: n.startswith("spotdl-") and n.endswith("win32.exe"),
+                    assets, lambda n: n.startswith("spotdl-") and n.endswith("win32.exe")
                 )
-                self.result.emit(tool.key, current, latest, url)
             else:
-                self.result.emit(
-                    tool.key, current, self._pypi_latest(tool.package), "pip"
-                )
+                url = asset(f"spotdl-{latest}-win32.exe")
+        else:
+            url = ""
+        self._emit(self.result, tool.key, current, latest, url)
 
 
 # ----------------------------------------------------------------------
@@ -309,10 +439,16 @@ class UpdateChecker(QThread):
 # ----------------------------------------------------------------------
 
 
-class UpdateInstaller(QThread):
+class UpdateInstaller(QObject):
+    """Downloads and installs one tool on a daemon thread.
+
+    Not a QThread: a QThread must be joined before its owner is destroyed, so
+    closing the dialog mid-download used to wait out the socket timeout.
+    """
+
     progress = Signal(str, int)
     message = Signal(str, str)
-    succeeded = Signal(str)
+    succeeded = Signal(str, str)   # key, new installed version
     failed = Signal(str, str)
 
     def __init__(self, key: str, url: str, settings: AppSettings, parent=None) -> None:
@@ -322,16 +458,51 @@ class UpdateInstaller(QThread):
         self.settings = settings
         self._cancelled = False
         self._process = None
+        self._running = threading.Event()
+        self._detached = False
+
+    def start(self) -> None:
+        self._running.set()
+        threading.Thread(target=self._run_guarded, name=f"install-{self.key}", daemon=True).start()
+
+    def isRunning(self) -> bool:  # noqa: N802
+        return self._running.is_set()
+
+    def detach(self) -> None:
+        """Stop reporting to the UI; the install itself finishes or cancels."""
+        self._detached = True
 
     def cancel(self) -> None:
         self._cancelled = True
-        self.requestInterruption()
         threading.Thread(target=proc.terminate_tree, args=(self._process,), daemon=True).start()
+
+    def _run_guarded(self) -> None:
+        try:
+            self.run()
+        finally:
+            self._running.clear()
+
+    def _signal(self, signal, *args) -> None:
+        if self._detached:
+            return
+        try:
+            signal.emit(*args)
+        except RuntimeError:
+            self._detached = True
+
+    def _succeed(self) -> None:
+        version = installed_version(self.key, self.settings)
+        # Persist here, not in the dialog: the dialog may already be closed.
+        try:
+            self.settings.save_config()
+        except Exception:  # noqa: BLE001
+            log.debug("Could not save config after install", exc_info=True)
+        self._signal(self.succeeded, self.key, version)
 
     # ------------------------------------------------------------------
 
     def _log(self, text: str) -> None:
-        self.message.emit(self.key, text)
+        self._signal(self.message, self.key, text)
 
     def _target_path(self) -> Path:
         """Private managed binaries: never replace a system executable."""
@@ -359,10 +530,12 @@ class UpdateInstaller(QThread):
             with requests.get(
                 url, stream=True, timeout=DOWNLOAD_TIMEOUT,
                 verify=verify, proxies=proxies,
+                headers={"User-Agent": f"YTGet/{_version.__version__}"},
             ) as response:
                 response.raise_for_status()
                 total = int(response.headers.get("content-length") or 0)
                 written = 0
+                last_percent = -1
                 with open(destination, "wb") as handle:
                     for chunk in response.iter_content(chunk_size=65536):
                         if self._cancelled:
@@ -372,10 +545,13 @@ class UpdateInstaller(QThread):
                         handle.write(chunk)
                         written += len(chunk)
                         if total:
-                            self.progress.emit(self.key, int(written * 100 / total))
+                            percent = int(written * 100 / total)
+                            if percent != last_percent:  # one signal per percent, not per chunk
+                                last_percent = percent
+                                self._signal(self.progress, self.key, percent)
             return written > 0 and (not total or written == total) and not self._cancelled
         except requests.RequestException as exc:
-            self._log(f"Download failed: {exc}")
+            self._log(f"Download failed: {_friendly_network_error(exc)}")
             return False
         except OSError as exc:
             self._log(f"Could not write the download: {exc}")
@@ -403,22 +579,22 @@ class UpdateInstaller(QThread):
 
         try:
             if not self._download(self.url, temp_path):
-                self.failed.emit(self.key, "Download cancelled or failed.")
+                self._signal(self.failed, self.key, "Download cancelled or failed.")
                 return
 
             self._log("Installing\u2026")
             self._make_executable(temp_path)
             if self._cancelled:
-                self.failed.emit(self.key, "Cancelled.")
+                self._signal(self.failed, self.key, "Cancelled.")
                 return
             os.replace(temp_path, destination)
             if self.key == "yt-dlp":
                 self.settings.YT_DLP_PATH = destination
             temp_path = None
             self._log("Done.")
-            self.succeeded.emit(self.key)
+            self._succeed()
         except OSError as exc:
-            self.failed.emit(
+            self._signal(self.failed, 
                 self.key,
                 f"{exc}. If the file is in use, close any running download first.",
             )
@@ -436,7 +612,7 @@ class UpdateInstaller(QThread):
 
         try:
             if not self._download(self.url, archive):
-                self.failed.emit(self.key, "Download cancelled or failed.")
+                self._signal(self.failed, self.key, "Download cancelled or failed.")
                 return
 
             self._log("Extracting\u2026")
@@ -456,7 +632,7 @@ class UpdateInstaller(QThread):
                     None,
                 )
                 if member is None:
-                    self.failed.emit(self.key, "No deno binary inside the archive.")
+                    self._signal(self.failed, self.key, "No deno binary inside the archive.")
                     return
                 entry = bundle.getinfo(member)
                 if entry.file_size > 512 * 1024 * 1024:
@@ -476,9 +652,9 @@ class UpdateInstaller(QThread):
             self._make_executable(final)
             self.settings.DENO_PATH = final
             self._log("Done.")
-            self.succeeded.emit(self.key)
+            self._succeed()
         except (OSError, zipfile.BadZipFile) as exc:
-            self.failed.emit(self.key, str(exc))
+            self._signal(self.failed, self.key, str(exc))
         finally:
             archive.unlink(missing_ok=True)
 
@@ -488,7 +664,7 @@ class UpdateInstaller(QThread):
             return
 
         if is_frozen():
-            self.failed.emit(
+            self._signal(self.failed, 
                 self.key,
                 "No standalone spotdl build exists for this platform, and pip "
                 "is not available inside the packaged app. Install spotdl in a "
@@ -509,7 +685,7 @@ class UpdateInstaller(QThread):
             for raw in process.stdout:
                 if self._cancelled:
                     proc.terminate_tree(process)
-                    self.failed.emit(self.key, "Cancelled.")
+                    self._signal(self.failed, self.key, "Cancelled.")
                     return
                 line = raw.decode("utf-8", errors="replace").rstrip()
                 if line:
@@ -518,14 +694,14 @@ class UpdateInstaller(QThread):
             process.stdout.close()
             self._process = None
         except (OSError, subprocess.SubprocessError) as exc:
-            self.failed.emit(self.key, str(exc))
+            self._signal(self.failed, self.key, str(exc))
             return
 
         if code == 0:
             self._log("Done.")
-            self.succeeded.emit(self.key)
+            self._succeed()
         else:
-            self.failed.emit(self.key, f"pip exited with code {code}")
+            self._signal(self.failed, self.key, f"pip exited with code {code}")
 
     def run(self) -> None:
         try:
@@ -536,10 +712,10 @@ class UpdateInstaller(QThread):
             elif self.key == "yt-dlp":
                 self._install_binary(self._target_path())
             else:
-                self.failed.emit(self.key, f"No installer for {self.key}.")
+                self._signal(self.failed, self.key, f"No installer for {self.key}.")
         except Exception as exc:  # noqa: BLE001 - a thread must not die silently
             log.exception("Installer crashed")
-            self.failed.emit(self.key, str(exc))
+            self._signal(self.failed, self.key, str(exc))
 
 
 # ----------------------------------------------------------------------
@@ -559,6 +735,8 @@ class UpdateManager(QDialog):
 
         self.setWindowTitle(f"Update Manager \u2014 {_version.APP_NAME}")
         self.setModal(True)
+        # Otherwise every opening leaves a dead dialog parented to the window.
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setMinimumSize(700, 580)
         self.setStyleSheet(ui.dialog_qss())
 
@@ -610,7 +788,7 @@ class UpdateManager(QDialog):
 
         footer = QHBoxLayout()
         self.recheck_button = QPushButton("Re-check all")
-        self.recheck_button.clicked.connect(self._check_all)
+        self.recheck_button.clicked.connect(lambda: self._check_all(use_cache=False))
         close_button = QPushButton("Close")
         close_button.setDefault(True)
         close_button.clicked.connect(self.reject)
@@ -707,7 +885,7 @@ class UpdateManager(QDialog):
 
     # ------------------------------------------------------------------
 
-    def _check_all(self) -> None:
+    def _check_all(self, use_cache: bool = True) -> None:
         if (self._checker is not None and self._checker.isRunning()) or any(i.isRunning() for i in self._installers.values()):
             return
         for key, row in self._rows.items():
@@ -721,15 +899,37 @@ class UpdateManager(QDialog):
         self.log_view.clear()
         self._log("", "Checking for updates\u2026")
 
-        if self._checker is not None and self._checker.isRunning():
-            self._checker.requestInterruption()
-            self._checker.wait(3000)
-
-        self._checker = UpdateChecker(self.settings, self)
+        self._release_checker()
+        # No Qt parent: the checker's threads may outlive this dialog.
+        self._checker = UpdateChecker(self.settings, use_cache=use_cache)
+        self._checker.installed.connect(self._on_installed_version)
         self._checker.result.connect(self._on_result)
         self._checker.failed.connect(self._on_check_failed)
-        self._checker.finished.connect(self._on_check_done)
+        self._checker.notice.connect(self._on_notice)
+        self._checker.done.connect(self._on_check_done)
         self._checker.start()
+
+    def _release_checker(self) -> None:
+        checker, self._checker = self._checker, None
+        if checker is None:
+            return
+        checker.requestInterruption()
+        for signal in (checker.installed, checker.result, checker.failed,
+                       checker.notice, checker.done):
+            try:
+                signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+
+    @Slot(str, str)
+    def _on_installed_version(self, key: str, current: str) -> None:
+        row = self._rows.get(key)
+        if row is not None:
+            row["installed"].setText(f"installed: {current}")
+
+    @Slot(str)
+    def _on_notice(self, text: str) -> None:
+        self._log("", text, Palette.WARNING)
 
     @Slot(str, str, str, str)
     def _on_result(self, key: str, current: str, latest: str, url: str) -> None:
@@ -765,6 +965,9 @@ class UpdateManager(QDialog):
     @Slot(str, str)
     def _on_check_failed(self, key: str, message: str) -> None:
         self._set_badge(key, "error")
+        row = self._rows.get(key)
+        if row is not None:
+            row["latest"].setText("latest: unavailable")
         self._log(key, message, Palette.WARNING)
 
     @Slot()
@@ -793,9 +996,9 @@ class UpdateManager(QDialog):
         row["progress"].show()
         self._set_badge(key, "installing")
 
-        installer = UpdateInstaller(key, url, self.settings, self)
+        installer = UpdateInstaller(key, url, self.settings)
         installer.progress.connect(self._on_progress)
-        installer.message.connect(lambda k, m: self._log(k, m, Palette.ACCENT))
+        installer.message.connect(self._on_install_message)
         installer.succeeded.connect(self._on_installed)
         installer.failed.connect(self._on_install_failed)
         self._installers[key] = installer
@@ -807,18 +1010,21 @@ class UpdateManager(QDialog):
         if row is not None:
             row["progress"].setValue(percent)
 
-    @Slot(str)
-    def _on_installed(self, key: str) -> None:
+    @Slot(str, str)
+    def _on_install_message(self, key: str, text: str) -> None:
+        self._log(key, text, Palette.ACCENT)
+
+    @Slot(str, str)
+    def _on_installed(self, key: str, version: str) -> None:
+        # The version probe ran on the installer thread: spotdl --version alone
+        # can take many seconds, and it used to run here on the GUI thread.
         row = self._rows.get(key)
         if row is not None:
             row["progress"].setValue(100)
             QTimer.singleShot(800, row["progress"].hide)
             self._set_badge(key, "done")
-            row["installed"].setText(
-                f"installed: {installed_version(key, self.settings)}"
-            )
+            row["installed"].setText(f"installed: {version}")
         self._log(key, "Installed successfully.", Palette.SUCCESS)
-        self.settings.save_config()
 
     @Slot(str, str)
     def _on_install_failed(self, key: str, reason: str) -> None:
@@ -831,27 +1037,26 @@ class UpdateManager(QDialog):
 
     # ------------------------------------------------------------------
 
-    def _stop_threads(self) -> bool:
-        threads = list(self._installers.values())
-        if self._checker is not None:
-            self._checker.requestInterruption()
-            threads.append(self._checker)
+    def _stop_threads(self) -> None:
+        """Detach from all background work. Never waits: nothing here blocks
+        on a network call, so closing is instant even when offline."""
+        self._release_checker()
         for installer in self._installers.values():
+            for signal in (installer.progress, installer.message,
+                           installer.succeeded, installer.failed):
+                try:
+                    signal.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+            installer.detach()
             if installer.isRunning():
                 installer.cancel()
-        return not any(t.isRunning() for t in threads)
+        self._installers.clear()
 
     def closeEvent(self, event) -> None:
-        if not self._stop_threads():
-            event.ignore()
-            self.setEnabled(False)
-            QTimer.singleShot(200, self.close)
-            return
+        self._stop_threads()
         super().closeEvent(event)
 
     def reject(self) -> None:
-        if not self._stop_threads():
-            self.setEnabled(False)
-            QTimer.singleShot(200, self.reject)
-            return
+        self._stop_threads()
         super().reject()

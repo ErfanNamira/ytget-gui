@@ -7,7 +7,7 @@ import logging
 import subprocess
 import threading
 from collections import deque
-from typing import Deque, Iterable, List, Optional, Set
+from typing import Deque, Iterable, Optional, Set
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -147,6 +147,10 @@ class TitleFetchQueue(QObject):
                     if not self._queue:
                         break
                     url = self._queue.popleft()
+                    # Published under the same lock cancel() reads it with,
+                    # so a cancel arriving between pop and launch is not
+                    # mistaken for one aimed at a URL that is not running.
+                    self._current_url = url
                 self.started_one.emit(url)
                 try:
                     self._fetch_one(url)
@@ -177,12 +181,16 @@ class TitleFetchQueue(QObject):
             proc.terminate_tree(process)
 
     def _fetch_one(self, url: str) -> None:
-        self._current_url = url
+        with self._queue_lock:
+            self._current_url = url
+            cancelled_early = url in self._cancelled
         with self._lock:
             # Fresh per fetch: a stale set event from a previous URL would make
             # the next fetch report Cancelled before it began.
             self._cancel_event = threading.Event()
             cancel_event = self._cancel_event
+            if cancelled_early:
+                cancel_event.set()
 
         try:
             result = fetch_core.fetch_metadata(
@@ -200,7 +208,8 @@ class TitleFetchQueue(QObject):
         finally:
             with self._lock:
                 self._current_proc = None
-            self._current_url = None
+            with self._queue_lock:
+                self._current_url = None
 
         # A result for a cancelled URL is stale from the user's point of view.
         with self._queue_lock:

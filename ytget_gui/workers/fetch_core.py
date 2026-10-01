@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
-from ytget_gui.utils.cli_args import split_arguments, parse_ytdlp_args
+from ytget_gui.utils.cli_args import split_arguments, parse_ytdlp_args  # noqa: F401 - re-exported
 import subprocess
-import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -400,7 +399,17 @@ def parse_metadata(stdout_text: str) -> Metadata:
         raise MetadataError("No metadata received from yt-dlp")
 
     infos: List[Dict[str, Any]] = []
-    for line in output.splitlines():
+    # --dump-single-json prints one (often multi-megabyte) document. Parse it
+    # directly instead of splitting the whole output into lines first, which
+    # copied the payload again just to find the one line it consists of.
+    if output.startswith("{") and "\n" not in output:
+        try:
+            parsed = json.loads(output)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            infos.append(parsed)
+    for line in (() if infos else output.splitlines()):
         line = line.strip()
         if not line or not line.startswith("{"):
             continue

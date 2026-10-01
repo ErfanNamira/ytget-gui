@@ -102,21 +102,36 @@ def _plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{_BUNDLE_ID}.plist"
 
 
+def _launchctl(verb: str, path: Path) -> None:
+    """Best effort, and bounded: launchctl can stall, and this runs while
+    Preferences is being saved on the GUI thread."""
+    try:
+        subprocess.run(
+            ["launchctl", verb, str(path)],
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.debug("launchctl %s failed: %s", verb, exc)
+
+
 def _mac_set(enabled: bool, argv: List[str]) -> Tuple[bool, str]:
     path = _plist_path()
     try:
         if not enabled:
             if path.exists():
-                subprocess.run(
-                    ["launchctl", "unload", str(path)],
-                    check=False,
-                    capture_output=True,
-                )
+                _launchctl("unload", path)
                 path.unlink()
             return True, ""
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        args = "".join(f"        <string>{part}</string>\n" for part in argv)
+        # Escaped: a path containing "&" or "<" (an install folder such as
+        # "Tom & Jerry") produced an invalid plist that launchd silently
+        # refused to load.
+        from xml.sax.saxutils import escape
+
+        args = "".join(f"        <string>{escape(str(part))}</string>\n" for part in argv)
         path.write_text(
             '<?xml version="1.0" encoding="UTF-8"?>\n'
             '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
@@ -137,9 +152,7 @@ def _mac_set(enabled: bool, argv: List[str]) -> Tuple[bool, str]:
             "</plist>\n",
             encoding="utf-8",
         )
-        subprocess.run(
-            ["launchctl", "load", str(path)], check=False, capture_output=True
-        )
+        _launchctl("load", path)
         return True, ""
     except OSError as exc:
         return False, str(exc)

@@ -36,6 +36,7 @@ class QueueController(QObject):
 
     item_changed = Signal(str)          # item key
     item_completed = Signal(str)        # item key, download succeeded
+    item_partial = Signal(str)          # item key, failed but produced files
     queue_changed = Signal()            # structural change (add/remove/reorder)
     overall_progress = Signal(int)
     running_changed = Signal(bool)
@@ -61,6 +62,21 @@ class QueueController(QObject):
         self._stop_requested = False
         self._skip_requested = False
         self._finish_announced = False
+
+        # Coalesces the many back-to-back state changes of a run into one
+        # background write.
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(400)
+        self._save_timer.timeout.connect(self.model.save_async)
+
+    def save_soon(self) -> None:
+        """Persist the queue shortly, off the GUI thread."""
+        self._save_timer.start()
+
+    def flush_save(self) -> None:
+        self._save_timer.stop()
+        self.model.save()
 
     # ------------------------------------------------------------------
     # State
@@ -172,6 +188,7 @@ class QueueController(QObject):
         """Stop work and tear the thread down within a bounded budget."""
         self._paused = True
         self._stop_requested = True
+        self._save_timer.stop()
         if self._worker is not None:
             try:
                 self._worker.cancel()
@@ -208,11 +225,12 @@ class QueueController(QObject):
         item.last_error = ""
         item.output_path = ""
         item.output_count = 0
+        item.produced_files = []
 
         self._running = True
         self.item_changed.emit(item.key)
         self.running_changed.emit(True)
-        self.model.save()
+        self.save_soon()
 
         try:
             worker = self._build_worker(item)
@@ -230,6 +248,7 @@ class QueueController(QObject):
         worker.progress.connect(self._on_worker_progress, Qt.QueuedConnection)
         worker.stage.connect(self._on_worker_stage, Qt.QueuedConnection)
         worker.output.connect(self._on_worker_output, Qt.QueuedConnection)
+        worker.files.connect(self._on_worker_files, Qt.QueuedConnection)
         worker.finished.connect(self._on_worker_finished, Qt.QueuedConnection)
         worker.finished.connect(thread.quit, Qt.DirectConnection)
 
@@ -298,6 +317,11 @@ class QueueController(QObject):
         item.output_count = count
         self.item_changed.emit(item.key)
 
+    def _on_worker_files(self, paths: list) -> None:
+        item = self._current
+        if item is not None:
+            item.produced_files = [str(p) for p in paths]
+
     def _on_worker_error(self, message: str) -> None:
         item = self._current
         if item is not None:
@@ -312,12 +336,16 @@ class QueueController(QObject):
         if item is not None:
             self._apply_outcome(item, code)
             self.item_changed.emit(item.key)
-            self.model.save()
+            self.save_soon()
             if item.status is Status.COMPLETED:
                 # Emitted per item so post-processing (album art cropping)
                 # can run now rather than at the end of the queue, which a
                 # stop or a crash would never reach.
                 self.item_completed.emit(item.key)
+            elif item.produced_files:
+                # Tracks that did finish in a failed/cancelled playlist run
+                # still deserve their post-processing (cover cropping).
+                self.item_partial.emit(item.key)
 
         self._worker = None
         self.running_changed.emit(False)
@@ -416,7 +444,7 @@ class QueueController(QObject):
         if added:
             self._finish_announced = False
             self.queue_changed.emit()
-            self.model.save()
+            self.save_soon()
             self._emit_progress()
             QTimer.singleShot(0, self._pump)
         return added
@@ -425,15 +453,14 @@ class QueueController(QObject):
         return bool(self.add_items([item]))
 
     def remove_items(self, keys: List[str]) -> int:
-        removed = 0
-        for key in keys:
-            if self._current is not None and self._current.key == key:
-                self.cancel_item(key)
-            if self.model.remove(key) is not None:
-                removed += 1
+        keys = list(keys)
+        current = self._current
+        if current is not None and current.key in keys:
+            self.cancel_item(current.key)
+        removed = len(self.model.remove_many(keys))
         if removed:
             self.queue_changed.emit()
-            self.model.save()
+            self.save_soon()
             self._emit_progress()
         return removed
 
@@ -441,7 +468,7 @@ class QueueController(QObject):
         removed = self.model.remove_completed()
         if removed:
             self.queue_changed.emit()
-            self.model.save()
+            self.save_soon()
             self._emit_progress()
         return len(removed)
 
@@ -454,7 +481,7 @@ class QueueController(QObject):
             return
         self.model.move_many(filtered, to_top=to_top, after=reserved)
         self.queue_changed.emit()
-        self.model.save()
+        self.save_soon()
 
     def apply_visual_order(self, keys: List[str]) -> None:
         self.model.reorder_by_keys(keys)
@@ -462,14 +489,14 @@ class QueueController(QObject):
             self.model.move_many(
                 [self._current.key], to_top=True, after=0
             )
-        self.model.save()
+        self.save_soon()
 
     def sort_by(self, key: str) -> None:
         self.model.sort_by(key)
         if self._current is not None:
             self.model.move_many([self._current.key], to_top=True, after=0)
         self.queue_changed.emit()
-        self.model.save()
+        self.save_soon()
 
     def forget_output(self, key: str) -> None:
         """Drop a recorded output path whose file no longer exists."""
@@ -478,7 +505,7 @@ class QueueController(QObject):
             return
         item.output_path = ""
         item.output_count = 0
-        self.model.save()
+        self.save_soon()
         self.item_changed.emit(key)
 
     # ------------------------------------------------------------------

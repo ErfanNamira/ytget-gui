@@ -39,6 +39,7 @@ class BaseDownloadWorker(QObject):
     finished = Signal(int)
     error = Signal(str)
     output = Signal(str, int)   # final path, number of files produced
+    files = Signal(list)        # every file produced/confirmed (for cover cropping)
 
     def __init__(
         self,
@@ -213,6 +214,11 @@ class BaseDownloadWorker(QObject):
         self._last_stage_text = text
         self._last_stage_at = now
         self.stage.emit(text)
+
+    def emit_files(self, paths) -> None:
+        paths = [str(p) for p in paths if p]
+        if paths:
+            self.files.emit(paths)
 
     def emit_output(self, path: str, count: int = 1) -> None:
         if path:

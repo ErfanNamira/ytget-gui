@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -94,6 +95,10 @@ class QueueItem:
     # handed to the worker, so changing Advanced later -- or adding a
     # second item -- cannot retroactively re-cut an item already queued.
     options: Dict[str, Any] = field(default_factory=dict)
+    # Transient (never persisted): every file the last run produced or
+    # confirmed. Playlists record a folder in output_path, so cover cropping
+    # needs the actual list to touch only this job's files.
+    produced_files: List[str] = field(default_factory=list, repr=False, compare=False)
 
     @property
     def key(self) -> str:
@@ -265,6 +270,17 @@ class QueueModel:
         self._by_url: Dict[str, List[QueueItem]] = {}
         self.path = Path(path) if path else None
 
+        # Background persistence. save() used to serialise *and* fsync on the
+        # GUI thread after every state change (each metadata result, each
+        # start/finish), which on Windows with real-time AV scanning cost tens
+        # to hundreds of milliseconds a time -- visible as the window hanging.
+        self._write_lock = threading.Lock()
+        self._writer_cv = threading.Condition()
+        self._pending: Optional[tuple] = None
+        self._writer: Optional[threading.Thread] = None
+        self._generation = 0
+        self._written_generation = 0
+
     # -- container protocol -------------------------------------------
 
     def __len__(self) -> int:
@@ -330,16 +346,42 @@ class QueueModel:
         item = self.get(token)
         if item is None:
             return None
-        self._index.pop(item.key, None)
-        bucket = self._by_url.get(item.url)
-        if bucket is not None:
-            self._by_url[item.url] = [i for i in bucket if i is not item]
-            if not self._by_url[item.url]:
-                del self._by_url[item.url]
+        self._unindex(item)
         position = self.index_of(item)
         if position >= 0:
             del self._items[position]
         return item
+
+    def remove_many(self, tokens: Iterable[str]) -> List[QueueItem]:
+        """Remove several items in one O(n) pass.
+
+        Calling remove() per key re-scanned the list for every item, so
+        clearing a few hundred rows was quadratic on the GUI thread.
+        """
+        doomed: Dict[int, QueueItem] = {}
+        for token in tokens:
+            item = self.get(token)
+            if item is not None and id(item) not in doomed:
+                doomed[id(item)] = item
+                # Unindex as we go so a bare-URL token resolves to the next
+                # format of that URL rather than the one just removed.
+                self._unindex(item)
+        if not doomed:
+            return []
+        removed = [i for i in self._items if id(i) in doomed]
+        self._items = [i for i in self._items if id(i) not in doomed]
+        return removed
+
+    def _unindex(self, item: QueueItem) -> None:
+        if self._index.get(item.key) is item:
+            del self._index[item.key]
+        bucket = self._by_url.get(item.url)
+        if bucket is not None:
+            remaining = [i for i in bucket if i is not item]
+            if remaining:
+                self._by_url[item.url] = remaining
+            else:
+                del self._by_url[item.url]
 
     def clear(self) -> None:
         self._items.clear()
@@ -406,10 +448,12 @@ class QueueModel:
             self._items.sort(key=lambda i: i.added_at)
 
     def remove_completed(self) -> List[QueueItem]:
-        removed = [i for i in self._items if i.status is Status.COMPLETED]
-        for item in removed:
-            self.remove(item.url)
-        return removed
+        # By key, never by URL: with two formats of one URL queued, removing
+        # by URL resolved to the *first* format, so clearing a finished MP3
+        # could delete the still-pending 1080p row of the same link instead.
+        return self.remove_many(
+            [i.key for i in self._items if i.status is Status.COMPLETED]
+        )
 
     # -- scheduling ----------------------------------------------------
 
@@ -452,14 +496,59 @@ class QueueModel:
 
     # -- persistence ---------------------------------------------------
 
+    def _serialise(self) -> str:
+        return json.dumps(
+            [i.to_dict() for i in self._items], indent=2, ensure_ascii=False
+        )
+
     def save(self, path: Optional[Path] = None) -> bool:
+        """Synchronous save (shutdown, export). Supersedes any queued async save."""
         target = Path(path) if path else self.path
         if target is None:
             return False
+        payload = self._serialise()
+        if path is not None and target != self.path:
+            return self._write(target, payload, None)
+        with self._writer_cv:
+            self._generation += 1
+            generation = self._generation
+            self._pending = None
+        return self._write(target, payload, generation)
 
-        payload = json.dumps(
-            [i.to_dict() for i in self._items], indent=2, ensure_ascii=False
-        )
+    def save_async(self) -> None:
+        """Snapshot now, write on a background thread (latest snapshot wins)."""
+        if self.path is None:
+            return
+        payload = self._serialise()
+        with self._writer_cv:
+            self._generation += 1
+            self._pending = (self.path, payload, self._generation)
+            if self._writer is None or not self._writer.is_alive():
+                self._writer = threading.Thread(
+                    target=self._writer_loop, name="queue-writer", daemon=True
+                )
+                self._writer.start()
+            self._writer_cv.notify()
+
+    def _writer_loop(self) -> None:
+        while True:
+            with self._writer_cv:
+                job, self._pending = self._pending, None
+                if job is None:
+                    self._writer = None
+                    return
+            self._write(*job)
+
+    def _write(self, target: Path, payload: str, generation: Optional[int]) -> bool:
+        with self._write_lock:
+            if generation is not None:
+                if generation < self._written_generation:
+                    return True  # a newer snapshot is already on disk
+                self._written_generation = generation
+            return self._write_file(target, payload)
+
+    @staticmethod
+    def _write_file(target: Path, payload: str) -> bool:
         tmp_path: Optional[str] = None
         try:
             target.parent.mkdir(parents=True, exist_ok=True)

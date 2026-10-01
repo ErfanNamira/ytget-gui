@@ -9,7 +9,7 @@ maintained copies of the same 200-line stylesheet. Both now come from here.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Callable, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Iterable, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor

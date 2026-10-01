@@ -26,7 +26,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 
 from ytget_gui.settings import AppSettings
-from ytget_gui.sites import is_site_enabled, site_key_for
+from ytget_gui.sites import is_site_enabled
 from ytget_gui.utils.validators import (
     is_playlist_url,
     is_spotify_url,
