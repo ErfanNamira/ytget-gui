@@ -33,7 +33,7 @@ choose otherwise.
 - Each slot can **Use general setting** (the default, which is the current
   behaviour), pick any preset, or use its **own custom template**. Set
   `Artist - Track # Title` for music and `Uploader - Title` for videos once,
-  and never switch templates again. (Suggested on Mike — thank you!)
+  and never switch templates again. (Suggested by Mike — thank you!)
 - New preset **Artist - Track # Title**. It falls back to the uploader when
   there is no artist and to the playlist position when there is no track
   number.
