@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -51,9 +50,18 @@ from ytget_gui.dialogs.spotdl_preferences_tab import SpotDLPreferencesTab
 from ytget_gui import autostart
 from ytget_gui.scheduler import DAY_LABELS, POWER_ACTIONS
 from ytget_gui.sites import ALWAYS_ALLOWED_KEYS, SITES
+from ytget_gui import filename_rules
+from ytget_gui.filename_rules import (
+    ALLOWED_TEMPLATE_FIELDS,  # noqa: F401 - re-exported for compatibility
+    FILENAME_CHOICES,
+    FILENAME_FORMAT_PRESETS,
+    GLOBAL_CHOICE,
+    MEDIA as FILENAME_MEDIA,
+    RULE_CHOICES,
+    SOURCES as FILENAME_SOURCES,
+)
 from ytget_gui.settings import (
     BROWSERS,
-    FILENAME_FORMAT_PRESETS,
     THUMBNAIL_FORMATS,
     VIDEO_CONTAINERS,
     YOUTUBE_PLAYER_CLIENTS,
@@ -82,55 +90,11 @@ SPONSORBLOCK_CATEGORIES: Tuple[Tuple[str, str], ...] = (
     ("Filler", "filler"),
 )
 
-FILENAME_CHOICES: Tuple[Tuple[str, str], ...] = (
-    ("Default", "default"),
-    ("Title only", "title_only"),
-    ("Artist - Title", "artist_title"),
-    ("Title - Artist", "title_artist"),
-    ("Artist - Album - Title", "artist_album_title"),
-    ("Track # - Title", "track_title"),
-    ("Album - Track # - Title", "album_track_title"),
-    ("Playlist # - Title", "playlist_index_title"),
-    ("Uploader - Title", "uploader_title"),
-    ("Channel - Title", "channel_title"),
-    ("Upload Date - Title", "date_title"),
-    ("Video/Track ID - Title", "id_title"),
-    ("Custom template\u2026", "custom"),
-)
-
-assert all(
-    value in ("default", "custom") or value in FILENAME_FORMAT_PRESETS
-    for _label, value in FILENAME_CHOICES
-), "FILENAME_CHOICES references a preset that does not exist"
-
 CHAPTER_CHOICES: Tuple[Tuple[str, str], ...] = (
     ("Ignore chapters", "none"),
     ("Embed chapters in the file", "embed"),
     ("Split into one file per chapter", "split"),
 )
-
-ALLOWED_TEMPLATE_FIELDS = frozenset(
-    {
-        "title", "artist", "creator", "uploader", "uploader_id", "channel",
-        "channel_id", "album", "album_artist", "track", "track_number",
-        "track_id", "disc_number", "genre", "release_year", "release_date",
-        "upload_date", "playlist_title", "playlist_index", "playlist_id", "id",
-        "ext", "duration", "duration_string", "view_count", "like_count",
-        "repost_count", "comment_count", "resolution", "height", "width", "fps",
-        "vcodec", "acodec", "format_id", "extractor", "extractor_key",
-        "language", "season_number", "episode_number", "autonumber", "abr",
-        "vbr", "tbr", "epoch",
-    }
-)
-
-# One %(field[,alt][|default])s / d / f placeholder.
-_PLACEHOLDER_RE = re.compile(
-    r"%\((?P<fields>[a-zA-Z_][a-zA-Z0-9_]*(?:,[a-zA-Z_][a-zA-Z0-9_]*)*)"
-    r"(?:\|[^)%]*)?\)(?P<conv>[-+ #0]*\d*(?:\.\d+)?[sdf])"
-)
-# Illegal outside a placeholder: this is a filename stub, not a path.
-_ILLEGAL_LITERAL_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
-
 
 @dataclass(frozen=True)
 class Binding:
@@ -160,6 +124,8 @@ class PreferencesDialog(QDialog):
         self._sponsor_checks: Dict[str, QCheckBox] = {}
         self._chapter_radios: Dict[str, QRadioButton] = {}
         self._sponsor_grid: Optional[QGridLayout] = None
+        # Per-site filename rules: slot key -> (choice combo, custom field).
+        self._rule_widgets: Dict[str, Tuple[QComboBox, QLineEdit]] = {}
         self._sponsor_columns = 0
         self._snapshot: Dict[str, Any] = {}
         self._dirty = False
@@ -657,11 +623,111 @@ class PreferencesDialog(QDialog):
                     self._row("Naming", self.filename_combo, "How files are named on disk"),
                     self.filename_preview,
                     self.custom_filename_row,
-                    self.filename_help,
                 ),
                 title="File names",
             ),
+            self._build_filename_rules_card(),
+            self.filename_help,
         )
+
+    def _build_filename_rules_card(self) -> QWidget:
+        """One naming choice per source site and recording type.
+
+        Each slot starts on "Use general setting", so nothing changes for a
+        user until a slot is deliberately overridden.
+        """
+        rows: List[QWidget] = []
+        intro = QLabel(
+            "Pick a naming style per site and recording type, e.g. "
+            "<code>Artist - Track # Title</code> for music and "
+            "<code>Uploader - Title</code> for videos. "
+            "“Use general setting” follows the Naming option above."
+        )
+        intro.setObjectName("formDescription")
+        intro.setTextFormat(Qt.RichText)
+        intro.setWordWrap(True)
+        rows.append(intro)
+
+        labels = [label for label, _value in RULE_CHOICES]
+        for source, source_label in FILENAME_SOURCES:
+            for media, media_label in FILENAME_MEDIA:
+                key = f"{source}_{media}"
+                combo = ui.combo(labels, f"{source_label} {media_label.lower()} file names")
+                custom = ui.line_edit(
+                    "%(artist)s - %(title)s",
+                    "A yt-dlp field template with no path or extension",
+                    f"{source_label} {media_label.lower()} custom template",
+                )
+                holder = QWidget()
+                line = QHBoxLayout(holder)
+                line.setContentsMargins(0, 0, 0, 0)
+                line.setSpacing(6)
+                line.addWidget(combo, 2)
+                line.addWidget(custom, 3)
+                self._rule_widgets[key] = (combo, custom)
+                combo.currentIndexChanged.connect(self._on_rule_changed)
+                rows.append(self._row(f"{source_label} · {media_label}", holder))
+
+        self._register(
+            "FILENAME_RULES", rows[0], self._rules_value, self._set_rules_value
+        )
+        return ui.card(self._column(*rows), title="Per-site naming")
+
+    def _rules_value(self) -> Dict[str, Dict[str, str]]:
+        values = [value for _label, value in RULE_CHOICES]
+        data: Dict[str, Dict[str, str]] = {}
+        for key, (combo, custom) in self._rule_widgets.items():
+            index = combo.currentIndex()
+            choice = values[index] if 0 <= index < len(values) else GLOBAL_CHOICE
+            data[key] = {"format": choice, "custom": custom.text().strip()}
+        return filename_rules.normalise_rules(data)
+
+    def _set_rules_value(self, value: Any) -> None:
+        rules = filename_rules.normalise_rules(value)
+        values = [v for _label, v in RULE_CHOICES]
+        for key, (combo, custom) in self._rule_widgets.items():
+            entry = rules.get(key, {})
+            blockers = (QSignalBlocker(combo), QSignalBlocker(custom))
+            try:
+                choice = entry.get("format", GLOBAL_CHOICE)
+                combo.setCurrentIndex(
+                    values.index(choice) if choice in values else 0
+                )
+                custom.setText(entry.get("custom", ""))
+            finally:
+                del blockers
+        self._sync_rule_widgets()
+
+    def _rule_choice(self, combo: QComboBox) -> str:
+        index = combo.currentIndex()
+        if 0 <= index < len(RULE_CHOICES):
+            return RULE_CHOICES[index][1]
+        return GLOBAL_CHOICE
+
+    def _sync_rule_widgets(self) -> None:
+        for combo, custom in self._rule_widgets.values():
+            choice = self._rule_choice(combo)
+            is_custom = choice == "custom"
+            custom.setVisible(is_custom)
+            custom.setEnabled(is_custom)
+            if choice in FILENAME_FORMAT_PRESETS:
+                combo.setToolTip(f"{FILENAME_FORMAT_PRESETS[choice]}.%(ext)s")
+            elif choice == GLOBAL_CHOICE:
+                combo.setToolTip("Follows the general Naming option")
+            else:
+                combo.setToolTip("")
+        self._sync_filename_help()
+
+    def _sync_filename_help(self) -> None:
+        any_custom = self._filename_value() == "custom" or any(
+            self._rule_choice(combo) == "custom"
+            for combo, _custom in self._rule_widgets.values()
+        )
+        self.filename_help.setVisible(any_custom)
+
+    def _on_rule_changed(self, _index: int = 0) -> None:
+        self._sync_rule_widgets()
+        self._validate()
 
     def _build_filename_help(self) -> QWidget:
         box = QWidget()
@@ -735,8 +801,8 @@ class PreferencesDialog(QDialog):
         value = self._filename_value()
         custom = value == "custom"
         self.custom_filename_row.setVisible(custom)
-        self.filename_help.setVisible(custom)
         self.custom_filename.setEnabled(custom)
+        self._sync_filename_help()
 
         if value == "default":
             self.filename_preview.setText(
@@ -1498,6 +1564,11 @@ class PreferencesDialog(QDialog):
         ):
             widget.textChanged.connect(self._validate)
 
+        for combo, custom in self._rule_widgets.values():
+            combo.currentIndexChanged.connect(self._on_changed)
+            custom.textChanged.connect(self._on_changed)
+            custom.textChanged.connect(self._validate)
+
         self.subs_enabled.toggled.connect(self._validate)
         self.filename_combo.currentIndexChanged.connect(self._validate)
 
@@ -1522,38 +1593,7 @@ class PreferencesDialog(QDialog):
     # ==================================================================
 
     def validate_filename_template(self, text: str) -> Tuple[bool, str]:
-        raw = text.strip()
-        if not raw:
-            return False, "Enter a template, e.g. %(title)s"
-        if len(raw) > 180:
-            return False, "Template is too long (180 characters maximum)"
-        if raw != raw.strip(" ."):
-            return False, "Cannot start or end with a space or a period"
-
-        # Mask escaped percent signs so they cannot be mistaken for a
-        # malformed placeholder.
-        working = raw.replace("%%", "\u0000")
-
-        found = False
-        literals: List[str] = []
-        position = 0
-        for match in _PLACEHOLDER_RE.finditer(working):
-            found = True
-            literals.append(working[position : match.start()])
-            for field in match.group("fields").split(","):
-                if field not in ALLOWED_TEMPLATE_FIELDS:
-                    return False, f"Unknown field: %({field})s"
-            position = match.end()
-        literals.append(working[position:])
-
-        remainder = "".join(literals)
-        if "%" in remainder:
-            return False, "Malformed placeholder \u2014 use %(field)s"
-        if _ILLEGAL_LITERAL_RE.search(remainder.replace("\u0000", "%")):
-            return False, "Cannot contain \\ / : * ? \" < > | or control characters"
-        if not found:
-            return False, "Include at least one field, e.g. %(title)s"
-        return True, ""
+        return filename_rules.validate_template(text)
 
     def _validate(self) -> None:
         proxy_ok = is_valid_proxy(self.proxy_input.text())
@@ -1596,6 +1636,16 @@ class PreferencesDialog(QDialog):
             name_ok, name_error = True, ""
         ui.set_error(self.custom_filename, not name_ok, name_error)
 
+        rules_ok = True
+        for combo, custom in self._rule_widgets.values():
+            if self._rule_choice(combo) == "custom":
+                ok, error = self.validate_filename_template(custom.text())
+            else:
+                ok, error = True, ""
+            ui.set_error(custom, not ok, error)
+            rules_ok = rules_ok and ok
+        name_ok = name_ok and rules_ok
+
         from ytget_gui.utils.cli_args import parse_ytdlp_args, split_arguments
         extra_ok, extra_error = True, ""
         try:
@@ -1624,6 +1674,9 @@ class PreferencesDialog(QDialog):
         for binding in self._bindings:
             if (binding.widget.property("state") or "") == "error":
                 return binding.widget
+        for _combo, custom in self._rule_widgets.values():
+            if (custom.property("state") or "") == "error":
+                return custom
         return None
 
     # ==================================================================

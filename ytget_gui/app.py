@@ -150,10 +150,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"YTGet cannot open the desktop interface: {exc}\nInstall the dependencies with: python -m pip install -r requirements.txt (or: python -m pip install ytget-gui)", file=sys.stderr)
         return 2
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-    )
+    # Files first, before Qt starts: a crash during startup must leave a
+    # trace too. Windowed builds have no console at all.
+    from ytget_gui import crashlog
+    from ytget_gui.utils.paths import get_data_path
+
+    log_dir = None
+    try:
+        log_dir = crashlog.install(get_data_path(), verbose=args.verbose)
+    except Exception:  # noqa: BLE001 - logging must never block startup
+        logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+    crashlog.install_qt_message_handler()
+    log.info("%s %s starting; logs in %s", _version.APP_NAME, _version.__version__, log_dir)
 
     # Sleep before Qt starts: at login the network and the tray host
     # are often not ready yet, and no window exists to look frozen.
@@ -165,6 +173,13 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationVersion(_version.__version__)
     app.setOrganizationName(_version.ORG_NAME)
     app.setOrganizationDomain(_version.ORG_DOMAIN)
+
+    # Qt quits the event loop when the last *visible* window closes. With
+    # YTGet minimised to the tray, closing any dialog (Preferences, About,
+    # the watcher's "queue this link?" prompt) counted as the last window and
+    # silently ended the app in the middle of a download. MainWindow.closeEvent
+    # calls app.quit() itself after a real exit, so Qt must not do it for us.
+    app.setQuitOnLastWindowClosed(False)
 
     app.setStyle(QStyleFactory.create("Fusion"))
     app.setPalette(build_dark_palette())
@@ -183,7 +198,6 @@ def main(argv: list[str] | None = None) -> int:
     from ytget_gui.main_window import MainWindow
 
     # A second writer would silently overwrite queue.json and config.json.
-    from ytget_gui.utils.paths import get_data_path
     data_dir = get_data_path()
     data_dir.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(data_dir / "instance.lock"))
@@ -197,6 +211,9 @@ def main(argv: list[str] | None = None) -> int:
         log.exception("Startup failed")
         QMessageBox.critical(None, "YTGet could not start", f"{exc}\nRun python -m ytget_gui --doctor for dependency checks.")
         return 2
+    # Backstop for quits that bypass closeEvent (OS session end, logoff):
+    # persist the queue and stop the worker before Qt tears down threads.
+    app.aboutToQuit.connect(window.on_about_to_quit)
     if args.minimized and getattr(window, "tray", None) is not None \
             and window.tray.available:
         window.hide()

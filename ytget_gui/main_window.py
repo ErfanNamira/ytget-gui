@@ -626,6 +626,7 @@ class MainWindow(QMainWindow):
 
         help_menu = menubar.addMenu("Help")
         help_menu.addAction("Check for Updates\u2026", self._show_updates)
+        help_menu.addAction("Open Logs Folder", self._open_logs)
         help_menu.addAction("About", self._show_about)
 
     # ==================================================================
@@ -836,6 +837,9 @@ class MainWindow(QMainWindow):
             parts.append("next item: " + self._describe_options(self._pending_options))
         if s.FILENAME_FORMAT != "default":
             parts.append(f"naming {s.FILENAME_FORMAT}")
+        from ytget_gui import filename_rules
+        if filename_rules.has_overrides(getattr(s, "FILENAME_RULES", None)):
+            parts.append("per-site naming")
         return parts
 
     # ==================================================================
@@ -1834,6 +1838,18 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             self.log(f"Could not open {directory}: {exc}", AppStyles.ERROR_COLOR, "Error")
 
+    def _open_logs(self) -> None:
+        """ytget.log and crash.log: what to attach to a bug report."""
+        from ytget_gui import crashlog
+
+        directory = crashlog.log_dir() or (self.settings.DATA_DIR / "logs")
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        if not opener.open_path(str(directory)):
+            self.log(f"Logs are in {directory}", AppStyles.INFO_COLOR)
+
     def _open_output(self, key: str) -> None:
         item = self.model.get(key)
         if item is None or not item.output_path:
@@ -2180,9 +2196,10 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.log.connect(self._on_worker_log, Qt.QueuedConnection)
         worker.finished.connect(thread.quit, Qt.QueuedConnection)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_cover_crop_done)
+        # No deleteLater: QThread.finished fires before the native thread has
+        # ended, so a deferred delete could destroy a still-running QThread
+        # (a fatal Qt abort). _on_cover_crop_done waits, then disposes.
+        thread.finished.connect(self._on_cover_crop_done, Qt.QueuedConnection)
 
         self._cover_thread = thread
         self._cover_worker = worker
@@ -2190,8 +2207,10 @@ class MainWindow(QMainWindow):
         return True
 
     def _on_cover_crop_done(self) -> None:
+        thread, worker = self._cover_thread, self._cover_worker
         self._cover_thread = None
         self._cover_worker = None
+        QueueController._dispose(thread, worker)
         self._cover_running = False
         self.action_crop.setEnabled(True)
 
@@ -2508,6 +2527,22 @@ class MainWindow(QMainWindow):
         store.setValue("main/maximized", self._was_maximized)
         store.sync()
 
+    def on_about_to_quit(self) -> None:
+        """Last-chance cleanup when the app quits without closeEvent."""
+        if getattr(self, "_shutdown_done", False):
+            return
+        self._shutdown_done = True
+        try:
+            self.controller.flush_save()
+            if self.watcher is not None:
+                self.watcher.stop(announce=False)
+            self.thumbs.stop(wait=False)
+            if self._title_queue is not None:
+                self._title_queue.stop()
+            self.controller.shutdown(timeout_ms=1500)
+        except Exception:  # noqa: BLE001 - never block exit on cleanup
+            log.debug("about-to-quit cleanup failed", exc_info=True)
+
     def closeEvent(self, event) -> None:
         # Close-to-tray: keep running in the background instead of exiting.
         # Only the tray's Exit action (or a real quit) sets _force_quit.
@@ -2603,6 +2638,7 @@ class MainWindow(QMainWindow):
         if self.tray is not None:
             self.tray.shutdown()
             self.tray = None
+        self._shutdown_done = True
         super().closeEvent(event)
         # Qt only emits lastWindowClosed for a *visible* window, so quitting
         # from the tray while the window was hidden closed nothing the event

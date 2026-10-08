@@ -1,75 +1,55 @@
-# ✨ What's New v2.8.2
+# ✨ What's New v2.8.3
 
 ## Release summary
 
-YTGet 2.8.2 is a performance and reliability release. Long queues stay
-responsive, update checks no longer freeze when GitHub rate-limits you or
-you're offline, Stop and quit react immediately, cached thumbnails load
-without touching the network, and a handful of queue bugs are fixed.
-Everything you already use works exactly as before; your settings and queue
-carry over untouched.
+YTGet 2.8.3 fixes the app closing on its own in the middle of a download and
+adds per-site, per-recording-type file naming. Your settings and queue carry
+over untouched, and every file is still named exactly as before until you
+choose otherwise.
 
 ---
 
 ## ⚡ Highlights
 
-### 🏎️ A queue that stays smooth
+### 🛡️ No more silent closes mid-download
 
-- A failed item moving to the back of a long queue no longer freezes the
-  window. Only the rows that moved are redrawn (~300 ms → ~4 ms for 81 items
-  in testing), and scaled thumbnails are cached.
-- The queue is saved in the background, a few hundred milliseconds after the
-  last change, instead of after every single change on the UI thread.
-- Removing many rows at once, and Clear completed, now take one pass.
+- **Fixed a crash between and during downloads.** When an item finished, the
+  queue released its download thread a moment before that thread had fully
+  stopped. Depending on timing this crashed the whole app with no error
+  message — in the packaged build *and* when run from source. A stress test
+  that crashed 2.8.2 on every run now passes reliably.
+- **Fixed the app quitting while minimised to the tray.** With the window in
+  the tray, closing *any* dialog (Preferences, About, Check for Updates, or the
+  clipboard watcher's "queue this link?" prompt) made the app exit, ending
+  the running download.
+- A bug inside a download no longer leaves the queue stuck on
+  "Downloading": the item fails cleanly and the queue moves on.
 
-### 🛑 Stop and quit mean now
+### 🏷️ File names per site and per recording type
 
-- Stop, Skip and quitting interrupt every helper process, including the
-  YouTube Music "Top songs / Mix / Radio" probe that could hold things up for
-  30 seconds.
-- Removing rows whose details are still loading cancels those lookups right
-  away, instead of after every pending lookup has already run.
-- If something refuses to stop, YTGet now exits cleanly after about ten
-  seconds (queue and settings already saved) instead of hanging.
-- Shutdown, restart and sleep after the queue (or on a schedule) no longer
-  freeze the window and no longer flash a console window on Windows.
+- New **Preferences → Output → Per-site naming** card with one setting each
+  for **YouTube**, **YouTube Music** and **Other sites**, split into
+  **Video** and **Audio**.
+- Each slot can **Use general setting** (the default, which is the current
+  behaviour), pick any preset, or use its **own custom template**. Set
+  `Artist - Track # Title` for music and `Uploader - Title` for videos once,
+  and never switch templates again. (Suggested on GitHub — thank you!)
+- New preset **Artist - Track # Title**. It falls back to the uploader when
+  there is no artist and to the playlist position when there is no track
+  number.
 
-### 🔄 Update Manager that never hangs
+### 🩺 Crash reports you can actually send
 
-- Checks run in parallel and the dialog closes instantly, even offline.
-- GitHub rate limits are detected and bypassed; results are cached for 10
-  minutes, and `GITHUB_TOKEN`/`GH_TOKEN` is used when set.
-- Clear messages for offline, timeout, proxy and SSL problems.
+- YTGet now keeps `ytget.log` and `crash.log` in its data folder (under
+  `logs`). Native crashes, uncaught errors and Qt fatal messages are written
+  there, even in the packaged build that has no console.
+- **Help → Open Logs Folder** takes you straight to them.
 
-### 🎵 Download fixes
+### 🧹 Other fixes
 
-- Playlists with two uploads sharing a title (a single and its album version)
-  no longer fail forever with "Postprocessing: Conversion failed!"; the second
-  one is saved as "Title [id]". This now works with the default settings too,
-  not only with **Show yt-dlp output** turned on.
-- MP3/M4A/FLAC: the first track's file keeps its own title, source URL and
-  cover instead of being silently re-tagged with the second track's.
-- The scary red "Conversion failed!" line for an already-existing file is
-  replaced by a short explanation of what happens to that track.
-- Playlist progress advances smoothly across the whole playlist, and the
-  video bar no longer stalls at 50% between the video and audio streams.
-- Audio normalisation works again instead of breaking every download.
-- Cover cropping covers every track of a playlist, even when the playlist
-  partly failed.
-
-### 🧹 Queue fixes
-
-- **Clear completed** no longer removes the pending 1080p row when the MP3 of
-  the same link is the one that finished.
-- **Play file**, **Show in folder** and **Copy file path** appear in the card
-  menu as soon as a download finishes, not only after a restart.
-- Thumbnails already on disk are shown immediately, without network requests.
-
-### 🍎🐧 Platform fixes
-
-- macOS: Run at login works for install paths containing `&` or `<`.
-- Linux: Show in folder selects files whose names contain spaces, `#` or
-  non-ASCII characters.
+- Cover cropping threads are shut down the same safe way as downloads.
+- Thumbnail lookups clean up after themselves on their own thread.
+- Startup no longer fails in headless tools that create a non-GUI Qt app.
 
 ---
 
@@ -91,7 +71,7 @@ carry over untouched.
       <td>Installer</td>
       <td><strong>205 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-2.8.2-windows-setup.exe">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.3/YTGet-2.8.3-windows-setup.exe">
           <img src="https://img.shields.io/badge/Download-Setup-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows Installer Download">
         </a>
       </td>
@@ -100,7 +80,7 @@ carry over untouched.
       <td>ZIP</td>
       <td><strong>255 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-windows.zip">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.3/YTGet-windows.zip">
           <img src="https://img.shields.io/badge/Download-ZIP-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows ZIP Download">
         </a>
       </td>
@@ -109,7 +89,7 @@ carry over untouched.
       <td>7z</td>
       <td><strong>165</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-windows.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.3/YTGet-windows.7z">
           <img src="https://img.shields.io/badge/Download-7z-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows 7z Download">
         </a>
       </td>
@@ -120,7 +100,7 @@ carry over untouched.
       <td>tar.gz</td>
       <td><strong>255 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-linux.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.3/YTGet-linux.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux tar.gz Download">
         </a>
       </td>
@@ -129,7 +109,7 @@ carry over untouched.
       <td>7z</td>
       <td><strong>190</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-linux.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.3/YTGet-linux.7z">
           <img src="https://img.shields.io/badge/Download-7z-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux 7z Download">
         </a>
       </td>
@@ -140,7 +120,7 @@ carry over untouched.
       <td>tar.gz</td>
       <td><strong>155 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-macOS-arm64.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.3/YTGet-macOS-arm64.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS ARM tar.gz Download">
         </a>
       </td>
@@ -149,7 +129,7 @@ carry over untouched.
       <td>7z</td>
       <td><strong>105</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-macOS-arm64.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.3/YTGet-macOS-arm64.7z">
           <img src="https://img.shields.io/badge/Download-7z-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS ARM 7z Download">
         </a>
       </td>
@@ -160,7 +140,7 @@ carry over untouched.
       <td>tar.gz</td>
       <td><strong>155 MB</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-macOS-x86_64.tar.gz">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.3/YTGet-macOS-x86_64.tar.gz">
           <img src="https://img.shields.io/badge/Download-tar.gz-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS Intel tar.gz Download">
         </a>
       </td>
@@ -169,7 +149,7 @@ carry over untouched.
       <td>7z</td>
       <td><strong>110</strong></td>
       <td>
-        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.2/YTGet-macOS-x86_64.7z">
+        <a href="https://github.com/ErfanNamira/ytget-gui/releases/download/2.8.3/YTGet-macOS-x86_64.7z">
           <img src="https://img.shields.io/badge/Download-7z-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS Intel 7z Download">
         </a>
       </td>

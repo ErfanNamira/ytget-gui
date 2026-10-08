@@ -9,6 +9,11 @@ from typing import List, Optional
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 
+try:  # Explicit, thread-correct destruction of finished workers.
+    import shiboken6 as _shiboken
+except ImportError:  # pragma: no cover - shiboken6 ships with PySide6
+    _shiboken = None
+
 from ytget_gui import formats
 from ytget_gui.queue.model import (
     ITEM_OPTION_KEYS,
@@ -252,12 +257,25 @@ class QueueController(QObject):
         worker.finished.connect(self._on_worker_finished, Qt.QueuedConnection)
         worker.finished.connect(thread.quit, Qt.DirectConnection)
 
-        # deleteLater on the thread's own finished signal: deleting the worker
-        # from any other context can destroy a QObject that still has queued
-        # events pending for it.
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_thread_finished)
+        # Lifetime (the cause of the random "app just closes" reports):
+        #
+        # Both objects are created from Python without a Qt parent, so Python
+        # owns them and destroys the C++ object the moment the last Python
+        # reference goes away. The previous revision dropped `self._worker`
+        # in _on_worker_finished -- while the worker thread could still be
+        # inside the worker's methods -- and dropped `self._thread` from a
+        # slot queued off QThread.finished, which Qt emits *before* the
+        # native thread has actually ended. It also queued deleteLater on
+        # both. Depending on timing (and on when Python's cyclic GC happened
+        # to run, possibly on some other thread), that destroyed a QObject
+        # with live timers from the wrong thread, or a QThread that was still
+        # running ("QThread: Destroyed while thread is still running"), which
+        # Qt treats as fatal: the process aborts with no Python traceback.
+        #
+        # Now the controller holds strong references until the thread has
+        # fully ended, waits for it, and then destroys both explicitly on the
+        # GUI thread. No deleteLater, no reliance on refcount timing.
+        thread.finished.connect(self._on_thread_finished, Qt.QueuedConnection)
 
         self._thread = thread
         self._worker = worker
@@ -347,7 +365,8 @@ class QueueController(QObject):
                 # still deserve their post-processing (cover cropping).
                 self.item_partial.emit(item.key)
 
-        self._worker = None
+        # self._worker is intentionally kept until _on_thread_finished: the
+        # worker thread may still be unwinding inside it right now.
         self.running_changed.emit(False)
         self._emit_progress()
 
@@ -368,8 +387,33 @@ class QueueController(QObject):
         QTimer.singleShot(0, self._pump)
 
     def _on_thread_finished(self) -> None:
+        thread, worker = self._thread, self._worker
         self._thread = None
+        self._worker = None
+        self._dispose(thread, worker)
         QTimer.singleShot(0, self._pump)
+
+    @staticmethod
+    def _dispose(thread: Optional[QThread], worker: Optional[QObject]) -> None:
+        """Destroy a finished worker and its thread on the GUI thread."""
+        if thread is not None:
+            try:
+                # finished is emitted from inside the thread just before it
+                # ends; wait() guarantees the native thread is gone. Bounded
+                # so a wedged thread can never freeze the GUI.
+                if not thread.wait(5000):
+                    log.warning("Download thread did not end; leaking it safely.")
+                    return
+            except RuntimeError:
+                return
+        for obj in (worker, thread):
+            if obj is None or _shiboken is None:
+                continue
+            try:
+                if _shiboken.isValid(obj):
+                    _shiboken.delete(obj)
+            except RuntimeError:
+                pass
 
     def _apply_outcome(self, item: QueueItem, code: int) -> None:
         cancelled = code == CANCELLED_EXIT or self._skip_requested or self._stop_requested

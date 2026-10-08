@@ -62,7 +62,9 @@ def dpi_scale() -> float:
     yielded None -> 1.0 and froze scaling permanently on HiDPI displays.
     """
     app = QGuiApplication.instance()
-    if app is not None:
+    # instance() returns a plain QCoreApplication in headless tools and tests,
+    # which has no screens at all.
+    if isinstance(app, QGuiApplication):
         screen = app.primaryScreen()
         if screen is not None:
             return screen.logicalDotsPerInch() / 96.0

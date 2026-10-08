@@ -23,8 +23,8 @@ from typing import Any, Deque, Dict, List, Optional
 
 from PySide6.QtCore import QTimer, Signal
 
-from ytget_gui import formats
-from ytget_gui.settings import AppSettings, FILENAME_FORMAT_PRESETS
+from ytget_gui import filename_rules, formats
+from ytget_gui.settings import AppSettings
 from ytget_gui.styles import AppStyles
 from ytget_gui.utils.paths import is_usable_file, safe_stem
 from ytget_gui.utils.text import short
@@ -245,6 +245,7 @@ class DownloadWorker(BaseDownloadWorker):
         self._pp_args: Dict[str, List[str]] = {}
         self._flat_album_name = ""
         self._name_template = ""
+        self._name_choice = "default"
         self._name_suffix = str(item.get("name_suffix") or "").strip()
         self._attempt = 0
         self._max_attempts = max(0, int(getattr(settings, "AUTO_RETRY_COUNT", 3) or 0))
@@ -252,7 +253,7 @@ class DownloadWorker(BaseDownloadWorker):
 
         self._retry_timer = QTimer(self)
         self._retry_timer.setSingleShot(True)
-        self._retry_timer.timeout.connect(self._launch)
+        self._retry_timer.timeout.connect(self._launch_guarded)
         self._cancel_poll = QTimer(self)
         self._cancel_poll.setInterval(100)
         self._cancel_poll.timeout.connect(self._check_cancelled_retry)
@@ -314,8 +315,8 @@ class DownloadWorker(BaseDownloadWorker):
             self._probes.clear()
 
     def _start(self) -> None:
-        self._raw_output.connect(self._on_output)
-        self._process_exited.connect(self._on_exit)
+        self._raw_output.connect(self._on_output_guarded)
+        self._process_exited.connect(self._on_exit_guarded)
 
         self._refresh_cookies_if_needed()
 
@@ -379,6 +380,13 @@ class DownloadWorker(BaseDownloadWorker):
             name="ytdlp-reader",
         )
         self._reader.start()
+
+    def _launch_guarded(self) -> None:
+        self._guarded(self._launch)
+
+    def _stop_timers(self) -> None:
+        self._retry_timer.stop()
+        self._cancel_poll.stop()
 
     def _check_cancelled_retry(self) -> None:
         if self.cancelled and self._retry_timer.isActive():
@@ -1439,7 +1447,7 @@ class DownloadWorker(BaseDownloadWorker):
             # template field, so escape it for -o while keeping the real name
             # for the on-disk path and the album tag.
             template_base = Path(s.DOWNLOADS_DIR) / album.replace("%", "%%")
-            stub = self._resolve_name_template("%(album)s - %(title)s")
+            stub = self._resolve_name_template("%(album)s - %(title)s", is_audio=is_audio)
             filename = f"%(autonumber)03d - {stub}.%(ext)s"
             self._flat_playlist_dir = base
             self._flat_album_name = album
@@ -1458,7 +1466,7 @@ class DownloadWorker(BaseDownloadWorker):
             else:
                 default_stub = "%(title)s"
 
-            stub = self._resolve_name_template(default_stub)
+            stub = self._resolve_name_template(default_stub, is_audio=is_audio)
             self._name_template = stub
 
             # Only set when another queued item for this URL already
@@ -1467,7 +1475,7 @@ class DownloadWorker(BaseDownloadWorker):
             tag = f" {self._name_suffix}" if self._name_suffix else ""
             if (
                 self._should_force_title(is_playlist)
-                and getattr(s, "FILENAME_FORMAT", "default") == "default"
+                and self._name_choice == "default"
             ):
                 # No cookies means yt-dlp may resolve a degraded title; prefer
                 # the one already shown in the queue so the file matches the UI.
@@ -1496,15 +1504,18 @@ class DownloadWorker(BaseDownloadWorker):
         )
         return not has_cookies and bool(self.item.get("title"))
 
-    def _resolve_name_template(self, default_template: str) -> str:
-        s = self.settings
-        fmt = getattr(s, "FILENAME_FORMAT", "default") or "default"
-        if fmt == "default":
-            return default_template
-        if fmt == "custom":
-            custom = (getattr(s, "CUSTOM_FILENAME_TEMPLATE", "") or "").strip()
-            return custom or default_template
-        return FILENAME_FORMAT_PRESETS.get(fmt, default_template)
+    def _resolve_name_template(self, default_template: str, *, is_audio: bool = False) -> str:
+        """The filename stub for this download.
+
+        Resolved per source site and per recording type (see filename_rules),
+        falling back to the general Filename format for every slot left on
+        "Use general setting".
+        """
+        stub, choice = filename_rules.resolve_template(
+            self.settings, self.url, is_audio, default_template
+        )
+        self._name_choice = choice
+        return stub or default_template
 
     def _audio_flags(
         self, format_code: str, *, is_playlist: bool, is_flat: bool
@@ -1551,7 +1562,7 @@ class DownloadWorker(BaseDownloadWorker):
         # only got derived when the YouTube Music toggle was on, so the
         # "Track # - Title" presets silently produced "Unknown" for everyone
         # else. Derive it whenever the resolved template actually needs it.
-        needs_track_number = "%(track_number)" in getattr(self, "_name_template", "")
+        needs_track_number = filename_rules.uses_track_number(self._name_template)
         if is_playlist and not is_flat and (
             needs_track_number
             or (getattr(s, "YT_MUSIC_METADATA", False))

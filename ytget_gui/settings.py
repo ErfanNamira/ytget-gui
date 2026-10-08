@@ -59,19 +59,14 @@ YOUTUBE_PLAYER_CLIENTS: Dict[str, str] = {
     "android": "android",
 }
 
-FILENAME_FORMAT_PRESETS: Dict[str, str] = {
-    "title_only": "%(title)s",
-    "artist_title": "%(artist)s - %(title)s",
-    "title_artist": "%(title)s - %(artist)s",
-    "artist_album_title": "%(artist)s - %(album)s - %(title)s",
-    "track_title": "%(track_number)s - %(title)s",
-    "album_track_title": "%(album)s - %(track_number)s - %(title)s",
-    "playlist_index_title": "%(playlist_index)s - %(title)s",
-    "uploader_title": "%(uploader)s - %(title)s",
-    "channel_title": "%(channel)s - %(title)s",
-    "date_title": "%(upload_date)s - %(title)s",
-    "id_title": "%(id)s - %(title)s",
-}
+# Presets live in filename_rules (Qt-free and shared with the worker); kept
+# importable from here for existing callers.
+from ytget_gui.filename_rules import (  # noqa: E402
+    FILENAME_FORMAT_PRESETS,
+    default_rules as _default_filename_rules,
+    normalise_global_choice as _normalise_filename_choice,
+    normalise_rules as _normalise_filename_rules,
+)
 
 CHAPTERS_MODES = ("none", "embed", "split")
 VIDEO_CONTAINERS = (".mkv", ".mp4", ".webm")
@@ -123,6 +118,7 @@ _PLAIN_KEYS: tuple[str, ...] = (
     "ORGANIZE_BY_UPLOADER",
     "FILENAME_FORMAT",
     "CUSTOM_FILENAME_TEMPLATE",
+    "FILENAME_RULES",
     "DATEAFTER",
     "COOKIES_FROM_BROWSER",
     "COOKIES_AUTO_REFRESH",
@@ -199,11 +195,8 @@ _VALIDATORS: Dict[str, Callable[[Any], Any]] = {
     "YOUTUBE_PLAYER_CLIENT": (
         lambda v: v if v in YOUTUBE_PLAYER_CLIENTS.values() else "auto"
     ),
-    "FILENAME_FORMAT": (
-        lambda v: v
-        if v in ("default", "custom") or v in FILENAME_FORMAT_PRESETS
-        else "default"
-    ),
+    "FILENAME_FORMAT": _normalise_filename_choice,
+    "FILENAME_RULES": _normalise_filename_rules,
     "COOKIES_FROM_BROWSER": lambda v: v if v in BROWSERS else "",
     "RETRIES": lambda v: max(1, min(100, int(v))),
     "AUTO_RETRY_COUNT": lambda v: max(0, min(20, int(v))),
@@ -310,6 +303,11 @@ class AppSettings:
     ORGANIZE_BY_UPLOADER: bool = False
     FILENAME_FORMAT: str = "default"
     CUSTOM_FILENAME_TEMPLATE: str = ""
+    # Per source (YouTube / YouTube Music / other) and per recording type
+    # (video / audio). Every slot defaults to "global": use FILENAME_FORMAT.
+    FILENAME_RULES: Dict[str, Dict[str, str]] = field(
+        default_factory=_default_filename_rules
+    )
     VIDEO_FORMAT: str = ".mkv"
 
     # --- Post-processing ---
@@ -730,6 +728,8 @@ def _coerce(value: Any, current: Any) -> Any:
             return current
     if isinstance(current, list):
         return list(value) if isinstance(value, list) else ([value] if value else [])
+    if isinstance(current, dict):
+        return dict(value) if isinstance(value, dict) else dict(current)
     if isinstance(current, str):
         return "" if value is None else str(value)
     return value

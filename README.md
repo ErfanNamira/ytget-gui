@@ -249,7 +249,15 @@ sudo apt update && sudo apt install ffmpeg
 
 ## 📁 Output
 
-- ✅ Clean filenames: `%(title)s.ext`  
+- ✅ Clean filenames: `%(title)s.ext` by default  
+- 🏷️ **Per-site naming** (Preferences → Output): choose a separate filename
+  style for **YouTube**, **YouTube Music** and **Other sites**, each split
+  into **Video** and **Audio** — e.g. `Artist - Track # Title` for music and
+  `Uploader - Title` for videos. Every slot starts on *Use general setting*,
+  so nothing changes until you pick something.  
+- 🩺 Logs and crash reports are kept in the data folder under `logs`
+  (`ytget.log`, `crash.log`); open them with **Help → Open Logs Folder** and
+  attach them to bug reports.  
 - 🎵 Audio downloads include:
   - Embedded album art  
   - Metadata tags (artist, title, etc.)  

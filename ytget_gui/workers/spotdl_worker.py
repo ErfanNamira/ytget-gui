@@ -85,8 +85,8 @@ class SpotDLWorker(BaseDownloadWorker):
     # ------------------------------------------------------------------
 
     def _start(self) -> None:
-        self._raw_output.connect(self._on_output)
-        self._process_exited.connect(self._on_exit)
+        self._raw_output.connect(self._on_output_guarded)
+        self._process_exited.connect(self._on_exit_guarded)
 
         binary = _find_spotdl(self.settings)
         if binary is None:

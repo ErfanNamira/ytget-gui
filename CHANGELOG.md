@@ -1,3 +1,76 @@
+### v 2.8.3
+
+A reliability and naming release. The app no longer closes on its own in the
+middle of a download, filename templates can be set per source site and per
+recording type, and crashes now leave a log behind. All existing settings and
+queue files carry over unchanged.
+
+#### Crash fixes
+
+- **Silent crash when a download finished (often seen "mid-queue").**
+  `QueueController` created each worker and `QThread` without a Qt parent, so
+  Python owned them, then dropped its last reference to the worker in
+  `_on_worker_finished` (while the worker thread could still be unwinding)
+  and to the thread in a slot queued off `QThread.finished`, which Qt emits
+  *before* the native thread ends. Queued `deleteLater` calls raced both.
+  The result was a segfault or a fatal "QThread: Destroyed while thread is
+  still running" abort with no Python traceback. A 300-item stress test
+  crashed 2.8.2 on every run (exit 139). The controller now keeps strong
+  references until the thread has finished, `wait()`s for it, and destroys
+  worker and thread explicitly on the GUI thread (`QueueController._dispose`).
+- **App quit when a dialog closed while minimised to the tray.** Qt's
+  `quitOnLastWindowClosed` treated any closing dialog as the last window.
+  It is now disabled; `MainWindow.closeEvent` already quits explicitly, and a
+  new `aboutToQuit` backstop saves the queue and stops workers for quits that
+  bypass it (logoff, session end).
+- Cover-crop thread: same lifetime fix (no `deleteLater` racing a running
+  `QThread`).
+- `ThumbFetcher` QObjects are destroyed on the pool thread that created them
+  instead of whenever (and wherever) the garbage collector ran.
+- Worker slots (`_on_output`, `_on_exit`, retry relaunch) are guarded: an
+  unexpected exception fails the item, kills its process and keeps the queue
+  moving instead of leaving it stuck on "Downloading". Worker timers are
+  stopped on the worker's own thread before `finished` is emitted.
+- `styles.dpi_scale()` no longer raises when the running app is a
+  `QCoreApplication` (headless tools/tests).
+
+#### Per-site, per-type file naming
+
+- New `ytget_gui/filename_rules.py` (Qt-free): presets, choices, template
+  validation and a rule table for `youtube`, `ytmusic` and `other` ×
+  `video`, `audio`.
+- New setting `FILENAME_RULES`; every slot defaults to `global` (use the
+  general Filename format), so behaviour is unchanged until a slot is set.
+  Stale or hand-edited values are sanitised back to `global`.
+- Preferences → Output → **Per-site naming**: a choice per slot plus its own
+  custom template field, validated like the general one.
+- New preset **Artist - Track # Title**
+  (`%(artist,uploader)s - %(track_number,playlist_index)s %(title)s`),
+  matching the GitHub request for music naming.
+- The worker resolves the template from the URL's site and whether the item
+  is audio. The "use the queue title when there are no cookies" shortcut now
+  follows the *effective* choice, so an overridden slot is never replaced.
+- Track-number derivation detects `track_number` inside alternatives such as
+  `%(track_number,playlist_index)s`.
+
+#### Diagnostics
+
+- New `ytget_gui/crashlog.py`: rotating `logs/ytget.log`, `logs/crash.log`
+  with `faulthandler` (all threads), `sys.excepthook`, `threading.excepthook`
+  and a Qt message handler. Works in windowed builds where `sys.stderr` is
+  `None`.
+- **Help → Open Logs Folder**.
+
+#### Code quality
+
+- Template validation moved out of the dialog into `filename_rules`; the
+  dialog and settings import it from there (old names still importable).
+- New tests: `tests/test_v283_filename_rules.py`,
+  `tests/test_v283_lifecycle.py` (includes the crash stress test, run in a
+  subprocess so a segfault is reported as a failure).
+- Version bumped to 2.8.3 in `_version.py`, `pyproject.toml`, `Info.plist`,
+  `version_info.txt`, the installer script, README files and the website.
+
 ### v 2.8.2
 
 A performance and reliability release. Long queues stay responsive after a

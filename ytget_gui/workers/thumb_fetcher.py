@@ -545,6 +545,16 @@ def is_usable_file_safe(path) -> bool:
     return is_usable_file(path)
 
 
+def _dispose_qobject(obj) -> None:
+    try:
+        import shiboken6
+
+        if shiboken6.isValid(obj):
+            shiboken6.delete(obj)
+    except Exception:  # noqa: BLE001 - disposal is best-effort
+        pass
+
+
 class ThumbManager(QObject):
     """Runs thumbnail fetches on a bounded pool so the GUI never blocks."""
 
@@ -705,3 +715,8 @@ class ThumbManager(QObject):
                 self._pending.discard(url)
                 self._active.pop(url, None)
                 self._futures.pop(url, None)
+            # The fetcher is a QObject created on this pool thread. Destroy
+            # it here, on its own thread, instead of leaving it to whichever
+            # thread Python's garbage collector happens to run on: freeing a
+            # QObject from a foreign thread is undefined behaviour in Qt.
+            _dispose_qobject(fetcher)

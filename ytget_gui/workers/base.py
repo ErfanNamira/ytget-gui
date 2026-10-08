@@ -126,8 +126,61 @@ class BaseDownloadWorker(QObject):
                 return
             self._finished_emitted = True
         self._stop_log_timer()
+        try:
+            self._stop_timers()
+        except (RuntimeError, TypeError):
+            pass
         self.flush_now()
         self.finished.emit(code)
+
+    @property
+    def is_finished(self) -> bool:
+        return self._finished_emitted
+
+    def _stop_timers(self) -> None:
+        """Stop subclass timers on the worker's own thread before finishing.
+
+        A QTimer that is still active when its owner is destroyed has to be
+        unregistered from the thread it lives in; stopping it here, on that
+        thread, keeps the later GUI-thread disposal trivially safe.
+        """
+
+    # ------------------------------------------------------------------
+    # Slot guards
+    # ------------------------------------------------------------------
+
+    def _guarded(self, fn, *args) -> None:
+        """Run a worker-thread slot so a bug can never wedge the queue.
+
+        An exception escaping a queued slot is only printed by PySide; the
+        worker then never emits `finished`, the queue sits on "Downloading"
+        forever and, in a windowed build, nobody ever sees the traceback.
+        Fail the item cleanly instead and keep the queue moving.
+        """
+        if self._finished_emitted:
+            return
+        try:
+            fn(*args)
+        except Exception as exc:  # noqa: BLE001 - last line of defence
+            log.exception("Unexpected error in %s", getattr(fn, "__name__", fn))
+            try:
+                self._do_cancel()
+            except Exception:  # noqa: BLE001
+                pass
+            self.error.emit(f"Unexpected error: {exc}")
+            self.emit_finished(CANCELLED_EXIT if self.cancelled else 2)
+
+    def _on_output_guarded(self, data: bytes) -> None:
+        self._guarded(self._on_output, data)
+
+    def _on_exit_guarded(self, code: int) -> None:
+        self._guarded(self._on_exit, code)
+
+    def _on_output(self, data: bytes) -> None:  # pragma: no cover - overridden
+        raise NotImplementedError
+
+    def _on_exit(self, code: int) -> None:  # pragma: no cover - overridden
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Logging
