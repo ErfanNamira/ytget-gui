@@ -1,324 +1,345 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>YTGet - a fast, friendly YouTube &amp; music downloader for Windows</title>
-<meta name="description" content="YTGet is a free, open-source desktop downloader for YouTube, YouTube Music, Spotify metadata and 70+ other sites. Queue videos and playlists, grab MP3 with album art, and keep everything organised." />
-<meta name="theme-color" content="#0b0e14" />
-<link rel="icon" href="favicon.ico" sizes="any" />
-<link rel="canonical" href="https://erfannamira.github.io/ytget-gui/" />
-<meta property="og:type" content="website" />
-<meta property="og:title" content="YTGet - a fast, friendly downloader for Windows" />
-<meta property="og:description" content="Queue videos, albums and playlists. MP3 with album art. 76 supported sites. Free and open source." />
-<meta property="og:image" content="https://erfannamira.github.io/ytget-gui/assets/img/app-main.jpg" />
-<meta property="og:url" content="https://erfannamira.github.io/ytget-gui/" />
-<meta name="twitter:card" content="summary_large_image" />
-<link rel="stylesheet" href="assets/css/style.css" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YTGet — Fast, Free & Open-Source yt-dlp Desktop Downloader</title>
+<meta name="description" content="YTGet is a free, open-source yt-dlp GUI for Windows, macOS and Linux. Download video up to 8K, music with metadata, full playlists and more.">
+<link rel="icon" href="favicon.ico">
+<meta property="og:title" content="YTGet — Download anything. Beautifully simple.">
+<meta property="og:image" content="assets/img/app-main.jpg">
+<style>
+:root{--bg:#07070f;--bg2:#0d0d1a;--card:rgba(255,255,255,.035);--line:rgba(255,255,255,.09);--txt:#f4f4fb;--mut:rgba(235,235,255,.62);--cy:#22d3ee;--vi:#8b5cf6;--pk:#ec4899;--grad:linear-gradient(100deg,#22d3ee 0%,#8b5cf6 55%,#ec4899 100%)}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--txt);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+img{max-width:100%;height:auto;display:block}
+.wrap{max-width:1160px;margin:0 auto;padding:0 24px}
+.grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+:focus-visible{outline:2px solid var(--cy);outline-offset:3px;border-radius:6px}
+
+/* nav */
+nav{position:fixed;inset:0 0 auto;z-index:50;transition:.3s}
+nav.scrolled{background:rgba(7,7,15,.72);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;height:68px;gap:32px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:.02em;font-size:18px}
+.brand img{width:30px;height:30px;border-radius:8px}
+.links{display:flex;gap:28px;margin-left:auto;font-size:15px;color:var(--mut)}
+.links a:hover{color:var(--txt)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:46px;padding:0 22px;border-radius:12px;font-weight:600;font-size:15px;transition:.2s;border:1px solid var(--line);white-space:nowrap}
+.btn svg{width:18px;height:18px}
+.btn-p{background:var(--grad);border:0;color:#fff;box-shadow:0 8px 30px -8px rgba(139,92,246,.7)}
+.btn-p:hover{transform:translateY(-2px);box-shadow:0 14px 40px -8px rgba(139,92,246,.85)}
+.btn-g{background:rgba(255,255,255,.04)}
+.btn-g:hover{background:rgba(255,255,255,.09)}
+.btn-sm{height:38px;padding:0 16px;font-size:14px;border-radius:10px}
+.menu{display:none;background:none;border:0;color:var(--txt);width:44px;height:44px;margin-left:auto}
+
+/* hero */
+.hero{position:relative;padding:150px 0 40px;text-align:center}
+.hero:before{content:"";position:absolute;inset:-200px 0 auto;height:900px;background:radial-gradient(600px 380px at 30% 30%,rgba(34,211,238,.18),transparent 70%),radial-gradient(640px 420px at 72% 26%,rgba(139,92,246,.25),transparent 70%),radial-gradient(500px 300px at 50% 70%,rgba(236,72,153,.10),transparent 70%);pointer-events:none;z-index:-1}
+.hero:after{content:"";position:absolute;inset:0;background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:64px 64px;mask-image:radial-gradient(ellipse 60% 50% at 50% 20%,#000 20%,transparent 75%);-webkit-mask-image:radial-gradient(ellipse 60% 50% at 50% 20%,#000 20%,transparent 75%);opacity:.35;z-index:-1;pointer-events:none}
+.pill{display:inline-flex;align-items:center;gap:10px;padding:6px 14px 6px 6px;border:1px solid var(--line);border-radius:99px;background:rgba(255,255,255,.04);font-size:14px;color:var(--mut);margin-bottom:28px}
+.pill b{background:var(--grad);color:#fff;border-radius:99px;padding:2px 10px;font-size:12px}
+h1{font-size:clamp(44px,7.4vw,92px);line-height:1.02;letter-spacing:-.035em;font-weight:800}
+.lead{max-width:640px;margin:24px auto 0;font-size:clamp(17px,2vw,20px);color:var(--mut)}
+.ctas{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:36px}
+.os{margin-top:18px;font-size:14px;color:var(--mut);display:flex;gap:18px;justify-content:center;flex-wrap:wrap}
+.os span{display:inline-flex;gap:6px;align-items:center}
+.shot{position:relative;margin:64px auto 0;max-width:1080px;perspective:1600px}
+.shot .frame{border-radius:16px;padding:8px;background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(255,255,255,.03));box-shadow:0 40px 120px -30px rgba(139,92,246,.55),0 0 0 1px var(--line);transform:rotateX(14deg);transition:transform 1s cubic-bezier(.2,.8,.2,1)}
+.shot.in .frame{transform:rotateX(0)}
+.shot img{border-radius:10px}
+.shot:after{content:"";position:absolute;left:10%;right:10%;bottom:-40px;height:120px;background:var(--grad);filter:blur(90px);opacity:.35;z-index:-1}
+
+/* marquee */
+.sites{padding:72px 0 24px;text-align:center}
+.sites p{font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:var(--mut);margin-bottom:26px}
+.marquee{overflow:hidden;mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent);-webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
+.track{display:flex;gap:14px;width:max-content;animation:scroll 40s linear infinite}
+.marquee.rev .track{animation-direction:reverse;margin-top:14px}
+.chip{display:flex;align-items:center;gap:10px;padding:12px 20px;border:1px solid var(--line);border-radius:12px;background:var(--card);font-weight:700;letter-spacing:.06em;font-size:14px;color:rgba(255,255,255,.8)}
+.chip i{width:10px;height:10px;border-radius:50%;background:var(--c,#888);box-shadow:0 0 12px var(--c,#888)}
+.chip.more{background:var(--grad);border:0;color:#fff}
+@keyframes scroll{to{transform:translateX(-50%)}}
+
+/* sections */
+section{padding:110px 0}
+.head{text-align:center;max-width:720px;margin:0 auto 56px}
+.eyebrow{display:inline-block;font-size:13px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--cy);margin-bottom:14px}
+h2{font-size:clamp(34px,4.6vw,56px);line-height:1.08;letter-spacing:-.03em;font-weight:800}
+.head p{margin-top:16px;color:var(--mut);font-size:18px}
+
+/* bento */
+.bento{display:grid;grid-template-columns:repeat(6,1fr);gap:16px}
+.card{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:20px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));padding:28px;transition:border-color .3s,transform .3s}
+.card:hover{border-color:rgba(139,92,246,.5);transform:translateY(-3px)}
+.card:before{content:"";position:absolute;inset:0;background:radial-gradient(400px 200px at var(--mx,50%) var(--my,0%),rgba(139,92,246,.14),transparent 70%);opacity:0;transition:.3s;pointer-events:none}
+.card:hover:before{opacity:1}
+.c2{grid-column:span 2}.c3{grid-column:span 3}.c4{grid-column:span 4}
+.ico{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;background:rgba(139,92,246,.14);border:1px solid rgba(139,92,246,.3);margin-bottom:18px;font-size:22px}
+.card h3{font-size:20px;letter-spacing:-.01em;margin-bottom:8px}
+.card p{color:var(--mut);font-size:15px}
+.big{font-size:64px;font-weight:800;letter-spacing:-.04em;line-height:1}
+.qual{display:flex;gap:8px;flex-wrap:wrap;margin-top:22px}
+.qual span{padding:6px 12px;border-radius:8px;border:1px solid var(--line);font-size:13px;font-weight:600;color:var(--mut)}
+.qual span.on{background:var(--grad);color:#fff;border-color:transparent}
+.card .peek{margin:24px -28px -28px;border-top:1px solid var(--line)}
+.card .peek img{opacity:.9;object-fit:cover;object-position:top left;height:220px;width:100%}
+.wave{display:flex;align-items:end;gap:5px;height:120px;margin-top:40px}
+.wave i{flex:1;border-radius:3px;background:var(--grad);animation:bar 1.4s ease-in-out infinite;transform-origin:bottom}
+@keyframes bar{50%{transform:scaleY(.3)}}
+
+/* showcase tabs */
+.tabs{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:28px}
+.tab{height:44px;padding:0 18px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--mut);font:600 15px inherit;font-family:inherit;cursor:pointer}
+.tab.on{color:#fff;background:rgba(139,92,246,.18);border-color:rgba(139,92,246,.55)}
+.stage{max-width:1000px;margin:0 auto;border-radius:16px;padding:8px;background:linear-gradient(180deg,rgba(255,255,255,.12),rgba(255,255,255,.02));box-shadow:0 30px 90px -30px rgba(34,211,238,.35)}
+.stage img{border-radius:10px;transition:opacity .35s}
+.caption{text-align:center;color:var(--mut);margin-top:18px}
+
+/* automation */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center}
+.list{display:grid;gap:14px;margin-top:32px}
+.row{display:flex;gap:16px;padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:var(--card)}
+.row .ico{margin:0;flex:none;width:42px;height:42px;font-size:19px}
+.row h4{font-size:17px;margin-bottom:2px}
+.row p{color:var(--mut);font-size:15px}
+.term{border:1px solid var(--line);border-radius:16px;background:#0b0b16;overflow:hidden;box-shadow:0 30px 80px -30px rgba(139,92,246,.45)}
+.term .bar{display:flex;gap:7px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.term .bar i{width:11px;height:11px;border-radius:50%;background:#ff5f57}.term .bar i:nth-child(2){background:#febc2e}.term .bar i:nth-child(3){background:#28c840}
+.term pre{padding:22px;font:14px/1.9 Menlo,Consolas,monospace;color:#9fb0d8;white-space:pre-wrap}
+.term .k{color:var(--cy)}.term .v{color:#c4b5fd}.term .ok{color:#4ade80}
+
+/* install */
+.os-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.os-card{border:1px solid var(--line);border-radius:20px;padding:28px;background:var(--card);display:flex;flex-direction:column}
+.os-card h3{font-size:22px;display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.os-card h3 svg{width:24px;height:24px}
+.os-card p{color:var(--mut);font-size:15px;margin-bottom:20px}
+.os-card .btns{display:grid;gap:10px;margin-top:auto}
+code{font:13px Menlo,Consolas,monospace;background:rgba(255,255,255,.06);padding:2px 6px;border-radius:5px}
+
+/* stats */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:56px}
+.stat{text-align:center;padding:26px;border:1px solid var(--line);border-radius:16px;background:var(--card)}
+.stat b{display:block;font-size:38px;letter-spacing:-.03em}
+.stat span{color:var(--mut);font-size:14px}
+
+/* faq */
+.faq{max-width:780px;margin:0 auto;display:grid;gap:12px}
+details{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:0 22px}
+summary{cursor:pointer;list-style:none;padding:20px 0;font-weight:600;font-size:17px;display:flex;justify-content:space-between;gap:16px}
+summary::-webkit-details-marker{display:none}
+summary:after{content:"+";font-size:22px;line-height:1;color:var(--cy);transition:.2s}
+details[open] summary:after{transform:rotate(45deg)}
+details p{color:var(--mut);padding:0 0 20px}
+
+/* cta */
+.cta{position:relative;text-align:center;border:1px solid var(--line);border-radius:28px;padding:80px 24px;overflow:hidden;background:radial-gradient(500px 260px at 50% 0%,rgba(139,92,246,.35),transparent 70%),var(--bg2)}
+.cta img{width:72px;height:72px;margin:0 auto 24px;border-radius:18px;box-shadow:0 10px 40px rgba(34,211,238,.4)}
+.cta p{color:var(--mut);margin:16px auto 32px;max-width:520px;font-size:18px}
+
+footer{border-top:1px solid var(--line);padding:40px 0;color:var(--mut);font-size:14px}
+footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center}
+footer .fl{display:flex;gap:22px}
+footer a:hover{color:var(--txt)}
+
+.reveal{opacity:0;transform:translateY(24px);transition:opacity .8s,transform .8s}
+.reveal.in{opacity:1;transform:none}
+
+@media (max-width:920px){
+ .bento{grid-template-columns:1fr 1fr}.c2,.c3,.c4{grid-column:span 2}
+ .split{grid-template-columns:1fr}.os-grid{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}
+ .links,.nav-cta{display:none}.menu{display:block}
+ nav.open .links{display:flex;position:absolute;top:68px;left:0;right:0;flex-direction:column;gap:0;background:rgba(7,7,15,.97);border-bottom:1px solid var(--line);padding:8px 24px}
+ nav.open .links a{padding:14px 0;border-bottom:1px solid var(--line)}
+ section{padding:80px 0}
+}
+@media (max-width:560px){.bento{grid-template-columns:1fr}.c2,.c3,.c4{grid-column:span 1}.hero{padding-top:120px}.btn{width:100%}.ctas{flex-direction:column}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.reveal{opacity:1;transform:none}.shot .frame{transform:none}}
+</style>
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
 
-<header class="nav">
-  <div class="wrap nav-inner">
-    <a class="brand" href="./">
-      <img src="assets/img/logo.png" alt="" width="28" height="28" />
-      YTGet
-    </a>
-    <button class="nav-toggle" type="button" aria-expanded="false" aria-label="Menu">&#9776;</button>
-    <nav class="nav-links">
-      <a href="#features">Features</a>
-      <a href="#download">Download</a>
-      <a href="#install">Install</a>
-      <a href="#screenshots">Screenshots</a>
-      <a href="#sites">Sites</a>
-      <a href="#faq">FAQ</a>
-      <a href="fa.html" lang="fa">&#1601;&#1575;&#1585;&#1587;&#1740;</a>
-      <a href="https://github.com/ErfanNamira/ytget-gui">GitHub</a>
-    </nav>
+<nav id="nav">
+ <div class="wrap">
+  <a class="brand" href="#"><img src="assets/img/logo.png" alt="">YTGet</a>
+  <div class="links">
+   <a href="#features">Features</a><a href="#showcase">Showcase</a><a href="#automation">Automation</a><a href="#download">Download</a><a href="#faq">FAQ</a><a href="fa.html" lang="fa">فارسی</a>
   </div>
+  <a class="btn btn-g btn-sm nav-cta" href="https://github.com/ErfanNamira/ytget-gui" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.1 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .5z"/></svg>Star on GitHub</a>
+  <button class="menu" aria-label="Open menu" onclick="nav.classList.toggle('open')"><svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" fill="none" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+ </div>
+</nav>
+
+<header class="hero">
+ <div class="wrap">
+  <a class="pill" href="https://github.com/ErfanNamira/ytget-gui/releases/latest" target="_blank" rel="noopener"><b>v2.8.3</b> Per-site naming rules &amp; rock-solid queue →</a>
+  <h1>Download Anything.<br><span class="grad">Beautifully Simple.</span></h1>
+  <p class="lead">The free, open-source yt-dlp desktop app. Grab videos up to 8K, music with perfect metadata and full playlists — from YouTube and hundreds of other sites.</p>
+  <div class="ctas">
+   <a class="btn btn-p" href="#download"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>Download for Free</a>
+   <a class="btn btn-g" href="https://github.com/ErfanNamira/ytget-gui" target="_blank" rel="noopener">View Source</a>
+  </div>
+  <div class="os"><span>🪟 Windows</span><span>🍎 macOS</span><span>🐧 Linux</span><span>· No Python required</span></div>
+  <div class="shot" id="shot"><div class="frame"><img src="assets/img/app-main.jpg" alt="YTGet main window with download queue" width="1600" height="900"></div></div>
+ </div>
 </header>
 
-<main id="main">
-
-<section class="hero" style="border-top:0">
-  <div class="wrap">
-    <span class="pill">Free &amp; open source &middot; Windows &middot; version <strong data-version>2.8.3</strong></span>
-    <h1>Download <span>videos and music</span><br />without the hassle.</h1>
-    <p class="lede">
-      YTGet is a desktop app for YouTube, YouTube Music and 70+ other sites.
-      Paste a link, pick a quality, and let the queue do the rest - complete with
-      MP3 tags, album art, subtitles and thumbnails.
-    </p>
-    <div class="cta">
-      <a class="btn btn-primary" data-dl-installer href="https://github.com/ErfanNamira/ytget-gui/releases/latest">
-        &#11015; Download for Windows
-      </a>
-      <a class="btn" href="#download">Other downloads</a>
-      <a class="btn" href="https://github.com/ErfanNamira/ytget-gui">&#9733; Star on GitHub</a>
-    </div>
-    <p class="cta-note">
-      Windows 10 &amp; 11 (64-bit) &middot; no Python needed &middot; no ads, no trackers, no account.
-    </p>
-    <div class="shot">
-      <img src="assets/img/app-main.jpg" alt="The YTGet main window with a download queue" />
-    </div>
-  </div>
-</section>
+<div class="sites">
+ <p>Works with your favorite platforms</p>
+ <div class="marquee"><div class="track" id="t1"></div></div>
+ <div class="marquee rev"><div class="track" id="t2"></div></div>
+</div>
 
 <section id="features">
-  <div class="wrap">
-    <h2>Everything you need, nothing you don't</h2>
-    <p class="sub">Built around a single idea: paste a link and get a properly named, properly tagged file.</p>
-    <div class="grid">
-      <div class="card">
-        <div class="ico">&#128230;</div>
-        <h3>A real download queue</h3>
-        <p>Add as many links as you like. Start, pause, skip or remove items, and watch live progress, speed and ETA for each one.</p>
-      </div>
-      <div class="card">
-        <div class="ico">&#127925;</div>
-        <h3>MP3 with album art</h3>
-        <p>Audio downloads arrive tagged, with cover art embedded and centre-cropped to a clean square as each item finishes.</p>
-      </div>
-      <div class="card">
-        <div class="ico">&#127916;</div>
-        <h3>Up to 8K video</h3>
-        <p>Pick any resolution from 144p to 4320p, or let YTGet choose the best available. Video and audio are merged automatically.</p>
-      </div>
-      <div class="card">
-        <div class="ico">&#128203;</div>
-        <h3>Playlists and albums</h3>
-        <p>Queue a whole playlist or album in one go, with an archive file so re-running a playlist only fetches what is new.</p>
-      </div>
-      <div class="card">
-        <div class="ico">&#128203;</div>
-        <h3>Clipboard watcher</h3>
-        <p>Copy a link anywhere and YTGet can queue it for you - automatically, or after asking, depending on the site.</p>
-      </div>
-      <div class="card">
-        <div class="ico">&#9986;</div>
-        <h3>Clips and sections</h3>
-        <p>Grab just the part you want by setting a start and end time, and choose sponsor-segment removal per item.</p>
-      </div>
-      <div class="card">
-        <div class="ico">&#128337;</div>
-        <h3>Scheduler</h3>
-        <p>Run the queue overnight: pick days and times to start and stop, then sleep, shut down or just close when it is done.</p>
-      </div>
-      <div class="card">
-        <div class="ico">&#128193;</div>
-        <h3>Sensible file names</h3>
-        <p>Naming templates per site and per recording type, subtitles, chapters and thumbnails - so your library stays tidy without manual renaming.</p>
-      </div>
-      <div class="card new">
-        <div class="ico">&#10024;</div>
-        <h3>New in 2.8.3 <span class="tag">new</span></h3>
-        <p>No more silent closes mid-download, file names per site and per recording type (for example "Artist - Track # Title" for music and "Uploader - Title" for videos), and crash logs you can open from Help.</p>
-      </div>
-    </div>
+ <div class="wrap">
+  <div class="head reveal"><span class="eyebrow">Features</span><h2>Everything you need.<br><span class="grad">Nothing you don't.</span></h2><p>A clean Qt interface on top of the power of yt-dlp and FFmpeg — bundled and ready to go.</p></div>
+  <div class="bento">
+   <div class="card c4 reveal">
+    <div class="ico">📹</div><h3>Crystal-clear video, up to 8K</h3><p>Pick any resolution from 480p to 4320p. Multiple formats from the same link — queue 1080p and MP3 at once.</p>
+    <div class="qual"><span>480p</span><span>720p</span><span>1080p</span><span>1440p</span><span>4K</span><span class="on">8K</span></div>
+   </div>
+   <div class="card c2 reveal"><div class="ico">⚡</div><div class="big grad">1000+</div><p style="margin-top:10px">sites supported via yt-dlp, with 76 recognized automatically.</p></div>
+   <div class="card c2 reveal">
+    <div class="ico">🎵</div><h3>Studio-grade audio</h3><p>MP3, FLAC & Opus with cover art, accurate YouTube Music metadata and loudness normalization.</p>
+    <div class="wave"><i style="height:40%"></i><i style="height:80%;animation-delay:.1s"></i><i style="height:55%;animation-delay:.2s"></i><i style="height:95%;animation-delay:.3s"></i><i style="height:60%;animation-delay:.4s"></i><i style="height:75%;animation-delay:.5s"></i><i style="height:35%;animation-delay:.6s"></i><i style="height:85%;animation-delay:.7s"></i><i style="height:50%;animation-delay:.8s"></i><i style="height:70%;animation-delay:.9s"></i></div>
+   </div>
+   <div class="card c4 reveal">
+    <div class="ico">📂</div><h3>Smart queue & playlists</h3><p>Drag-to-reorder queue, full playlist and channel archiving, per-item sizes, pause/stop any time — and it survives restarts.</p>
+    <div class="peek"><img src="assets/img/app-queue.jpg" alt="Download queue"></div>
+   </div>
+   <div class="card c2 reveal"><div class="ico">⏭️</div><h3>SponsorBlock</h3><p>Skip sponsors, intros and self-promos automatically.</p></div>
+   <div class="card c2 reveal"><div class="ico">✂️</div><h3>Trim & chapters</h3><p>Cut by timestamp, embed or split by chapters.</p></div>
+   <div class="card c2 reveal"><div class="ico">📄</div><h3>Subtitles</h3><p>Fetch and embed subtitles in any available language.</p></div>
+   <div class="card c3 reveal"><div class="ico">🏷️</div><h3>Per-site naming rules</h3><p>Different filename templates for YouTube, YouTube Music and other sites — separately for video and audio.</p></div>
+   <div class="card c3 reveal"><div class="ico">🌐</div><h3>Power-user ready</h3><p>Proxy support, date filters, custom FFmpeg args, rate limiting and retries — all saved to <code>config.json</code>.</p></div>
   </div>
+ </div>
+</section>
+
+<section id="showcase" style="background:linear-gradient(180deg,transparent,rgba(139,92,246,.05),transparent)">
+ <div class="wrap">
+  <div class="head reveal"><span class="eyebrow">Showcase</span><h2>Designed for <span class="grad">focus</span></h2><p>A dark, distraction-free interface where every option is one click away.</p></div>
+  <div class="tabs" role="tablist">
+   <button class="tab on" data-i="0" role="tab">Main window</button><button class="tab" data-i="1" role="tab">Queue</button><button class="tab" data-i="2" role="tab">Advanced</button><button class="tab" data-i="3" role="tab">Preferences</button>
+  </div>
+  <div class="stage reveal"><img id="stageImg" src="assets/img/app-main.jpg" alt="YTGet screenshot"></div>
+  <p class="caption" id="cap">Paste a link, pick a format, hit Start.</p>
+ </div>
+</section>
+
+<section id="automation">
+ <div class="wrap split">
+  <div class="reveal">
+   <span class="eyebrow">Automation</span>
+   <h2>Set it once.<br><span class="grad">Let it run.</span></h2>
+   <p style="color:var(--mut);font-size:18px;margin-top:16px">YTGet works quietly in the background so your downloads happen on your schedule.</p>
+   <div class="list">
+    <div class="row"><div class="ico">📋</div><div><h4>Clipboard watcher</h4><p>Copy a link anywhere — it lands in your queue with the right default format.</p></div></div>
+    <div class="row"><div class="ico">⏰</div><div><h4>Scheduler</h4><p>Start and stop the queue at set times, then sleep or shut down when done.</p></div></div>
+    <div class="row"><div class="ico">🖱️</div><div><h4>System tray &amp; autostart</h4><p>Control the queue from the tray and launch on login with an optional delay.</p></div></div>
+   </div>
+  </div>
+  <div class="term reveal">
+   <div class="bar"><i></i><i></i><i></i></div>
+<pre><span class="k">&gt; clipboard</span>  youtube.com/watch?v=7N-Ib4asZfM
+<span class="v">  - format</span>    YouTube 2160p (4K) · MKV
+<span class="k">&gt; clipboard</span>  music.youtube.com/playlist?list=…
+<span class="v">  - format</span>    MP3 320k · cover 1:1 · tags
+<span class="k">&gt; scheduler</span>  queue starts at 02:00
+<span class="ok">✓ done</span>        24 items · 18.4 GB
+<span class="k">&gt; after</span>      sleep system</pre>
+  </div>
+ </div>
 </section>
 
 <section id="download">
-  <div class="wrap">
-    <h2>Download YTGet</h2>
-    <p class="sub">
-      Latest release: <strong data-version>2.8.3</strong>
-      <span data-published></span> &middot;
-      <a data-notes-link href="https://github.com/ErfanNamira/ytget-gui/releases/latest">release notes</a>
-    </p>
-    <div class="dl-grid">
-      <div class="card dl">
-        <div class="os">&#129695; Windows installer <span class="tag">recommended</span></div>
-        <ul>
-          <li>Sets up shortcuts and uninstall for you</li>
-          <li>Optional "start with Windows"</li>
-          <li>Installs for the current user - no admin rights</li>
-        </ul>
-        <a class="btn btn-primary" data-dl-installer href="https://github.com/ErfanNamira/ytget-gui/releases/latest">
-          Download installer <span data-size></span>
-        </a>
-      </div>
-      <div class="card dl">
-        <div class="os">&#128230; Portable</div>
-        <ul>
-          <li>No installation - unzip and run <code>YTGet.exe</code></li>
-          <li>Perfect for a USB stick</li>
-          <li>Choose whichever archive format you prefer</li>
-        </ul>
-        <div class="dl-alt">
-          <a class="btn" data-dl-zip href="https://github.com/ErfanNamira/ytget-gui/releases/latest">ZIP</a>
-          <a class="btn" data-dl-7z href="https://github.com/ErfanNamira/ytget-gui/releases/latest">7z</a>
-        </div>
-      </div>
-      <div class="card dl">
-        <div class="os">&#128187; From source</div>
-        <ul>
-          <li>Windows, macOS and Linux</li>
-          <li>Python 3.10 or newer</li>
-        </ul>
-<pre><code>pip install ytget-gui
-ytget-gui</code></pre>
-      </div>
+ <div class="wrap">
+  <div class="head reveal"><span class="eyebrow">Download</span><h2>Get YTGet <span class="grad">free</span></h2><p>Every release bundles all dependencies. No Python, no setup headaches.</p></div>
+  <div class="os-grid">
+   <div class="os-card reveal">
+    <h3>🪟 Windows</h3><p>Per-user installer — no admin prompt. Optional desktop shortcut and launch on login.</p>
+    <div class="btns">
+     <a class="btn btn-p" href="https://github.com/ErfanNamira/ytget-gui/releases/latest" target="_blank" rel="noopener">Installer (.exe)</a>
+     <a class="btn btn-g" href="https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-windows.zip">Portable (.zip)</a>
     </div>
-    <p class="hashes">
-      Every release ships SHA-256 checksums so you can verify your download.
-      All builds are produced in public by GitHub Actions from this repository.
-    </p>
-  </div>
-</section>
-
-<section id="install">
-  <div class="wrap">
-    <h2>Getting started</h2>
-    <p class="sub">About two minutes, start to finish.</p>
-    <ol class="steps">
-      <li><strong>Download and run the installer.</strong> Windows may show a "unknown publisher" warning because the app is not code-signed - choose <em>More info</em> then <em>Run anyway</em>.</li>
-      <li><strong>Let it fetch its tools.</strong> On first launch YTGet downloads yt-dlp and FFmpeg for you. No manual setup.</li>
-      <li><strong>Paste a link</strong> into the box and press <em>Fetch</em> to see the title, duration and available formats.</li>
-      <li><strong>Pick a format</strong> - a video resolution, or MP3 / FLAC / M4A for audio - and click <em>Add to queue</em>.</li>
-      <li><strong>Press Start.</strong> Files land in your chosen download folder; right-click any finished item to open it or show it in Explorer.</li>
-    </ol>
-    <p class="note">
-      Tip: open <em>Preferences</em> to set your download folder, naming template, subtitle languages,
-      the clipboard watcher and the scheduler. Everything is remembered between sessions.
-    </p>
-  </div>
-</section>
-
-<section id="screenshots">
-  <div class="wrap">
-    <h2>A look inside</h2>
-    <p class="sub">A clean dark interface that stays out of the way.</p>
-    <div class="gallery">
-      <figure>
-        <img src="assets/img/app-main.jpg" alt="YTGet main window" loading="lazy" />
-        <figcaption>Main window with live queue progress</figcaption>
-      </figure>
-      <figure>
-        <img src="assets/img/app-queue.jpg" alt="YTGet queue with thumbnails" loading="lazy" />
-        <figcaption>Thumbnails, quality and size for each item</figcaption>
-      </figure>
-      <figure>
-        <img src="assets/img/app-prefs.jpg" alt="YTGet preferences" loading="lazy" />
-        <figcaption>Preferences: folders, naming, watcher, scheduler</figcaption>
-      </figure>
-      <figure>
-        <img src="assets/img/app-advanced.jpg" alt="YTGet advanced options" loading="lazy" />
-        <figcaption>Advanced options, applied per item</figcaption>
-      </figure>
+   </div>
+   <div class="os-card reveal">
+    <h3>🍎 macOS</h3><p>Native builds for Apple Silicon and Intel. Run <code>xattr -d com.apple.quarantine YTGet.app</code> after extracting.</p>
+    <div class="btns">
+     <a class="btn btn-p" href="https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS-arm64.tar.gz">Apple Silicon</a>
+     <a class="btn btn-g" href="https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS-x86_64.tar.gz">Intel</a>
     </div>
-  </div>
-</section>
-
-<section id="sites">
-  <div class="wrap">
-    <h2>76 recognised sites</h2>
-    <p class="sub">
-      YouTube and YouTube Music are the heart of YTGet, but links from these sites are recognised too -
-      and thousands more work through yt-dlp.
-    </p>
-    <div class="chips">
-      <span class="chip">YouTube</span>
-      <span class="chip">YouTube Music</span>
-      <span class="chip">Spotify</span>
-      <span class="chip">SoundCloud</span>
-      <span class="chip">Bandcamp</span>
-      <span class="chip">Vimeo</span>
-      <span class="chip">Dailymotion</span>
-      <span class="chip">Twitch</span>
-      <span class="chip">TikTok</span>
-      <span class="chip">Instagram</span>
-      <span class="chip">Facebook</span>
-      <span class="chip">X / Twitter</span>
-      <span class="chip">Reddit</span>
-      <span class="chip">Twitter Spaces</span>
-      <span class="chip">Bilibili</span>
-      <span class="chip">Niconico</span>
-      <span class="chip">Odnoklassniki</span>
-      <span class="chip">VK</span>
-      <span class="chip">Rumble</span>
-      <span class="chip">Odysee</span>
-      <span class="chip">Steam</span>
-      <span class="chip">Patreon</span>
-      <span class="chip">Telegram</span>
-      <span class="chip">Aparat</span>
-      <span class="chip">Google Drive</span>
-      <span class="chip">Mixcloud</span>
-      <span class="chip">Deezer</span>
-      <span class="chip">Apple Music</span>
-      <span class="chip">Coub</span>
-      <span class="chip">TED</span>
-      <span class="chip">Archive.org</span>
-      <span class="chip">BBC iPlayer</span>
-      <span class="chip">ARD &amp; ZDF</span>
-      <span class="chip">and 40+ more</span>
+   </div>
+   <div class="os-card reveal">
+    <h3>🐧 Linux</h3><p>Extract, then <code>chmod +x YTGet &amp;&amp; ./YTGet</code>. Or install from PyPI with pip.</p>
+    <div class="btns">
+     <a class="btn btn-p" href="https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-linux.tar.gz">Download (.tar.gz)</a>
+     <a class="btn btn-g" href="https://pypi.org/project/ytget-gui/" target="_blank" rel="noopener">pip install ytget-gui</a>
     </div>
-    <p class="note">
-      You decide what the clipboard watcher does with links from sites outside your list:
-      queue them automatically, ask first, or ignore them.
-    </p>
+   </div>
   </div>
+  <div class="stats">
+   <div class="stat reveal"><b class="grad">100%</b><span>Free &amp; open source</span></div>
+   <div class="stat reveal"><b class="grad">8K</b><span>Max video quality</span></div>
+   <div class="stat reveal"><b class="grad">3</b><span>Platforms</span></div>
+   <div class="stat reveal"><b class="grad">0</b><span>Ads or tracking</span></div>
+  </div>
+ </div>
 </section>
 
 <section id="faq">
-  <div class="wrap">
-    <h2>Questions</h2>
-    <div style="max-width:820px">
-      <details open>
-        <summary>Is YTGet free?</summary>
-        <p>Yes - completely free and open source under the MIT licence. No ads, no accounts, no telemetry.</p>
-      </details>
-      <details>
-        <summary>Why does Windows warn me about the installer?</summary>
-        <p>The app is not code-signed yet, and code-signing certificates are expensive for a free project. Click <em>More info</em> then <em>Run anyway</em>. You can verify the file first using the SHA-256 checksum published with every release.</p>
-      </details>
-      <details>
-        <summary>Do I need to install Python, yt-dlp or FFmpeg?</summary>
-        <p>No. The Windows build is self-contained, and YTGet downloads and updates yt-dlp and FFmpeg by itself.</p>
-      </details>
-      <details>
-        <summary>Where do my files go?</summary>
-        <p>Wherever you choose in Preferences - by default your <code>Downloads</code> folder. Settings and logs live in <code>%LOCALAPPDATA%\YTGet</code>.</p>
-      </details>
-      <details>
-        <summary>Does it work on macOS or Linux?</summary>
-        <p>Yes, from source: <code>pip install ytget-gui</code> then run <code>ytget-gui</code>. Only Windows gets a prebuilt installer today.</p>
-      </details>
-      <details>
-        <summary>Can I download a private or paid video?</summary>
-        <p>Only content you are allowed to access. YTGet can use your browser cookies for things you have legitimately purchased or subscribed to - please respect each site's terms and the rights of creators.</p>
-      </details>
-      <details>
-        <summary>How do I report a bug or ask for a feature?</summary>
-        <p>Open an issue on <a href="https://github.com/ErfanNamira/ytget-gui/issues">GitHub</a>. Including the link you used and a copy of the log helps a lot.</p>
-      </details>
-    </div>
+ <div class="wrap">
+  <div class="head reveal"><span class="eyebrow">FAQ</span><h2>Questions? <span class="grad">Answered.</span></h2></div>
+  <div class="faq">
+   <details class="reveal"><summary>Is YTGet really free?</summary><p>Yes. YTGet is fully open source under its GitHub license — no ads, no paywalls, no tracking.</p></details>
+   <details class="reveal"><summary>Do I need to install Python or FFmpeg?</summary><p>No. Every release ships with everything bundled. Just download, extract (or install) and run.</p></details>
+   <details class="reveal"><summary>Which sites are supported?</summary><p>Anything yt-dlp supports — YouTube, YouTube Music, SoundCloud, Vimeo, TikTok, Instagram, X, Twitch and many more. Spotify links are handled via spotDL.</p></details>
+   <details class="reveal"><summary>How do I keep yt-dlp up to date?</summary><p>Use <b>Help → Check yt-dlp Update</b> from the menu bar. The built-in update manager handles the rest.</p></details>
+   <details class="reveal"><summary>Something went wrong — where are the logs?</summary><p>Open <b>Help → Open Logs Folder</b>. Attach <code>ytget.log</code> and <code>crash.log</code> when you open an issue on GitHub.</p></details>
   </div>
+ </div>
 </section>
 
-</main>
+<section style="padding-top:20px">
+ <div class="wrap">
+  <div class="cta reveal">
+   <img src="assets/img/logo.png" alt="">
+   <h2>Ready to download <span class="grad">smarter?</span></h2>
+   <p>Join the community using YTGet to save the videos and music they love.</p>
+   <div class="ctas" style="margin-top:0"><a class="btn btn-p" href="#download">Download YTGet</a><a class="btn btn-g" href="https://github.com/ErfanNamira/ytget-gui/issues" target="_blank" rel="noopener">Report an issue</a></div>
+  </div>
+ </div>
+</section>
 
 <footer>
-  <div class="wrap foot">
-    <div>&copy; <span data-year>2026</span> YTGet &middot; MIT licence</div>
-    <div class="foot-links">
-      <a href="https://github.com/ErfanNamira/ytget-gui">GitHub</a>
-      <a href="https://github.com/ErfanNamira/ytget-gui/releases">Releases</a>
-      <a href="https://github.com/ErfanNamira/ytget-gui/blob/main/CHANGELOG.md">Changelog</a>
-      <a href="https://github.com/ErfanNamira/ytget-gui/issues">Support</a>
-      <a href="fa.html" lang="fa">&#1601;&#1575;&#1585;&#1587;&#1740;</a>
-    </div>
-  </div>
-  <div class="wrap">
-    <p class="note">
-      YTGet is an independent project and is not affiliated with, endorsed by or connected to YouTube,
-      Google or any other service listed above. Please use it only for content you have the right to download.
-    </p>
-  </div>
+ <div class="wrap">
+  <a class="brand" href="#"><img src="assets/img/logo.png" alt="">YTGet</a>
+  <div class="fl"><a href="https://github.com/ErfanNamira/ytget-gui" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/ErfanNamira/ytget-gui/releases" target="_blank" rel="noopener">Releases</a><a href="https://github.com/ErfanNamira/ytget-gui/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Changelog</a></div>
+  <span>© <span id="yr"></span> YTGet · Built on yt-dlp</span>
+ </div>
 </footer>
 
-<script src="assets/js/main.js" defer></script>
+<script>
+const nav=document.getElementById('nav');
+addEventListener('scroll',()=>nav.classList.toggle('scrolled',scrollY>20),{passive:true});
+document.querySelectorAll('.links a').forEach(a=>a.onclick=()=>nav.classList.remove('open'));
+document.getElementById('yr').textContent=new Date().getFullYear();
+
+const sites=[["YOUTUBE","#ff3b3b"],["YT MUSIC","#ff0055"],["SPOTIFY","#1ed760"],["SOUNDCLOUD","#ff7700"],["VIMEO","#1ab7ea"],["TIKTOK","#25f4ee"],["INSTAGRAM","#e1306c"],["X / TWITTER","#e5e5e5"],["TWITCH","#9146ff"],["FACEBOOK","#1877f2"],["REDDIT","#ff4500"],["DAILYMOTION","#00aaff"],["BANDCAMP","#1da0c3"],["KICK","#53fc18"],["RUMBLE","#85c742"]];
+function fill(el,list){const h=list.map(([n,c])=>`<div class="chip"><i style="--c:${c}"></i>${n}</div>`).join('')+'<div class="chip more">+1000 MORE</div>';el.innerHTML=h+h}
+fill(t1,sites);fill(t2,[...sites].reverse());
+
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+document.querySelectorAll('.reveal,#shot').forEach(el=>io.observe(el));
+
+document.querySelectorAll('.card').forEach(c=>c.addEventListener('pointermove',e=>{const r=c.getBoundingClientRect();c.style.setProperty('--mx',e.clientX-r.left+'px');c.style.setProperty('--my',e.clientY-r.top+'px')}));
+
+const shots=[["app-main.jpg","Paste a link, pick a format, hit Start."],["app-queue.jpg","Track every download with live progress and sizes."],["app-advanced.jpg","Trim, pick playlist items and tweak per-item options."],["app-prefs.jpg","Fine-tune output, naming, network and automation."]];
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');const [s,c]=shots[t.dataset.i];stageImg.style.opacity=0;setTimeout(()=>{stageImg.src='assets/img/'+s;cap.textContent=c;stageImg.style.opacity=1},200)});
+</script>
 </body>
 </html>
