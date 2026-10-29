@@ -1,3 +1,22 @@
+### v 2.8.4
+
+- Added Preferences → Output → Video quality: Auto/AV1/VP9/H.264 codec
+  preference and Balanced/Highest bitrate/Preferred codec first ordering.
+  Resolution always takes precedence; unavailable preferred codecs fall back
+  without forcing a lower resolution. Settings persist and WebM incompatibility
+  is explained in the dialog.
+
+- Fixed low-resolution downloads caused by codec-first slash fallbacks: compare
+  all eligible codecs and DASH/HLS streams by resolution, FPS, then video bitrate.
+- Preserve caps, handle higher-quality progressive streams, and keep built-in
+  WebM selectors compatible with WebM codecs.
+- Migrate exact old built-in queue selectors without rewriting custom formats.
+- Align metadata cookie precedence and explicit Deno runtime with downloads.
+- Reject nonfinite persisted sizes and impossible above-cap estimates.
+- Added real yt-dlp selection regressions and local 1080p HLS + Opus/cover merge test.
+- Updated app, package, Windows/macOS resource and website versions to 2.8.4.
+- See RELEASE_NOTES.md and FIX_REPORT_2.8.4.md for retry guidance and test limits.
+
 ### v 2.8.3
 
 A reliability and naming release. The app no longer closes on its own in the

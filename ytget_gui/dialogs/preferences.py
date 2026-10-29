@@ -64,6 +64,8 @@ from ytget_gui.settings import (
     BROWSERS,
     THUMBNAIL_FORMATS,
     VIDEO_CONTAINERS,
+    VIDEO_CODEC_CHOICES,
+    VIDEO_PRIORITY_CHOICES,
     YOUTUBE_PLAYER_CLIENTS,
     AppSettings,
 )
@@ -603,6 +605,20 @@ class PreferencesDialog(QDialog):
             "VIDEO_FORMAT", ui.combo(VIDEO_CONTAINERS, "Video container")
         )
 
+        self.video_codec = self._bind_combo_mapped(
+            "VIDEO_CODEC", ui.combo([], "Preferred video codec"), VIDEO_CODEC_CHOICES, "auto"
+        )
+        self.video_priority = self._bind_combo_mapped(
+            "VIDEO_SELECTION_PRIORITY", ui.combo([], "Video selection priority"),
+            VIDEO_PRIORITY_CHOICES, "balanced"
+        )
+        self.video_quality_hint = QLabel()
+        self.video_quality_hint.setWordWrap(True)
+        self.video_quality_hint.setObjectName("helpBoxExample")
+        for combo in (self.video_codec, self.video_priority, self.video_container):
+            combo.currentIndexChanged.connect(self._update_video_quality_hint)
+        self._update_video_quality_hint()
+
         self.date_after = self._bind_text(
             "DATEAFTER", ui.line_edit("YYYYMMDD", "Only items uploaded on or after", "Upload date filter")
         )
@@ -620,6 +636,16 @@ class PreferencesDialog(QDialog):
             ),
             ui.card(
                 self._column(
+                    self._row("Preferred codec", self.video_codec,
+                              "A preference, not a strict codec requirement; no transcoding"),
+                    self._row("Selection priority", self.video_priority,
+                              "The resolution preset in the main window always takes precedence"),
+                    self.video_quality_hint,
+                ),
+                title="Video quality",
+            ),
+            ui.card(
+                self._column(
                     self._row("Naming", self.filename_combo, "How files are named on disk"),
                     self.filename_preview,
                     self.custom_filename_row,
@@ -629,6 +655,28 @@ class PreferencesDialog(QDialog):
             self._build_filename_rules_card(),
             self.filename_help,
         )
+
+    def _update_video_quality_hint(self, *_args) -> None:
+        codec = VIDEO_CODEC_CHOICES[max(0, self.video_codec.currentIndex())][1]
+        priority = VIDEO_PRIORITY_CHOICES[max(0, self.video_priority.currentIndex())][1]
+        orders = {
+            "balanced": "Highest available resolution, then frame rate, then video bitrate.",
+            "bitrate": "Highest available resolution, then video bitrate, then frame rate.",
+            "codec": "Highest available resolution, then preferred codec, then frame rate and video bitrate.",
+        }
+        text = orders[priority] + (
+            " The resolution cap is never exceeded. A codec preference never causes a drop to a lower resolution."
+            " DASH and HLS compete together. Reported bitrate is not a visual-quality measurement."
+        )
+        if priority != "codec" and codec != "auto":
+            text += " Preferred codec is a tie-breaker after these criteria; choose Preferred codec first to prioritize it within a resolution."
+        if priority == "codec" and codec == "auto":
+            text += " Auto uses yt-dlp's codec ranking."
+        if self.video_container.currentText() == ".webm":
+            text += " WebM is limited to compatible codecs and may offer fewer resolutions."
+            if codec == "h264":
+                text += " H.264 is not supported in WebM; Auto codec ranking is used. Choose MKV or MP4 to prefer H.264."
+        self.video_quality_hint.setText(text)
 
     def _build_filename_rules_card(self) -> QWidget:
         """One naming choice per source site and recording type.
@@ -1470,6 +1518,7 @@ class PreferencesDialog(QDialog):
         self.thumbnail_format.setEnabled(self.convert_thumbnails.isChecked())
         self.hls_domains.setEnabled(self.prefer_hls.isChecked())
         self._on_filename_changed()
+        self._update_video_quality_hint()
         self._snapshot = self.get_settings()
 
     def get_settings(self) -> Dict[str, Any]:
@@ -1531,6 +1580,7 @@ class PreferencesDialog(QDialog):
             box.setChecked(code in selected)
 
         self._on_filename_changed()
+        self._update_video_quality_hint()
         self._set_dirty(False)
         self._validate()
 

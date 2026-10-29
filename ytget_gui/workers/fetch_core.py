@@ -199,17 +199,22 @@ def build_command(
     _verify, ssl_args, _env = ssl_utils.resolve_ssl_config(settings)
     cmd.extend(ssl_args)
 
+    # Explicit per-call browser override wins; otherwise match the download
+    # worker's cookie-file-first policy. Different auth can expose different
+    # format ladders and made queue details disagree with actual downloads.
     browser = cookies_from_browser or str(
         getattr(settings, "COOKIES_FROM_BROWSER", "") or ""
     )
-    if browser:
+    if cookies_from_browser:
         spec = f"{browser}:{cookies_profile}" if cookies_profile else browser
         cmd.extend(["--cookies-from-browser", spec])
     elif is_usable_file(cookies_path):
-        # is_usable_file rejects Path(".") -- an empty cookies setting used to
-        # serialise to "." and produce `--cookies .`, which yt-dlp rejects
-        # outright, breaking every metadata fetch.
         cmd.extend(["--cookies", str(cookies_path)])
+    elif browser:
+        spec = f"{browser}:{cookies_profile}" if cookies_profile else browser
+        cmd.extend(["--cookies-from-browser", spec])
+
+    cmd.extend(runtime_flags(settings))
 
     if proxy_url:
         cmd.extend(["--proxy", proxy_url])
@@ -226,6 +231,14 @@ def build_command(
     # additional download targets.
     cmd.extend(["--", url])
     return cmd
+
+
+def runtime_flags(settings) -> List[str]:
+    """Use the same explicit JS runtime for format discovery and downloads."""
+    deno = getattr(settings, "DENO_PATH", None)
+    if deno and Path(deno).is_file():
+        return ["--js-runtimes", f"deno:{deno}"]
+    return []
 
 
 def parse_extra_args(raw: str) -> List[str]:

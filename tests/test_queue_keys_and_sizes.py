@@ -148,9 +148,9 @@ class EstimateSizeTests(unittest.TestCase):
         self.assertIsNone(estimate_download_size({}, None, "best"))
         self.assertIsNone(estimate_download_size(None, None, "best"))
 
-    def test_everything_above_cap_falls_back_to_smallest(self) -> None:
+    def test_everything_above_cap_has_no_matching_estimate(self) -> None:
         total = estimate_download_size({2160: 4000}, 100, "bv*[height<=720]+ba/b")
-        self.assertEqual(total, 4100)
+        self.assertIsNone(total)
 
 
 if __name__ == "__main__":

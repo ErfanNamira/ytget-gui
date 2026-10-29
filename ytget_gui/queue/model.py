@@ -15,6 +15,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
 
+from ytget_gui.formats import normalise_video_selector
 from ytget_gui.utils.paths import replace_with_retry
 from ytget_gui.utils.validators import is_supported_url
 
@@ -203,7 +204,7 @@ class QueueItem:
         return cls(
             url=url,
             title=str(data.get("title") or ""),
-            format_code=str(data.get("format_code") or ""),
+            format_code=normalise_video_selector(str(data.get("format_code") or "")),
             format_label=str(data.get("format_label") or ""),
             status=status,
             progress=0 if status is Status.PENDING else max(0, min(100, as_int(data.get("progress")))),
@@ -236,7 +237,7 @@ class QueueItem:
     def _parse_size(raw: Any) -> Optional[int]:
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             return None
-        return int(raw) if raw > 0 else None
+        return int(raw) if math.isfinite(raw) and raw > 0 else None
 
     @staticmethod
     def _parse_options(raw: Any) -> Dict[str, Any]:

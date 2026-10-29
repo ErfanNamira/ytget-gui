@@ -25,6 +25,8 @@ from ytget_gui.formats import (
     build_resolution_presets,
     ensure_best_fallback,
     video_chain,
+    VIDEO_CODEC_CHOICES,
+    VIDEO_PRIORITY_CHOICES,
 )
 from ytget_gui.sites import DEFAULT_ENABLED_SITE_KEYS, SITE_LABELS
 from ytget_gui.spotdl_settings import SpotDLSettings
@@ -132,6 +134,8 @@ _PLAIN_KEYS: tuple[str, ...] = (
     "YOUTUBE_PLAYER_CLIENT",
     "CROP_AUDIO_COVERS",
     "VIDEO_FORMAT",
+    "VIDEO_CODEC",
+    "VIDEO_SELECTION_PRIORITY",
     "WRITE_THUMBNAIL",
     "CONVERT_THUMBNAILS",
     "THUMBNAIL_FORMAT",
@@ -191,6 +195,10 @@ _PATH_KEYS: tuple[str, ...] = (
 _VALIDATORS: Dict[str, Callable[[Any], Any]] = {
     "CHAPTERS_MODE": lambda v: v if v in CHAPTERS_MODES else "embed",
     "VIDEO_FORMAT": lambda v: v if v in VIDEO_CONTAINERS else ".mkv",
+    "VIDEO_CODEC": lambda v: v if v in dict(VIDEO_CODEC_CHOICES).values() else "auto",
+    "VIDEO_SELECTION_PRIORITY": (
+        lambda v: v if v in dict(VIDEO_PRIORITY_CHOICES).values() else "balanced"
+    ),
     "THUMBNAIL_FORMAT": lambda v: v if v in THUMBNAIL_FORMATS else "png",
     "YOUTUBE_PLAYER_CLIENT": (
         lambda v: v if v in YOUTUBE_PLAYER_CLIENTS.values() else "auto"
@@ -309,6 +317,9 @@ class AppSettings:
         default_factory=_default_filename_rules
     )
     VIDEO_FORMAT: str = ".mkv"
+    # Soft preferences within the highest available resolution under the cap.
+    VIDEO_CODEC: str = "auto"
+    VIDEO_SELECTION_PRIORITY: str = "balanced"
 
     # --- Post-processing ---
     AUDIO_NORMALIZE: bool = False
@@ -520,7 +531,8 @@ class AppSettings:
         m = _BARE_HEIGHT_RE.fullmatch(code.strip())
         if m:
             return self.get_format_for_resolution(int(m.group(1)))
-        return code
+        from ytget_gui.formats import normalise_video_selector
+        return normalise_video_selector(code)
 
     def set_download_path(self, path: Path) -> None:
         """The only correct way to change the download folder.

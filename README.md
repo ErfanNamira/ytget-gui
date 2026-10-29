@@ -16,6 +16,16 @@ Whether you’re grabbing a single clip or archiving an entire channel, **YTGet*
 
 ---
 
+## 2.8.4 quality-selection fix
+
+Resolution presets now compare codecs and DASH/HLS together, prioritizing
+resolution, FPS and reported video bitrate. Existing built-in queue presets
+upgrade automatically. See [release notes](RELEASE_NOTES.md) for details,
+source-install instructions, and how to retry a previously saved 360p file
+without overwriting it. **Preferences → Output → Video quality** now lets you
+choose Auto/AV1/VP9/H.264 and prioritize the highest video bitrate or your
+preferred codec within the selected resolution. Balanced + Auto remain the defaults.
+
 ## 🖼 Screenshots
 
 <p align="center">

@@ -125,10 +125,8 @@ _RETRYABLE_RE = re.compile(
 )
 
 # Sites that genuinely only serve usable streams over HLS can be opted into
-# per-domain. YouTube is excluded unconditionally: it always exposes a full
-# DASH ladder, and its muxed HLS renditions top out far below (often 1080p60
-# when 1440p/4K exist as separate video-only DASH streams), so forcing HLS
-# there silently downgrades quality no matter what the user configured.
+# per-domain. Never force YouTube into an HLS-only selector: its best stream
+# may be DASH *or* HLS. Normal presets compare both protocols together.
 _HLS_NEVER_DOMAINS = ("youtube.com", "youtu.be", "music.youtube.com")
 
 _MUSIC_VIDEO_TAGS = (
@@ -1596,8 +1594,18 @@ class DownloadWorker(BaseDownloadWorker):
         if selector is None:
             selector = format_code or "best"
         selector = formats.ensure_best_fallback(selector)
+        if container == "webm":
+            selector = formats.webm_compatible_selector(selector)
 
-        flags = ["-f", selector]
+        flags = [
+            "-f", selector,
+            "--format-sort", formats.video_format_sort(
+                getattr(s, "VIDEO_CODEC", "auto"),
+                getattr(s, "VIDEO_SELECTION_PRIORITY", "balanced"),
+                container,
+            ),
+            "--format-sort-force",
+        ]
 
         if native_hls:
             flags += ["--hls-prefer-native", "--hls-use-mpegts"]
@@ -1722,10 +1730,7 @@ class DownloadWorker(BaseDownloadWorker):
         return flags
 
     def _runtime_flags(self) -> List[str]:
-        deno = getattr(self.settings, "DENO_PATH", None)
-        if deno and Path(deno).is_file():
-            return ["--js-runtimes", f"deno:{deno}"]
-        return []
+        return fetch_core.runtime_flags(self.settings)
 
     def _extra_and_client_flags(self, url: str) -> List[str]:
         s = self.settings

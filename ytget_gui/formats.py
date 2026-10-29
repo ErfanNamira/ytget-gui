@@ -18,7 +18,42 @@ AUDIO_FORMAT_CODES = frozenset(
 PLAYLIST_FORMAT_CODES = frozenset({"playlist_mp3", "playlist_opus"})
 SPOTIFY_FORMAT_CODE = "spotify"
 
-_NO_HLS = "[protocol!*=m3u8]"
+# Resolution and frame rate take priority over codec/protocol/extractor tiers.
+# vbr (not br) leaves yt-dlp's normal audio/language ranking intact.
+VIDEO_FORMAT_SORT = "res,fps,vbr"
+
+VIDEO_CODEC_CHOICES = (
+    ("Auto (any codec)", "auto"),
+    ("AV1", "av1"),
+    ("VP9", "vp9"),
+    ("H.264 / AVC", "h264"),
+)
+VIDEO_PRIORITY_CHOICES = (
+    ("Balanced (frame rate, then bitrate)", "balanced"),
+    ("Highest video bitrate", "bitrate"),
+    ("Preferred codec first", "codec"),
+)
+_CODEC_SORT = {"av1": "vcodec:av01", "vp9": "vcodec:vp9.2", "h264": "vcodec:avc"}
+
+
+def video_format_sort(codec: str = "auto", priority: str = "balanced",
+                      container: str = "mkv") -> str:
+    """Soft preferences *within* the best resolution, never codec filters.
+
+    Highest-bitrate mode puts vbr ahead of FPS. Balanced retains 2.8.4's
+    FPS-first policy. Codec-first puts the preferred codec ahead of both.
+    Audio's codec/language ordering is unaffected (all video fields tie).
+    """
+    if container.lstrip(".") == "webm" and codec == "h264":
+        codec = "auto"  # AVC cannot be stream-copied into WebM.
+    codec_sort = _CODEC_SORT.get(codec, "vcodec")
+    if priority == "bitrate":
+        return f"res,vbr,fps,{codec_sort}"
+    if priority == "codec":
+        return f"res,{codec_sort},fps,vbr"
+    # Keep the existing default's tie-breaking exactly as before.
+    return VIDEO_FORMAT_SORT if codec not in _CODEC_SORT else f"res,fps,vbr,{codec_sort}"
+
 
 # Module level: these were compiled inside the functions below, which run for
 # every preset build and every format resolution.
@@ -57,35 +92,59 @@ def ensure_best_fallback(fmt: str) -> str:
 
 @lru_cache(maxsize=128)
 def video_chain(height: int, width: int | None = None, audio: str = "bestaudio") -> str:
-    """Build a codec- and protocol-aware selector chain for a height cap.
+    """Best video within the cap, without codec or protocol downgrade tiers.
 
-    Ordering, best to worst:
-      1. AV1 under the cap, DASH/HTTP only
-      2. VP9 under the cap, DASH/HTTP only
-      3. Any video under the cap, DASH/HTTP only
-      4. Any video under the cap, HLS now permitted
-      5. Pre-muxed video within the same cap (never silently exceeds it).
-
-    Tiers 1-3 exclude HLS so a same-or-lower DASH stream always wins over an
-    HLS one. Codec filters use `^=` / `~=` because yt-dlp reports
-    "av01.0.05M.08" and "vp09.00.50.08", never the bare "av01"/"vp9" that an
-    `=` filter would demand -- with `=` those tiers match nothing and are
-    dead weight.
+    yt-dlp's slash operator is a *fallback*, not a comparison: a 360p VP9
+    match in an earlier branch prevented a later 1080p AVC match entirely.
+    Rank all candidates together; the worker supplies VIDEO_FORMAT_SORT.
+    bestvideo* includes progressive streams so a lower separate-video stream
+    cannot mask a higher-quality already-muxed stream.
     """
     wf = f"[width<={width}]" if width else ""
     hf = f"[height<={height}]"
+    return f"bestvideo*{hf}{wf}+{audio}/best{hf}{wf}"
 
-    return dedupe_chain(
-        "/".join(
-            (
-                f"bestvideo{hf}{wf}[vcodec^=av01]{_NO_HLS}+{audio}",
-                f"bestvideo{hf}{wf}[vcodec~='^vp0?9']{_NO_HLS}+{audio}",
-                f"bestvideo{hf}{wf}{_NO_HLS}+{audio}",
-                f"bestvideo{hf}{wf}+{audio}",
-                f"best{hf}{wf}",
-            )
-        )
-    )
+
+@lru_cache(maxsize=1)
+def _legacy_video_presets() -> dict[str, str]:
+    """Exact 2.8.3 built-ins only; never rewrite custom selectors/format IDs."""
+    mapping = {}
+    for height, width in ((4320, 7680), (2160, 3840), (1440, 2560),
+                          (1080, 1920), (720, 1280), (480, 854)):
+        for w in (None, width):
+            cap = f"[height<={height}]" + (f"[width<={w}]" if w else "")
+            old = "/".join((
+                f"bestvideo{cap}[vcodec^=av01][protocol!*=m3u8]+bestaudio",
+                f"bestvideo{cap}[vcodec~='^vp0?9'][protocol!*=m3u8]+bestaudio",
+                f"bestvideo{cap}[protocol!*=m3u8]+bestaudio",
+                f"bestvideo{cap}+bestaudio",
+                f"best{cap}",
+            ))
+            mapping[old] = video_chain(height, width=w)
+    return mapping
+
+
+def normalise_video_selector(code: str) -> str:
+    """Upgrade persisted built-ins, leaving explicit user selectors intact."""
+    return _legacy_video_presets().get(code, code)
+
+
+def webm_compatible_selector(selector: str) -> str:
+    """Constrain built-ins to codecs ffmpeg can stream-copy into WebM.
+
+    Removing the old VP9-first tier otherwise makes a valid AVC selection
+    fail at the WebM merger. Explicit custom selectors remain user-owned.
+    """
+    height = max_height_in(selector)
+    widths = _WIDTH_CAP_RE.findall(selector)
+    width = int(widths[0]) if widths else None
+    if not height or selector != video_chain(height, width):
+        return selector
+    video_filter = "[vcodec~='^(av01|vp0?[89])']"
+    audio_filter = "[acodec~='^(opus|vorbis)']"
+    return (selector.replace("bestvideo*", "bestvideo*" + video_filter)
+            .replace("+bestaudio", "+bestaudio" + audio_filter)
+            .replace("/best[", "/best" + video_filter + audio_filter + "["))
 
 
 @lru_cache(maxsize=32)
@@ -181,9 +240,9 @@ def estimate_download_size(
     cap = max_height_in(format_code)
     heights = [h for h in video_sizes if cap is None or h <= cap]
     if not heights:
-        # Everything available is above the cap; the smallest is what
-        # yt-dlp's `best` fallback would end up taking.
-        heights = [min(video_sizes)]
+        # Every selector branch is capped: no playable match, not the
+        # smallest above-cap video. Do not advertise an impossible estimate.
+        return None
     total = video_sizes[max(heights)]
     if audio_size:
         total += audio_size
