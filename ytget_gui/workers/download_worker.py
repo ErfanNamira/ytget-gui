@@ -24,7 +24,12 @@ from typing import Any, Deque, Dict, List, Optional
 from PySide6.QtCore import QTimer, Signal
 
 from ytget_gui import filename_rules, formats
-from ytget_gui.settings import AppSettings
+from ytget_gui.settings import (
+    AppSettings,
+    PACING_DEFAULTS,
+    REQUEST_PACING_PRESETS,
+    _as_float,
+)
 from ytget_gui.styles import AppStyles
 from ytget_gui.utils.paths import is_usable_file, safe_stem
 from ytget_gui.utils.text import short
@@ -123,6 +128,81 @@ _RETRYABLE_RE = re.compile(
     r"|Sign in to confirm you.{0,3}re not a bot)",
     re.IGNORECASE,
 )
+
+# Subtitle downloads are small extra requests per item and are usually what
+# trips YouTube's rate limit while the media itself downloads fine. When
+# that is the failure, the retry is far more likely to succeed without
+# subtitles, so they are dropped for this item's remaining attempts (both
+# here and, on the queue-level retry, via item.options["DISABLE_SUBS"]).
+_SUBS_RATE_LIMIT_RE = re.compile(
+    r"Unable to download (?:video |automatic |auto )?(?:subtitles?|captions?)\b"
+    r".*?HTTP Error 429",
+    re.IGNORECASE,
+)
+
+
+def is_subtitle_rate_limited(text: str) -> bool:
+    """True when a subtitle download failed with HTTP 429.
+
+    yt-dlp prints one line per failed subtitle language, e.g.
+    "ERROR: Unable to download video subtitles for 'en':
+    HTTP Error 429: Too Many Requests". Requiring both parts on the same
+    line keeps a 429 elsewhere in the output from disabling subtitles.
+    """
+    if not text:
+        return False
+    return any(
+        _SUBS_RATE_LIMIT_RE.search(line)
+        for line in str(text).splitlines()
+    )
+
+# yt-dlp's EJS challenge solver crashing on a new YouTube player build
+# (upstream yt-dlp#18123 / ejs#79, players 05a4ffc0, b485e332, b17b74e6,
+# 92eef845 of late Nov 2026). The exact TypeError text changes with the
+# player, so the generic wording carries the family; the marker below is
+# also embedded in the replacement error message so the queue-level retry
+# can recognise it from item.last_error alone.
+CHALLENGE_SOLVER_MARKER = "challenge solver"
+_SOLVER_CRASH_RE = re.compile(
+    r"(Error solving n challenge request"
+    r"|n challenge solving failed"
+    r"|addOnDisposeCallback is not a function)",
+    re.IGNORECASE,
+)
+# The crash alone is only a WARNING ("Some formats may be missing") when
+# other formats survive; it becomes fatal only when no usable format is
+# left to download.
+_FORMATS_LOST_RE = re.compile(
+    r"(Only images are available for download"
+    r"|Requested format is not available"
+    r"|[Nn]o video formats found)",
+)
+
+# Message shown (and stored as last_error) when the solver crash killed
+# the download. Actionable: the fix is a yt-dlp update, not another retry
+# of the identical command.
+CHALLENGE_SOLVER_FIX_MESSAGE = (
+    "YouTube's newest player JS crashes yt-dlp's challenge solver, so no "
+    "downloadable formats were left. This is a known yt-dlp bug, fixed in "
+    "yt-dlp 2026.11.23 -- update yt-dlp from Help > Check for Updates, "
+    "then retry this item."
+)
+
+
+def is_challenge_solver_failure(text: str) -> bool:
+    """True when the EJS challenge solver crashed and killed every format.
+
+    Matches either the raw yt-dlp output (solver-crash warning plus a
+    formats-lost error) or our own replacement message, so both the worker
+    and the queue-level retry can recognise the failure. Retrying the
+    identical command cannot succeed; the fix is a yt-dlp update.
+    """
+    if not text:
+        return False
+    text = str(text)
+    if CHALLENGE_SOLVER_MARKER in text and "yt-dlp bug" in text:
+        return True
+    return bool(_SOLVER_CRASH_RE.search(text) and _FORMATS_LOST_RE.search(text))
 
 # Sites that genuinely only serve usable streams over HLS can be opted into
 # per-domain. Never force YouTube into an HLS-only selector: its best stream
@@ -228,6 +308,12 @@ class DownloadWorker(BaseDownloadWorker):
 
         self._cmd: List[str] = []
         self._env: Dict[str, str] = {}
+        # The subtitle flags the built command actually carries; emptied when
+        # a rate-limited retry drops them.
+        self._applied_subs_flags: List[str] = []
+        # Our YouTube player_client extractor-args pair, when the built
+        # command carries one; emptied when a format-selection retry drops it.
+        self._applied_client_flags: List[str] = []
         # Rolling tail of yt-dlp output, kept for error condensing and retry
         # classification. Stored as chunks rather than one string: the previous
         # `(self._recent_output + text)[-8000:]` rebuilt an 8 KiB string on
@@ -853,6 +939,14 @@ class DownloadWorker(BaseDownloadWorker):
                 fetch_core._condense_error(self._recent_output)
                 or f"yt-dlp exited with code {code}"
             )
+            if is_challenge_solver_failure(self._recent_output):
+                message = CHALLENGE_SOLVER_FIX_MESSAGE
+                self.add_log(
+                    "\u2139\ufe0f The n-challenge solver crash is a yt-dlp bug "
+                    "(fixed in yt-dlp 2026.11.23), not a network problem -- "
+                    "this item will not be retried automatically.",
+                    AppStyles.INFO_COLOR,
+                )
         self.add_log(
             f"\u274c yt-dlp exited with code {code}.", AppStyles.ERROR_COLOR
         )
@@ -1186,6 +1280,11 @@ class DownloadWorker(BaseDownloadWorker):
         text = self._recent_output
         if not text or _FATAL_RE.search(text):
             return False
+        # A crashed challenge solver leaves no usable formats; retrying the
+        # identical command cannot fix it. The fix is a yt-dlp update, so
+        # the failure path reports that instead of burning all attempts.
+        if is_challenge_solver_failure(text):
+            return False
         return bool(_RETRYABLE_RE.search(text))
 
     def _schedule_retry(self, code: int) -> None:
@@ -1197,6 +1296,8 @@ class DownloadWorker(BaseDownloadWorker):
         """
         self._attempt += 1
         delay = min(30.0, 3.0 * self._attempt)
+        self._drop_subs_if_rate_limited()
+        self._drop_client_if_format_error()
         self.add_log(
             f"\u26a0\ufe0f Recoverable error (exit {code}); the request likely expired. "
             f"Retrying in {delay:.0f}s\u2026 "
@@ -1207,6 +1308,75 @@ class DownloadWorker(BaseDownloadWorker):
         self._start_log_timer()
         self._retry_timer.start(int(delay * 1000))
         self._cancel_poll.start()
+
+    def _drop_subs_if_rate_limited(self) -> None:
+        """Drop subtitles from the retry when they caused the rate limit.
+
+        Applies only to this worker's own remaining attempts. The queue-level
+        retry builds a fresh worker, so the controller sets the persistent
+        item option instead (see QueueController._apply_outcome).
+        """
+        s = self.settings
+        if not getattr(s, "WRITE_SUBS", False):
+            return
+        if getattr(s, "DISABLE_SUBS", False):
+            return
+        if not is_subtitle_rate_limited(self._recent_output):
+            return
+        # Splice out exactly the flags _build_command() contributed (a full
+        # rebuild would re-run side channels such as the YT Music
+        # flat-playlist probe). Followup commands inherit the stripped list.
+        setattr(s, "DISABLE_SUBS", True)
+        self._cmd = self._without_flags(self._cmd, self._applied_subs_flags)
+        self._main_cmd = list(self._cmd)
+        self._applied_subs_flags = []
+        self.add_log(
+            "\u2139\ufe0f Subtitles hit HTTP 429 (Too Many Requests) \u2014 "
+            "retrying this item without subtitles.",
+            AppStyles.INFO_COLOR,
+        )
+
+    def _drop_client_if_format_error(self) -> None:
+        """Drop our pinned player client from the retry when it yields no formats.
+
+        yt-dlp's current YouTube extractor serves several clients it used to
+        offer for manual selection (android, ios, ...) only behind PO tokens,
+        so a client pinned in Preferences can return zero usable formats --
+        "Requested format is not available" -- for every video while
+        yt-dlp's default client set works. Retrying the identical command
+        three times can never fix that; the pin goes and the default
+        clients take over. Mirrors the subtitle-429 handling above.
+        """
+        if not self._applied_client_flags:
+            return
+        if not fetch_core.is_format_selection_error(self._recent_output):
+            return
+        # Splice out exactly the pair _extra_and_client_flags contributed;
+        # followup attempts inherit the stripped list.
+        self._cmd = self._without_flags(self._cmd, self._applied_client_flags)
+        self._main_cmd = list(self._cmd)
+        self._applied_client_flags = []
+        # Keep the settings snapshot consistent in case anything rebuilds
+        # flags from it during the remaining attempts.
+        setattr(self.settings, "YOUTUBE_PLAYER_CLIENT", "auto")
+        self.add_log(
+            "\u2139\ufe0f The pinned YouTube player client returned no usable formats "
+            "\u2014 retrying with yt-dlp's default clients.",
+            AppStyles.INFO_COLOR,
+        )
+
+    @staticmethod
+    def _without_flags(cmd: List[str], flags: List[str]) -> List[str]:
+        """cmd minus one contiguous occurrence of `flags`."""
+        out = list(cmd or [])
+        n = len(flags or [])
+        if not n:
+            return out
+        for i in range(len(out) - n + 1):
+            if out[i : i + n] == flags:
+                del out[i : i + n]
+                break
+        return out
 
     # ------------------------------------------------------------------
     # Command construction
@@ -1285,7 +1455,10 @@ class DownloadWorker(BaseDownloadWorker):
             cmd += self._video_flags(format_code, url)
 
         cmd += self._postprocessing_flags()
-        cmd += self._subtitle_flags()
+        # Remember the exact contribution so a subtitle-429 retry can splice
+        # it back out without rebuilding (and re-probing) the whole command.
+        self._applied_subs_flags = self._subtitle_flags()
+        cmd += self._applied_subs_flags
         cmd += self._thumbnail_flags()
         cmd += self._runtime_flags()
 
@@ -1700,6 +1873,11 @@ class DownloadWorker(BaseDownloadWorker):
         s = self.settings
         if not getattr(s, "WRITE_SUBS", False):
             return []
+        # Set either by the worker itself (subtitle 429 during this run's
+        # retries) or by the controller (subtitle 429 on a previous,
+        # queue-level attempt of the same item).
+        if getattr(s, "DISABLE_SUBS", False):
+            return []
         flags = ["--write-subs"]
         if getattr(s, "SUB_LANGS", ""):
             flags += ["--sub-langs", s.SUB_LANGS]
@@ -1743,11 +1921,60 @@ class DownloadWorker(BaseDownloadWorker):
         user_set = any(
             "youtube" in tok.lower() and "player_client" in tok.lower() for tok in extra
         )
-        if player_client and player_client != "auto" and is_youtube_url(url) and not user_set:
-            flags += ["--extractor-args", f"youtube:player_client={player_client}"]
+        # DROP_PLAYER_CLIENT is set automatically when the pinned client
+        # produced no usable formats (see _drop_client_if_format_error and
+        # QueueController._apply_outcome); the queue-level retry builds a
+        # fresh worker, so the option rides the settings snapshot instead
+        # of the item payload.
+        dropped = bool(getattr(s, "DROP_PLAYER_CLIENT", False))
+        if (
+            player_client
+            and player_client != "auto"
+            and is_youtube_url(url)
+            and not user_set
+            and not dropped
+        ):
+            client_flags = ["--extractor-args", f"youtube:player_client={player_client}"]
+            self._applied_client_flags = client_flags
+            flags += client_flags
+        else:
+            self._applied_client_flags = []
 
+        # Curated pacing preset (Preferences › Advanced › Request pacing).
+        # Appended before the user's extra arguments so a flag typed there
+        # still overrides the preset -- yt-dlp keeps the last value.
+        pacing = str(getattr(s, "REQUEST_PACING", "off") or "off")
+        if pacing == "custom":
+            flags += self._custom_pacing_flags(s)
+        else:
+            flags += list(REQUEST_PACING_PRESETS.get(pacing, []))
         flags += extra
         return flags
+
+    @staticmethod
+    def _custom_pacing_flags(s: AppSettings) -> List[str]:
+        """Build the four pacing flags from the per-field Custom values.
+
+        Defaults mirror the "sleep" preset, so an untouched Custom selection
+        emits exactly the recommended spacing. A max interval below the base
+        interval is clamped up, since yt-dlp requires max >= base.
+        """
+
+        def value(key: str) -> float:
+            default = PACING_DEFAULTS[key]
+            return _as_float(getattr(s, key, default), default)
+
+        def fmt(x: float) -> str:
+            return str(int(x)) if float(x).is_integer() else f"{x:g}"
+
+        sleep_interval = value("SLEEP_INTERVAL")
+        max_interval = max(value("MAX_SLEEP_INTERVAL"), sleep_interval)
+        return [
+            "--sleep-subtitles", fmt(value("SLEEP_SUBTITLES")),
+            "--sleep-requests", fmt(value("SLEEP_REQUESTS")),
+            "--sleep-interval", fmt(sleep_interval),
+            "--max-sleep-interval", fmt(max_interval),
+        ]
 
     # ------------------------------------------------------------------
     # Post-download tidying

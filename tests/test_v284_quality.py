@@ -221,13 +221,13 @@ class DefensiveDataTests(unittest.TestCase):
 class ReleaseVersionTests(unittest.TestCase):
     def test_release_surfaces_are_consistent(self):
         root = Path(__file__).resolve().parents[1]
-        self.assertEqual(_version.__version__, "2.8.4")
+        self.assertEqual(_version.__version__, "2.8.5")
         import tomllib
-        self.assertEqual(tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"], "2.8.4.0")
+        self.assertEqual(tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"], "2.8.5.0")
         plist = plistlib.loads((root / "Info.plist").read_bytes())
-        self.assertEqual(plist["CFBundleVersion"], "2.8.4")
-        self.assertEqual(plist["CFBundleShortVersionString"], "2.8.4")
-        self.assertIn("filevers=(2, 8, 4, 0)", (root / "version_info.txt").read_text())
+        self.assertEqual(plist["CFBundleVersion"], "2.8.5")
+        self.assertEqual(plist["CFBundleShortVersionString"], "2.8.5")
+        self.assertIn("filevers=(2, 8, 5, 0)", (root / "version_info.txt").read_text())
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from collections import deque
 from typing import TYPE_CHECKING, Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import (
+    QEvent,
     QRect,
     QSettings,
     QSize,
@@ -88,6 +89,60 @@ log = logging.getLogger(__name__)
 _LOG_LEVELS = ("All", "Info", "Warning", "Error")
 
 _POST_ACTIONS = ("Keep", "Shutdown", "Sleep", "Restart", "Close")
+
+# The "Change recording type" dialog's natural size hint fit the preset
+# names and both explanation labels only tightly; ~30% more width keeps
+# every preset label ("Audio Playlist (MP3)", ...) on one line at the
+# default style metrics instead of a cramped, near-square box.
+_TYPE_DIALOG_WIDEN = 1.3
+
+
+def _change_type_dialog(
+    parent: Optional[QWidget],
+    count: int,
+    current_labels: str,
+    presets: Sequence[str],
+    current_text: str,
+) -> Tuple[QDialog, QComboBox]:
+    """Build the "Change recording type" dialog; the caller runs exec()."""
+    from ytget_gui.dialogs.common import combo, dialog_qss
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Change recording type")
+    dialog.setStyleSheet(dialog_qss())
+    dialog.setModal(True)
+    layout = QVBoxLayout(dialog)
+    layout.setContentsMargins(18, 18, 18, 14)
+    layout.setSpacing(10)
+
+    info = QLabel(
+        f"Apply a new recording type to {count} queued item(s).\n"
+        f"Current type(s): {short(current_labels, 80)}"
+    )
+    info.setWordWrap(True)
+    layout.addWidget(info)
+
+    box = combo(presets, accessible="Recording type")
+    if current_text in presets:
+        box.setCurrentText(current_text)
+    layout.addWidget(box)
+
+    note = QLabel(
+        "Changed items keep their position, details and options; the item "
+        "currently downloading is skipped. Completed items are reset to "
+        "Pending so the new type is downloaded. Sizes are refreshed."
+    )
+    note.setWordWrap(True)
+    note.setStyleSheet("color: rgba(255,255,255,140); font-size: 12px;")
+    layout.addWidget(note)
+
+    buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    buttons.accepted.connect(dialog.accept)
+    buttons.rejected.connect(dialog.reject)
+    layout.addWidget(buttons)
+
+    dialog.setMinimumWidth(int(dialog.sizeHint().width() * _TYPE_DIALOG_WIDEN))
+    return dialog, box
 
 # Total budget for closeEvent. Each shutdown step draws from the same deadline
 # instead of having its own timeout: the previous revision gave the thumbnail
@@ -423,10 +478,21 @@ class MainWindow(QMainWindow):
         self.queue_list.setDragDropMode(QListWidget.InternalMove)
         self.queue_list.setDefaultDropAction(Qt.MoveAction)
         self.queue_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+        # Cards are width-elided, so nothing legitimate ever needs horizontal
+        # scrolling; keeping the scrollbar off also guarantees a squeezed
+        # window can never push the row buttons out of reach.
+        self.queue_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.queue_list.setAccessibleName("Download queue")
         self.queue_list.model().rowsMoved.connect(self._on_rows_moved)
         self.queue_list.itemSelectionChanged.connect(self._on_selection_changed)
+        self.queue_list.viewport().installEventFilter(self)
         layout.addWidget(self.queue_list, 1)
+
+        # Coalesces viewport resize bursts into one pass over the row hints.
+        self._card_width_timer = QTimer(self)
+        self._card_width_timer.setSingleShot(True)
+        self._card_width_timer.setInterval(50)
+        self._card_width_timer.timeout.connect(self._sync_card_widths)
 
         self.bulk_bar = QFrame()
         self.bulk_bar.setObjectName("BulkBar")
@@ -442,6 +508,7 @@ class MainWindow(QMainWindow):
         bulk_layout.addStretch(1)
 
         for text, handler in (
+            ("TYPE", self._change_type_selected),
             ("REMOVE", self._remove_selected),
             ("TOP", lambda: self._move_selected(to_top=True)),
             ("BOTTOM", lambda: self._move_selected(to_top=False)),
@@ -555,6 +622,14 @@ class MainWindow(QMainWindow):
         self.post_action_box.setObjectName("PostActionBox")
         self.post_action_box.addItems(_POST_ACTIONS)
         self.post_action_box.setAccessibleName("Action when the queue finishes")
+        # Mirror the action restored from config, or the box stays on "Keep"
+        # while the menu bar and the tray show the persisted power action —
+        # and the queue then shuts the machine down "out of nowhere".
+        # Signals are blocked: _set_post_action would rewrite the config with
+        # the value it was just read from.
+        self.post_action_box.blockSignals(True)
+        self.post_action_box.setCurrentText(self._post_queue_action)
+        self.post_action_box.blockSignals(False)
         self.post_action_box.currentTextChanged.connect(self._set_post_action)
 
         self.path_button = QPushButton(str(self.settings.DOWNLOADS_DIR))
@@ -793,6 +868,18 @@ class MainWindow(QMainWindow):
 
         if Path(s.DENO_PATH).is_file():
             self.log(f"\U0001f527 deno: {s.DENO_PATH}")
+            from ytget_gui.workers import proc as _proc
+
+            deno_version = _proc.deno_version(s)
+            if deno_version is not None and deno_version < _proc.DENO_MIN_VERSION:
+                self.log(
+                    f"\u26a0\ufe0f Deno {'.'.join(map(str, deno_version))} is older than "
+                    f"the {'.'.join(map(str, _proc.DENO_MIN_VERSION))} recent yt-dlp "
+                    "releases need for YouTube's JS challenges. YouTube formats "
+                    "may go missing \u2014 update Deno via Help \u203a Check for Updates.",
+                    AppStyles.WARNING_COLOR,
+                    "Warning",
+                )
 
         from ytget_gui.workers.spotdl_worker import _find_spotdl
 
@@ -996,9 +1083,16 @@ class MainWindow(QMainWindow):
 
         title = str(data.get("title") or "")
         video_sizes = data.get("video_sizes") or {}
+        codec_sizes = data.get("codec_sizes") or {}
         audio_size = data.get("audio_size")
         duration = data.get("duration")
         is_playlist = bool(data.get("is_playlist"))
+
+        # The estimate follows the codec/container preference the download
+        # itself will use, so an AV1/VP9 choice no longer quotes the much
+        # larger AVC stream that happens to be the biggest at each height.
+        codec = str(getattr(self.settings, "VIDEO_CODEC", "auto") or "auto")
+        container = str(getattr(self.settings, "VIDEO_FORMAT", ".mkv") or ".mkv")
 
         # One fetch per URL feeds every queued format of that URL.
         for item in items:
@@ -1012,7 +1106,12 @@ class MainWindow(QMainWindow):
                 None
                 if is_playlist
                 else formats.estimate_download_size(
-                    video_sizes, audio_size, item.format_code
+                    video_sizes,
+                    audio_size,
+                    item.format_code,
+                    codec_sizes=codec_sizes,
+                    codec=codec,
+                    container=container,
                 )
             )
             if title:
@@ -1022,6 +1121,28 @@ class MainWindow(QMainWindow):
                 item.metadata_retry_at = 0.0
                 item.last_error = ""
             self._on_item_changed(item.key)
+
+        # The strict fetch found no usable formats and only succeeded after
+        # relaxing one of our own overrides. Persist the same relaxation on
+        # the items so their downloads do not walk into the same wall.
+        fallback = str(data.get("format_fallback") or "")
+        if fallback:
+            if fallback == "player_client":
+                for item in items:
+                    item.options["DROP_PLAYER_CLIENT"] = True
+                self.log(
+                    "\u2139\ufe0f The pinned YouTube player client returned no usable "
+                    "formats \u2014 these items will download with yt-dlp's default "
+                    "clients.",
+                    AppStyles.INFO_COLOR,
+                )
+            else:
+                self.log(
+                    "\u2139\ufe0f Details needed an unsigned fetch (the signed-in client "
+                    "set exposed no usable formats); the download may need the "
+                    "same fallback if it fails.",
+                    AppStyles.INFO_COLOR,
+                )
         self.controller.save_soon()
         self.log(f"\u2705 {short(items[0].display_title, 60)}")
 
@@ -1214,7 +1335,13 @@ class MainWindow(QMainWindow):
         card.set_context_actions(lambda k=item.key: self._context_actions_for(k))
 
         list_item = QListWidgetItem()
-        list_item.setSizeHint(card.sizeHint())
+        hint = card.sizeHint()
+        # The card elides its text to whatever width it gets, so the row hint
+        # is pinned to the viewport width: the previous revision took the
+        # layout's natural width, which a long title/URL pushed far past the
+        # window and gave the queue a horizontal scrollbar.
+        hint.setWidth(self._card_width())
+        list_item.setSizeHint(hint)
         list_item.setData(Qt.UserRole, item.key)
         if row is None or row >= self.queue_list.count():
             self.queue_list.addItem(list_item)
@@ -1243,6 +1370,7 @@ class MainWindow(QMainWindow):
                 ("Copy file path", lambda k=key: self._copy_output_path(k)),
             ]
         actions += [
+            ("Change recording type\u2026", lambda k=key: self._change_type_for([k])),
             ("Retry", lambda k=key: self._retry_key(k)),
             ("Remove", lambda k=key: self._remove_key(k)),
         ]
@@ -1327,6 +1455,98 @@ class MainWindow(QMainWindow):
     # ==================================================================
     # Queue edits
     # ==================================================================
+
+    def eventFilter(self, obj, event) -> bool:
+        # A viewport resize means every row hint must be re-pinned to the new
+        # width, otherwise shrinking the window would leave the content wider
+        # than the (now hidden) horizontal scrollbar could reach.
+        if obj is self.queue_list.viewport() and event.type() == QEvent.Resize:
+            self._card_width_timer.start()
+        return super().eventFilter(obj, event)
+
+    def _card_width(self) -> int:
+        width = self.queue_list.viewport().width()
+        # Before the first layout the viewport can still be at its default
+        # size; the resize pass corrects it as soon as the window shows.
+        return width if width > 0 else 480
+
+    def _sync_card_widths(self) -> None:
+        width = self._card_width()
+        for row in range(self.queue_list.count()):
+            list_item = self.queue_list.item(row)
+            hint = list_item.sizeHint()
+            if hint.width() != width:
+                hint.setWidth(width)
+                list_item.setSizeHint(hint)
+
+    def _change_type_selected(self) -> None:
+        keys = self._selected_keys()
+        if keys:
+            self._change_type_for(keys)
+
+    def _change_type_for(self, keys: Sequence[str]) -> None:
+        """Switch one or more queued items to a different recording type.
+
+        Replaces the old workaround (copy the URL, re-add it with the right
+        type, delete the wrong row) with one dialog over the selection.
+        """
+        keys = [k for k in dict.fromkeys(keys) if k]
+        labels = [i.format_label or i.format_code for i in (self.model.get(k) for k in keys) if i is not None]
+        if not labels:
+            return
+        presets = list(self.settings.RESOLUTIONS.keys())
+        if not presets:
+            return
+
+        current = " \u00b7 ".join(dict.fromkeys(labels))
+        dialog, box = _change_type_dialog(
+            self, len(labels), current, presets, self.format_box.currentText()
+        )
+
+        if not dialog.exec():
+            return
+
+        label = box.currentText()
+        code = self.settings.RESOLUTIONS.get(label, "best")
+
+        # Item keys change with the format, so the affected URLs are
+        # collected up front for the metadata refresh afterwards.
+        urls = list(
+            dict.fromkeys(
+                item.url
+                for item in (self.model.get(k) for k in keys)
+                if item is not None
+            )
+        )
+        changed = self.controller.change_formats(list(keys), code, label)
+        if changed:
+            self.log(
+                f"\U0001f39b\ufe0f Changed recording type of {changed} item(s) to "
+                f"{short(label, 40)}."
+            )
+            skipped = len(keys) - changed
+            if skipped > 0:
+                self.log(
+                    f"\u2139\ufe0f {skipped} item(s) skipped: already queued in that "
+                    "type, unchanged, or currently downloading.",
+                    AppStyles.INFO_COLOR,
+                )
+            # The size estimate belongs to the old selector; one refresh per
+            # affected URL recomputes it for every queued format.
+            refetch = [
+                url
+                for url in urls
+                if url not in self._pending_fetch and self.model.contains_url(url)
+            ]
+            if refetch:
+                self._pending_fetch.update(refetch)
+                self.request_fetch.emit(refetch)
+        else:
+            self.log(
+                "No items changed: they are already queued in that type, "
+                "unchanged, or currently downloading.",
+                AppStyles.INFO_COLOR,
+            )
 
     def _remove_key(self, key: str) -> None:
         self._drop_keys([key])

@@ -13,15 +13,69 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 log = logging.getLogger(__name__)
 
 IS_WINDOWS = sys.platform == "win32"
+
+# yt-dlp 2026.10.26+ rejects Deno below 2.3.0 as a JS challenge runtime and
+# then silently falls back to YouTube's JS-less clients, which can expose no
+# downloadable formats at all ("Requested format is not available"). Deno is
+# only pinned/forwarded when it clears this floor.
+DENO_MIN_VERSION = (2, 3, 0)
+_DENO_VERSION_RE = re.compile(r"deno\s+(\d+)\.(\d+)\.(\d+)")
+
+
+@lru_cache(maxsize=8)
+def _deno_version_cached(
+    path_str: str, mtime_ns: int, size: int
+) -> Optional[Tuple[int, int, int]]:
+    """Probe `deno --version` once per binary state.
+
+    Keyed on mtime/size so an in-session update (the binary is replaced by
+    the update manager) re-probes instead of serving a stale verdict.
+    """
+    try:
+        result = run([path_str, "--version"], timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = _DENO_VERSION_RE.search(result.stdout or "")
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def deno_version(settings) -> Optional[Tuple[int, int, int]]:
+    """Version tuple of the configured Deno, or None when unprovable.
+
+    Callers treat None as "keep the old behaviour": a missing probe must not
+    strip a working runtime, only a proven-too-old one.
+    """
+    raw = getattr(settings, "DENO_PATH", None)
+    if not raw:
+        return None
+    try:
+        path = Path(raw)
+        if not path.is_file():
+            return None
+        stat = path.stat()
+        return _deno_version_cached(str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return None
+
+
+def deno_supported_for_ytdlp(settings) -> bool:
+    """True when Deno should be pinned for yt-dlp's JS challenges."""
+    version = deno_version(settings)
+    # Unknown version: assume fine rather than silently dropping the runtime.
+    return version is None or version >= DENO_MIN_VERSION
 
 
 def hidden_console_kwargs() -> Dict[str, Any]:
@@ -217,13 +271,19 @@ def tool_env(settings, *, extra_dirs: Iterable[Any] = ()) -> Dict[str, str]:
 
     for attr in ("DENO_PATH", "FFMPEG_PATH"):
         value = getattr(settings, attr, None)
-        if value:
-            try:
-                path = Path(value)
-                if path.is_file():
-                    directories.append(path.parent)
-            except OSError:
-                pass
+        if not value:
+            continue
+        if attr == "DENO_PATH" and not deno_supported_for_ytdlp(settings):
+            # Keep a too-old Deno off PATH so yt-dlp's own runtime discovery
+            # can find a usable one (a newer system Deno, Node >= 22, ...)
+            # instead of latching onto ours and degrading YouTube extraction.
+            continue
+        try:
+            path = Path(value)
+            if path.is_file():
+                directories.append(path.parent)
+        except OSError:
+            pass
 
     # PhantomJS is only added when explicitly requested: it is legacy, and
     # putting it on PATH unconditionally lets yt-dlp pick it over Deno.

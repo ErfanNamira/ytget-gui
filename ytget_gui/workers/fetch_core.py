@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from ytget_gui.utils.cli_args import split_arguments, parse_ytdlp_args  # noqa: F401 - re-exported
 import subprocess
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -48,6 +49,14 @@ class Metadata:
     # here and combined by formats.estimate_download_size().
     video_sizes: Optional[Dict[int, int]] = None
     audio_size: Optional[int] = None
+    # Same numbers, additionally split per video codec family (av01/vp9/
+    # avc) so a codec preference can be reflected in the estimate instead
+    # of always quoting the largest (usually AVC) stream at each height.
+    codec_sizes: Optional[Dict[str, Dict[int, int]]] = None
+    # Non-empty when this metadata only arrived after relaxing one of our
+    # own yt-dlp overrides (pinned player client, cookies) because the
+    # strict run returned no usable formats.
+    format_fallback: str = ""
 
 
 @dataclass(frozen=True)
@@ -163,6 +172,25 @@ def maybe_refresh_cookies_interruptible(
     return result[0], result[1], False
 
 
+# yt-dlp 2026.10.26+ can end a metadata fetch with zero usable formats --
+# reported as "Requested format is not available" (or the older image-only
+# wording). That is a client/auth configuration problem (a player_client the
+# current extractor can no longer serve without a PO token, or a signed-in
+# session whose default clients are all token-gated), not a rate limit, so
+# the fetch relaxes its own overrides instead of waiting out the backoff.
+_FORMAT_SELECTION_ERROR_RE = re.compile(
+    r"(Requested format is not available"
+    r"|Only images are available for download"
+    r"|no video formats)",
+    re.IGNORECASE,
+)
+
+
+def is_format_selection_error(text: str) -> bool:
+    """True when yt-dlp failed because no usable format matched."""
+    return bool(_FORMAT_SELECTION_ERROR_RE.search(text or ""))
+
+
 # --------------------------------------------------------------------------
 # Command construction
 # --------------------------------------------------------------------------
@@ -179,6 +207,8 @@ def build_command(
     cookies_from_browser: str = "",
     cookies_profile: str = "",
     flat_playlist: bool = True,
+    ignore_player_client: bool = False,
+    ignore_cookies: bool = False,
 ) -> List[str]:
     cmd: List[str] = [
         str(yt_dlp_path),
@@ -187,7 +217,10 @@ def build_command(
         "--skip-download",
         "--dump-single-json",
         "--ignore-errors",
-        "--no-warnings",
+        # Warnings stay enabled: the reason a format selection fails (client
+        # skipped, PO token required, JS runtime missing) is only printed as
+        # a warning, and the condensed error the queue shows is the user's
+        # only clue. On success stderr is never looked at anyway.
         "--no-progress",
         "--socket-timeout", str(SOCKET_TIMEOUT_SECS),
     ]
@@ -202,10 +235,15 @@ def build_command(
     # Explicit per-call browser override wins; otherwise match the download
     # worker's cookie-file-first policy. Different auth can expose different
     # format ladders and made queue details disagree with actual downloads.
-    browser = cookies_from_browser or str(
+    # ignore_cookies drops auth entirely for the fallback attempt: yt-dlp
+    # 2026.10.26+ serves signed-in sessions a client set whose formats can
+    # all be PO-token-gated, while the anonymous set works.
+    browser = "" if ignore_cookies else cookies_from_browser or str(
         getattr(settings, "COOKIES_FROM_BROWSER", "") or ""
     )
-    if cookies_from_browser:
+    if ignore_cookies:
+        pass
+    elif cookies_from_browser:
         spec = f"{browser}:{cookies_profile}" if cookies_profile else browser
         cmd.extend(["--cookies-from-browser", spec])
     elif is_usable_file(cookies_path):
@@ -220,7 +258,12 @@ def build_command(
         cmd.extend(["--proxy", proxy_url])
 
     player_client = str(getattr(settings, "YOUTUBE_PLAYER_CLIENT", "auto") or "auto")
-    if player_client and player_client != "auto" and is_youtube_url(url):
+    if (
+        not ignore_player_client
+        and player_client
+        and player_client != "auto"
+        and is_youtube_url(url)
+    ):
         cmd.extend(["--extractor-args", f"youtube:player_client={player_client}"])
 
     # Download-only passthrough flags must never execute while merely adding a URL.
@@ -237,6 +280,13 @@ def runtime_flags(settings) -> List[str]:
     """Use the same explicit JS runtime for format discovery and downloads."""
     deno = getattr(settings, "DENO_PATH", None)
     if deno and Path(deno).is_file():
+        # Only pin a Deno that current yt-dlp accepts (>= 2.3.0). An older one
+        # is rejected by yt-dlp's own version check, which silently degrades
+        # YouTube extraction to JS-less clients that can expose no formats
+        # at all. Leaving the flag off lets yt-dlp auto-detect a usable
+        # runtime (a newer system Deno, Node, ...) instead.
+        if not proc.deno_supported_for_ytdlp(settings):
+            return []
         return ["--js-runtimes", f"deno:{deno}"]
     return []
 
@@ -352,6 +402,11 @@ def metadata_payload(md: "Metadata") -> Dict[str, Any]:
         "entry_count": md.entry_count,
         "video_sizes": dict(md.video_sizes or {}),
         "audio_size": md.audio_size,
+        "codec_sizes": {
+            family: dict(ladder)
+            for family, ladder in (md.codec_sizes or {}).items()
+        },
+        "format_fallback": md.format_fallback or "",
     }
 
 
@@ -370,19 +425,41 @@ def _size_of(fmt: Dict[str, Any]) -> Optional[int]:
     return None
 
 
-def parse_sizes(info: Dict[str, Any]) -> Tuple[Dict[int, int], Optional[int]]:
-    """Map video height -> bytes, and the best audio-only size.
+def codec_family(vcodec: Any) -> str:
+    """av01 / vp9 / avc for known families, '' for anything else.
+
+    yt-dlp reports vcodec as e.g. "av01.0.08M.08", "vp09.00.50.08" or
+    "avc1.640028"; the prefix decides the family. Unknown codecs still
+    count toward the overall per-height sizes, just not toward a specific
+    family estimate.
+    """
+    value = str(vcodec or "").lower()
+    if value.startswith("av01"):
+        return "av01"
+    if value.startswith(("vp09", "vp9")):
+        return "vp9"
+    if value.startswith(("avc1", "avc3", "h264")):
+        return "avc"
+    return ""
+
+
+def parse_sizes(
+    info: Dict[str, Any],
+) -> Tuple[Dict[int, int], Optional[int], Dict[str, Dict[int, int]]]:
+    """Map video height -> bytes, the best audio-only size, and per-codec
+    height -> bytes ladders.
 
     Progressive formats (audio muxed into the video stream) are recorded
     with an audio size of None so the caller does not double-count them.
     """
     formats = info.get("formats")
     if not isinstance(formats, list):
-        return {}, None
+        return {}, None, {}
     duration = info.get("duration")
 
     video_sizes: Dict[int, int] = {}
     audio_size: Optional[int] = None
+    codec_sizes: Dict[str, Dict[int, int]] = {}
     for fmt in formats:
         if not isinstance(fmt, dict):
             continue
@@ -400,10 +477,15 @@ def parse_sizes(info: Dict[str, Any]) -> Tuple[Dict[int, int], Optional[int]]:
             # is the largest one.
             if size > video_sizes.get(key, 0):
                 video_sizes[key] = size
+            family = codec_family(fmt.get("vcodec"))
+            if family:
+                ladder = codec_sizes.setdefault(family, {})
+                if size > ladder.get(key, 0):
+                    ladder[key] = size
         elif has_audio and not has_video:
             if audio_size is None or size > audio_size:
                 audio_size = size
-    return video_sizes, audio_size
+    return video_sizes, audio_size, codec_sizes
 
 
 def parse_metadata(stdout_text: str) -> Metadata:
@@ -468,7 +550,10 @@ def parse_metadata(stdout_text: str) -> Metadata:
     # Playlists are deliberately skipped: --flat-playlist carries no
     # per-entry formats, and summing a whole playlist would need one
     # yt-dlp call per entry.
-    video_sizes, audio_size = ({}, None) if is_playlist else parse_sizes(head)
+    if is_playlist:
+        video_sizes, audio_size, codec_sizes = {}, None, {}
+    else:
+        video_sizes, audio_size, codec_sizes = parse_sizes(head)
     return Metadata(
         title=title,
         video_id=str(head.get("id") or ""),
@@ -479,6 +564,7 @@ def parse_metadata(stdout_text: str) -> Metadata:
         entry_count=entry_count,
         video_sizes=video_sizes or None,
         audio_size=audio_size,
+        codec_sizes=codec_sizes or None,
     )
 
 
@@ -545,13 +631,18 @@ def fetch_metadata(
         cookies_profile=cookies_profile,
     )
 
-    try:
-        returncode, stdout, stderr = run_yt_dlp(
-            cmd,
-            build_env(settings),
+    env = build_env(settings)
+
+    def _run(command: List[str]) -> Tuple[int, str, str]:
+        return run_yt_dlp(
+            command,
+            env,
             timeout=timeout,
             on_process_started=on_process_started,
         )
+
+    try:
+        returncode, stdout, stderr = _run(cmd)
     except subprocess.TimeoutExpired:
         return FetchResult(
             None, f"Timed out after {timeout}s fetching metadata", cookies_path, warning
@@ -580,13 +671,113 @@ def fetch_metadata(
                 return FetchResult(None, str(exc), cookies_path, warning)
 
     message = (stderr or "").strip() or f"yt-dlp exited with code {returncode}"
+
+    # Format-selection failures are configuration problems (see
+    # is_format_selection_error), not rate limits: relax our own overrides
+    # right away instead of burning the multi-minute retry backoff on a
+    # command that can never succeed as built. One attempt per relaxation,
+    # only when the strict command actually carried the override.
+    fallbacks: List[Tuple[str, List[str]]] = []
+    if is_format_selection_error(message):
+        had_client = "--extractor-args" in cmd
+        had_cookies = "--cookies" in cmd or "--cookies-from-browser" in cmd
+        if had_client:
+            fallbacks.append(
+                (
+                    "player_client",
+                    build_command(
+                        url, yt_dlp_path, ffmpeg_dir, cookies_path, proxy_url,
+                        settings,
+                        cookies_from_browser=cookies_from_browser,
+                        cookies_profile=cookies_profile,
+                        ignore_player_client=True,
+                    ),
+                )
+            )
+        if had_cookies:
+            fallbacks.append(
+                (
+                    "cookies",
+                    build_command(
+                        url, yt_dlp_path, ffmpeg_dir, cookies_path, proxy_url,
+                        settings,
+                        cookies_from_browser="",
+                        cookies_profile="",
+                        ignore_player_client=True,
+                        ignore_cookies=True,
+                    ),
+                )
+            )
+
+    for relaxed_as, fallback_cmd in fallbacks:
+        if cancel_event is not None and cancel_event.is_set():
+            return FetchResult(None, CANCELLED, cookies_path, warning)
+        try:
+            rc2, out2, err2 = _run(fallback_cmd)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            # The strict error is still the interesting one; the fallback
+            # crash is logged for diagnostics only.
+            log.debug("Fallback fetch (%s) crashed: %s", relaxed_as, exc)
+            break
+        if out2.strip():
+            try:
+                md = parse_metadata(out2)
+                log.info(
+                    "Metadata for %s recovered after dropping %s", url, relaxed_as
+                )
+                return FetchResult(
+                    dataclass_replace(md, format_fallback=relaxed_as),
+                    None,
+                    cookies_path,
+                    warning,
+                )
+            except MetadataError:
+                pass
+        # Keep the *first* (strict) error for the user; the fallback's own
+        # output only matters when it succeeds.
+        log.debug(
+            "Fallback fetch (%s) for %s also failed: %s",
+            relaxed_as,
+            url,
+            (err2 or "").strip()[:200],
+        )
+
     return FetchResult(None, _condense_error(message), cookies_path, warning)
 
 
+_DIAGNOSTIC_WARNING_RE = re.compile(
+    r"(player client|client\b.*(?:skip|support|token)"
+    r"|PO Token|JS runtime|challenge|formats?)",
+    re.IGNORECASE,
+)
+
+
 def _condense_error(text: str) -> str:
-    """Reduce a multi-line yt-dlp stderr dump to the useful line."""
+    """Reduce a multi-line yt-dlp stderr dump to the useful line(s).
+
+    The ERROR line is the headline; up to two warning lines that explain
+    *why* (a client was skipped, a PO token was missing, no JS runtime)
+    follow it, because warnings are the only place yt-dlp prints those
+    reasons and the queue log truncates everything past ~90 characters
+    anyway.
+    """
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+    headline = ""
     for line in lines:
         if "ERROR:" in line:
-            return line.split("ERROR:", 1)[1].strip() or line
-    return lines[-1] if lines else text
+            headline = line.split("ERROR:", 1)[1].strip() or line
+            break
+    if not headline:
+        headline = lines[-1] if lines else text
+
+    clues: List[str] = []
+    for line in lines:
+        if line.startswith("WARNING:") and _DIAGNOSTIC_WARNING_RE.search(line):
+            clue = line.split("WARNING:", 1)[1].strip()
+            if clue and clue not in clues:
+                clues.append(clue)
+        if len(clues) >= 2:
+            break
+    if clues:
+        return headline + " (" + "; ".join(clues) + ")"
+    return headline

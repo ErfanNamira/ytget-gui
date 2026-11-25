@@ -103,16 +103,19 @@ class ParseSizesTests(unittest.TestCase):
     }
 
     def test_largest_per_height_and_best_audio(self) -> None:
-        video, audio = parse_sizes(self.INFO)
+        video, audio, codec = parse_sizes(self.INFO)
         self.assertEqual(video, {1080: 1500, 720: 600})
         self.assertEqual(audio, 200)
+        self.assertEqual(
+            codec, {"avc": {1080: 1000, 720: 600}, "vp9": {1080: 1500}}
+        )
 
     def test_missing_formats(self) -> None:
-        self.assertEqual(parse_sizes({}), ({}, None))
-        self.assertEqual(parse_sizes({"formats": "nope"}), ({}, None))
+        self.assertEqual(parse_sizes({}), ({}, None, {}))
+        self.assertEqual(parse_sizes({"formats": "nope"}), ({}, None, {}))
 
     def test_bitrate_fallback_uses_duration(self) -> None:
-        video, _ = parse_sizes(
+        video, _, _ = parse_sizes(
             {
                 "duration": 10,
                 "formats": [{"height": 480, "vcodec": "avc1", "acodec": "none", "tbr": 800}],
@@ -121,10 +124,21 @@ class ParseSizesTests(unittest.TestCase):
         self.assertEqual(video, {480: 800 * 125 * 10})
 
     def test_bitrate_without_duration_is_skipped(self) -> None:
-        video, _ = parse_sizes(
+        video, _, _ = parse_sizes(
             {"formats": [{"height": 480, "vcodec": "avc1", "acodec": "none", "tbr": 800}]}
         )
         self.assertEqual(video, {})
+
+    def test_codec_family_prefixes(self) -> None:
+        from ytget_gui.workers.fetch_core import codec_family
+
+        self.assertEqual(codec_family("av01.0.08M.08"), "av01")
+        self.assertEqual(codec_family("VP09.00.50.08"), "vp9")
+        self.assertEqual(codec_family("vp9"), "vp9")
+        self.assertEqual(codec_family("avc1.640028"), "avc")
+        self.assertEqual(codec_family("h264"), "avc")
+        self.assertEqual(codec_family("theora"), "")
+        self.assertEqual(codec_family(None), "")
 
 
 class EstimateSizeTests(unittest.TestCase):
@@ -151,6 +165,61 @@ class EstimateSizeTests(unittest.TestCase):
     def test_everything_above_cap_has_no_matching_estimate(self) -> None:
         total = estimate_download_size({2160: 4000}, 100, "bv*[height<=720]+ba/b")
         self.assertIsNone(total)
+
+    def test_preferred_codec_uses_its_own_ladder(self) -> None:
+        # AVC is the biggest stream at 1080; an AV1 preference must quote the
+        # AV1 stream instead of the default-codec one.
+        codec_sizes = {
+            "av01": {1080: 400},
+            "vp9": {1080: 700},
+            "avc": {1080: 1500},
+        }
+        total = estimate_download_size(
+            {1080: 1500}, 100, "bv*[height<=1080]+ba/b",
+            codec_sizes=codec_sizes, codec="av1",
+        )
+        self.assertEqual(total, 400 + 100)
+
+    def test_preferred_codec_falls_back_when_family_missing(self) -> None:
+        total = estimate_download_size(
+            {1080: 1500}, 100, "bv*[height<=1080]+ba/b",
+            codec_sizes={"avc": {1080: 1500}}, codec="av1",
+        )
+        self.assertEqual(total, 1500 + 100)
+
+    def test_h264_with_webm_container_acts_as_auto(self) -> None:
+        codec_sizes = {"avc": {1080: 1500}}
+        total = estimate_download_size(
+            {1080: 1500}, 100, "bv*[height<=1080]+ba/b",
+            codec_sizes=codec_sizes, codec="h264", container=".webm",
+        )
+        self.assertEqual(total, 1500 + 100)
+
+    def test_webm_builtin_uses_av1_vp9_only(self) -> None:
+        from ytget_gui.formats import video_chain
+
+        codec_sizes = {
+            "av01": {1080: 400},
+            "vp9": {1080: 700},
+            "avc": {1080: 1500},
+        }
+        total = estimate_download_size(
+            {1080: 1500}, 100, video_chain(1080),
+            codec_sizes=codec_sizes, codec="auto", container="webm",
+        )
+        self.assertEqual(total, 700 + 100)
+
+    def test_webm_custom_selector_keeps_all_codecs(self) -> None:
+        codec_sizes = {
+            "av01": {1080: 400},
+            "vp9": {1080: 700},
+            "avc": {1080: 1500},
+        }
+        total = estimate_download_size(
+            {1080: 1500}, 100, "137+251",
+            codec_sizes=codec_sizes, codec="auto", container="webm",
+        )
+        self.assertEqual(total, 1500 + 100)
 
 
 if __name__ == "__main__":

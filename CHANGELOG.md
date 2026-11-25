@@ -1,3 +1,164 @@
+### v 2.8.5
+
+A queue-management, reliability and compatibility release. Recording
+types can now be changed on queued items in place, queue cards show the
+size for the codec you actually selected, long titles can no longer break
+the queue layout, and subtitle downloads that trip HTTP 429 are skipped on
+retries. It also fixes every known way the yt-dlp 2026.10.26+ YouTube
+extractor could fail with "Requested format is not available", and gives
+the recommended sleep pacing its own section in Advanced.
+
+#### Queue management
+
+- **Change the recording type of queued items (new).** Select one or more
+  rows and use the bulk bar's TYPE button (or right-click → "Change
+  recording type…") to switch them to any preset. Items keep their
+  position, details, thumbnail and per-item options; only the selector
+  moves. This replaces the old workaround of copying the URL, re-adding it
+  with the correct type and deleting the wrong row. The item currently
+  downloading is skipped, duplicates are refused, completed items are reset
+  to Pending so the new type downloads, and the affected items' size
+  estimates are refreshed.
+- **The change-type dialog is ~30% wider.** The preset names ("Audio
+  Playlist (MP3)", …) and both explanation labels previously squeezed
+  into the dialog's natural size hint; the extra width keeps every preset
+  label on one line at the default style metrics instead of a cramped,
+  near-square box.
+
+#### Accurate sizes
+
+- **Queue card size now follows the chosen codec.** Metadata parsing keeps
+  per-codec size ladders (AV1/VP9/AVC) alongside the overall ones, and the
+  estimate uses the family the download's format sort actually prefers.
+  Previously every card quoted the largest stream at the target height --
+  usually AVC -- so an AV1 or VP9 preference showed a size far larger than
+  what downloaded. WebM is handled too: H.264-in-WebM falls back to Auto
+  and built-in WebM chains quote AV1/VP9 only. When the preferred codec has
+  nothing under the cap, the estimate falls back to the all-codec ladder,
+  matching the selector's own fallback.
+
+#### Queue layout
+
+- **Long titles no longer widen the queue past the window.** A long (or
+  unbroken) title, URL or error string made the card report its full
+  natural width, which gave the queue a horizontal scrollbar and pushed the
+  action buttons out of view; on a small screen the list became unusable.
+  Cards now render the title as a single elided line (tooltip keeps the
+  full text), report bounded size hints, pin row widths to the viewport and
+  update them when the window resizes. The horizontal scrollbar is off by
+  design.
+
+#### Rate-limited subtitles
+
+- **HTTP 429 on subtitles disables them for that item's retries.** Subtitle
+  downloads are extra requests per item and are usually what trips
+  YouTube's rate limit while the media itself downloads fine. When the
+  failure is "Unable to download (video) subtitles/captions … HTTP Error
+  429", the worker's remaining in-process attempts drop the subtitle flags
+  (spliced out of the built command, no rebuild) and the queue-level retry
+  persists a per-item `DISABLE_SUBS` override so the fresh worker starts
+  without them. A 429 elsewhere in the output does not touch subtitles, and
+  other subtitle errors (e.g. 404) are unaffected.
+
+#### Request pacing (preset or custom)
+
+- **Request pacing now has its own card in Advanced, with a Custom option.**
+  The recommended anti-429 spacing (`--sleep-subtitles 5 --sleep-requests
+  0.75 --sleep-interval 10 --max-sleep-interval 20`) previously had to be
+  typed into the Extra arguments field and was lost whenever that field
+  was cleared or a config rebuilt; it is now a preset combo in a separate
+  part under the same tab. One click applies the flags to every download
+  command, the choice survives edits to the free-text field, and the same
+  flags typed in Extra arguments still take precedence because the preset
+  is appended before them (yt-dlp keeps the last value). Off by default:
+  pacing slows large queues down.
+- **Custom spacing is dialable per field.** Picking **Custom** reveals four
+  spin boxes — subtitle sleep, request sleep, download interval and max
+  interval — that start from the Sleep recipe's values, so a fresh Custom
+  selection emits exactly the recommended spacing until you change one.
+  Values are sanitised on load (junk falls back to the defaults, ranges are
+  clamped) and a max interval below the base interval is repaired to match
+  it, since yt-dlp requires max >= base.
+
+#### yt-dlp 2026.10.26+ compatibility
+
+Updating yt-dlp to a current release made every YouTube item fail at the
+details stage with "Requested format is not available" even though
+`yt-dlp -F` listed the usual formats. Three separate defences now cover
+every known way that happens.
+
+##### Deno runtime gate
+
+- **A too-old bundled Deno is no longer forced onto yt-dlp.** yt-dlp
+  2026.10.26+ rejects Deno below 2.3.0 as a JS challenge runtime and then
+  silently falls back to YouTube's JS-less clients, which can expose no
+  downloadable formats at all. YTGet now probes the Deno version (cached
+  per binary state) and only pins `--js-runtimes deno:<path>` — and only
+  puts its bin directory on PATH — when the binary clears the 2.3.0
+  floor; otherwise yt-dlp's own runtime discovery (a newer system Deno,
+  Node, …) is left free to find something usable. A startup banner warns
+  when the bundled Deno is below the minimum, pointing at Help › Check
+  for Updates.
+
+##### Format-selection fallbacks
+
+- **Metadata fetch recovers instead of retrying a doomed command.** When
+  yt-dlp reports that no usable format matched, the fetch immediately
+  retries without the pinned YouTube player client (and, if needed, once
+  more unsigned) instead of burning the multi-minute retry backoff on a
+  command that can never succeed. Items whose details only resolved via
+  the fallback carry a per-item `DROP_PLAYER_CLIENT` option so their
+  downloads start with yt-dlp's default clients.
+- **Download retries drop the pinned client too.** An in-process retry
+  and a queue-level retry of a "Requested format is not available"
+  failure splice our `--extractor-args youtube:player_client=…` pair out
+  of the built command (mirroring the subtitle-429 handling above),
+  because re-running the identical command can only fail identically.
+- **The reason a fetch failed is now visible.** Warnings are no longer
+  suppressed for the details fetch, and the condensed queue-log error
+  keeps the yt-dlp warning lines that explain *why* formats went missing
+  (client skipped, PO token required, no JS runtime) next to the ERROR
+  line.
+
+##### Challenge-solver crash (yt-dlp #18123)
+
+- **The EJS solver crash on YouTube's late-Nov-2026 players (05a4ffc0,
+  b485e332, b17b74e6, 92eef845) is detected and reported.** The crash —
+  `Error solving n challenge request … TypeError: a.addOnDisposeCallback
+  is not a function` — strips every downloadable format ("Only images are
+  available"), which used to be mis-diagnosed as "the request likely
+  expired" and retried three times per item plus queue-level requeues,
+  always failing identically. It is a yt-dlp bug fixed in 2026.11.23, not
+  a network problem: the worker now skips its retries for it, the item's
+  error message says to update yt-dlp from Help › Check for Updates, and
+  the queue fails the item once instead of burning doomed attempts. A
+  solver warning whose formats still download is unaffected.
+
+##### Preferences
+
+- **Player-client list aligned with current yt-dlp.** The android and ios
+  entries were removed: every yt-dlp since 2025 serves their formats only
+  behind a GVS PO token, so pinning either failed every download with
+  "Requested format is not available". tv_samsung (part of the current
+  anonymous default set) was added. Stored selections that are no longer
+  offered are normalised back to Auto on load, which silently repairs
+  configurations saved against the old list.
+
+#### Tests and packaging
+
+- New `tests/test_v285_release.py`: codec-aware estimates, per-codec
+  parsing, in-place type changes (model + controller + worker command),
+  subtitle 429 detection and retry flag handling, card width bounding,
+  request-pacing preset flags, and the widened change-type dialog.
+- New `tests/test_ytdlp_compat.py`: Deno version parsing and
+  gating, runtime-flag/PATH behaviour, fetch fallback retry chain,
+  worker/controller player-client dropping, client-list validation, and
+  the challenge-solver crash detection (worker no-retry + controller
+  fail-fast).
+- Existing size tests extended for per-codec ladders and WebM behaviour.
+- Updated app, package, Windows/macOS resource and website versions to
+  2.8.5. See RELEASE_NOTES.md.
+
 ### v 2.8.4
 
 - Added Preferences → Output → Video quality: Auto/AV1/VP9/H.264 codec

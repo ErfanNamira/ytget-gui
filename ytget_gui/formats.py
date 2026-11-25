@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
-from typing import List, Mapping, Optional
+from typing import List, Mapping, Optional, Sequence
 
 # Audio-only pseudo-codes used by the UI; resolved by the download worker.
 AUDIO_FORMAT_CODES = frozenset(
@@ -221,10 +221,20 @@ def build_resolution_presets() -> dict[str, str]:
     return presets
 
 
+# Codec preference families used for size estimation. The download's
+# format sort soft-prefers these; the estimate should prefer the same
+# family, otherwise a queue card advertised AVC-sized downloads to users
+# who had explicitly picked AV1 or VP9 (which are far smaller).
+_CODEC_FAMILIES = {"av1": "av01", "vp9": "vp9", "h264": "avc"}
+
+
 def estimate_download_size(
     video_sizes: Optional[Mapping[int, int]],
     audio_size: Optional[int],
     format_code: str,
+    codec_sizes: Optional[Mapping[str, Mapping[int, int]]] = None,
+    codec: str = "auto",
+    container: str = "mkv",
 ) -> Optional[int]:
     """Approximate bytes for `format_code`, or None when unknown.
 
@@ -232,9 +242,44 @@ def estimate_download_size(
     the best height within the preset's cap plus the audio track that gets
     merged with it. Sites that only publish progressive streams report no
     audio-only format, and those sizes already include the audio.
+
+    `codec_sizes` maps a codec family (av01/vp9/avc) to height->bytes. When
+    the caller expresses a codec preference (and the container allows it),
+    the estimate uses that family's ladder, mirroring the selector's own
+    soft preference; if the family has nothing under the cap the estimate
+    falls back to the all-codec ladder, just as the download falls back to
+    whatever codec is available.
     """
     if is_audio_code(format_code):
         return audio_size
+
+    codec = str(codec or "auto").lower()
+    container = str(container or "mkv").lstrip(".").lower()
+    # AVC cannot be stream-copied into WebM (see video_format_sort).
+    if container == "webm" and codec == "h264":
+        codec = "auto"
+
+    candidates: Optional[Mapping[int, int]] = None
+    if codec != "auto" and codec in _CODEC_FAMILIES:
+        candidates = _family_sizes(codec_sizes, (_CODEC_FAMILIES[codec],))
+    elif container == "webm" and _is_builtin_chain(format_code):
+        # Built-in WebM selectors are constrained to AV1/VP9 video, so an
+        # all-codec ladder would quote an AVC stream that can never be the
+        # one actually downloaded.
+        candidates = _family_sizes(codec_sizes, ("av01", "vp9"))
+
+    if candidates is not None:
+        estimate = _size_from_heights(candidates, audio_size, format_code)
+        if estimate is not None:
+            return estimate
+    return _size_from_heights(video_sizes, audio_size, format_code)
+
+
+def _size_from_heights(
+    video_sizes: Optional[Mapping[int, int]],
+    audio_size: Optional[int],
+    format_code: str,
+) -> Optional[int]:
     if not video_sizes:
         return None
     cap = max_height_in(format_code)
@@ -247,6 +292,37 @@ def estimate_download_size(
     if audio_size:
         total += audio_size
     return total or None
+
+
+def _family_sizes(
+    codec_sizes: Optional[Mapping[str, Mapping[int, int]]],
+    families: Sequence[str],
+) -> Optional[Mapping[int, int]]:
+    """Largest size per height across the given codec families."""
+    if not codec_sizes:
+        return None
+    merged: dict[int, int] = {}
+    found = False
+    for family in families:
+        for height, size in (codec_sizes.get(family) or {}).items():
+            found = True
+            if size > merged.get(height, 0):
+                merged[height] = size
+    return merged if found else None
+
+
+def _is_builtin_chain(selector: str) -> bool:
+    """True when the selector is exactly a built-in resolution chain.
+
+    Mirrors the check in webm_compatible_selector: only built-ins get the
+    WebM codec constraints, custom selectors stay user-owned.
+    """
+    height = max_height_in(selector)
+    if not height:
+        return False
+    widths = _WIDTH_CAP_RE.findall(selector)
+    width = int(widths[0]) if widths else None
+    return selector == video_chain(height, width)
 
 
 def is_audio_code(code: str | None) -> bool:

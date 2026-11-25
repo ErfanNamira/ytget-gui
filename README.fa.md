@@ -1,214 +1,229 @@
-# 🎬 YTGet — دانلودکننده چندسکویی یوتیوب  
+<div align="center">
 
-🌐 **وب‌سایت:** [erfannamira.github.io/ytget-gui](https://erfannamira.github.io/ytget-gui/)
+<img src="https://erfannamira.github.io/ytget-gui/assets/img/logo.png" width="110" alt="لوگوی YTGet" />
 
-این نرم‌افزار یک ابزار رومیزی قدرتمند و کاربردی برای دریافت ویدئوها و فایل‌های صوتی از یوتیوب و صدها سایت دیگر است که با هدف ساده‌سازی و تسریع فرآیند دانلود طراحی شده است. با استفاده از این برنامه، کاربران می‌توانند به راحتی و بدون نیاز به دانش فنی خاص، ویدئوهای موردنظر خود را با کیفیت و قالب دلخواه ذخیره کنند. رابط کاربری برنامه ساده و کاربرپسند است و امکان مدیریت کامل دانلودها را فراهم می‌کند. کاربران می‌توانند کیفیت و فرمت خروجی فایل‌ها را انتخاب کنند، مسیر ذخیره‌سازی فایل‌ها را تغییر دهند و حتی صف دانلود ایجاد کرده و چندین فایل را به صورت پشت‌سرهم دریافت کنند. این نرم‌افزار قادر است پلی‌لیست‌ها و مجموعه‌های کامل ویدئویی را به صورت جداگانه پردازش کرده و دانلود کند، به طوری که هر ویدئو به شکل مستقل مدیریت و ذخیره می‌شود.
+# YTGet
 
-- 🖥️ **چندسکویی:** قابل اجرا بر روی **ویندوز**، **مک‌اواس** و **لینوکس**.  
-- 📦 **مستقل:** هر نسخه شامل همه‌ی وابستگی‌هاست و بدون نیاز به نصب اضافی آماده‌ی اجراست.  
-- ⚡ **بهینه و پایدار:** طراحی‌شده برای عملکرد روان، مدیریت هوشمند منابع و بروزرسانی داخلی.  
-- 🎵 **چندمنظوره:** پشتیبانی از دانلود کامل ویدئوها، پلی‌لیست‌ها و موسیقی در قالب‌های مختلف.  
-- 🤖 **خودکار:** آیکون سینی سیستم، پایش خودکار کلیپ‌بورد، زمان‌بند و اجرا هنگام ورود به سیستم.  
+**دانلودکننده چندسکویی و مدرن یوتیوب — با موتور yt-dlp**
 
----  
+[![Release](https://img.shields.io/github/v/release/ErfanNamira/ytget-gui?style=flat-square&label=release)](https://github.com/ErfanNamira/ytget-gui/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](./LICENSE)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)](#-روش-نصب)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-yellow?style=flat-square&logo=python&logoColor=white)](#-راهاندازی-توسعه)
+[![PyPI](https://img.shields.io/pypi/v/ytget-gui?style=flat-square&label=pypi)](https://pypi.org/project/ytget-gui/)
+[![Downloads](https://img.shields.io/github/downloads/ErfanNamira/ytget-gui/total?style=flat-square&label=downloads)](https://github.com/ErfanNamira/ytget-gui/releases)
+[![Stars](https://img.shields.io/github/stars/ErfanNamira/ytget-gui?style=flat-square)](https://github.com/ErfanNamira/ytget-gui/stargazers)
 
-## 📊 آمار مخزن  
+[فارسی] | [English](./README.md)
 
-### 🌟 جامعه  
-![GitHub repo stars](https://img.shields.io/github/stars/ErfanNamira/ytget-gui?style=for-the-badge&logo=github) ![GitHub forks](https://img.shields.io/github/forks/ErfanNamira/ytget-gui?style=for-the-badge&logo=github) ![GitHub watchers](https://img.shields.io/github/watchers/ErfanNamira/ytget-gui?style=for-the-badge&logo=github)  
+[وب‌سایت](https://erfannamira.github.io/ytget-gui/) · [انتشارها](https://github.com/ErfanNamira/ytget-gui/releases) · [تاریخچه تغییرات](./CHANGELOG.md)
 
-### 🐛 باگ‌ها و 🔀 درخواست‌ها  
-![GitHub issues](https://img.shields.io/github/issues/ErfanNamira/ytget-gui?style=for-the-badge) ![GitHub closed issues](https://img.shields.io/github/issues-closed/ErfanNamira/ytget-gui?style=for-the-badge) ![GitHub pull requests](https://img.shields.io/github/issues-pr/ErfanNamira/ytget-gui?style=for-the-badge) ![GitHub closed PRs](https://img.shields.io/github/issues-pr-closed/ErfanNamira/ytget-gui?style=for-the-badge)  
+</div>
 
-### 📥 دانلودها  
-![GitHub all releases](https://img.shields.io/github/downloads/ErfanNamira/ytget-gui/total?label=Total%20Downloads&style=for-the-badge) ![GitHub release (latest by date)](https://img.shields.io/github/downloads/ErfanNamira/ytget-gui/latest/total?label=Latest%20Release&style=for-the-badge)  
+---
 
-### 💻 کد  
-![GitHub repo size](https://img.shields.io/github/repo-size/ErfanNamira/ytget-gui?style=for-the-badge) ![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/ErfanNamira/ytget-gui?style=for-the-badge) ![GitHub language count](https://img.shields.io/github/languages/count/ErfanNamira/ytget-gui?style=for-the-badge) ![GitHub top language](https://img.shields.io/github/languages/top/ErfanNamira/ytget-gui?style=for-the-badge)  
+YTGet یک برنامه رومیزی سبک، ساخته‌شده با **Python** و **PySide6** است که قدرت **yt-dlp** را در رابطی تمیز و کاربرپسند با صف دانلود در اختیارتان می‌گذارد. لینک را بچسبانید، فرمت را انتخاب کنید و شروع کنید — از یک کلیپ تکی تا آرشیو کامل یک کانال، با کنترل کامل روی نام‌گذاری، فاصله‌گذاری درخواست‌ها و خروجی.
 
-### ⏱️ فعالیت  
-![GitHub last commit](https://img.shields.io/github/last-commit/ErfanNamira/ytget-gui?style=for-the-badge) ![GitHub commit activity](https://img.shields.io/github/commit-activity/m/ErfanNamira/ytget-gui?style=for-the-badge)  
+- 🖥️ **چندسکویی** — ویندوز، مک‌اواس و لینوکس؛ هر نسخه همه وابستگی‌ها را همراه دارد و بدون نصب اضافی اجرا می‌شود.
+- 🎞️ **ویدئو از 480p تا 8K، صدا در MP3/FLAC/Opus** — همراه با تصویر، تگ و متادیتای جاسازی‌شده.
+- 🔄 **صف واقعی** — صدها آیتم، پیشرفت زنده و تخمین حجم، ذخیره‌سازی در پس‌زمینه و توقف آنی.
+- 🤖 **خودکارسازی داخلی** — پایش کلیپ‌بورد، آیکون سینی، زمان‌بند و اجرا هنگام ورود به سیستم.
+- 🛡️ **هم‌گام با یوتیوب** — مدیریت هوشمند player client و Deno برای تغییرات اخیر yt-dlp، به‌همراه پیش‌تنظیم ضد خطای 429.
 
----  
+---
 
-## ☄️ روش نصب  
+## 🖼 تصاویر
 
-### 🪟 ویندوز  
+<p align="center">
+  <img src="https://erfannamira.github.io/ytget-gui/assets/img/app-main.jpg" alt="پنجره اصلی YTGet" width="795" />
+  <img src="https://erfannamira.github.io/ytget-gui/assets/img/app-queue.jpg" alt="صف دانلود YTGet" width="795" />
+</p>
+<p align="center">
+  <img src="https://erfannamira.github.io/ytget-gui/assets/img/app-advanced.jpg" alt="گزینه‌های پیشرفته هر آیتم" width="385" />
+  <img src="https://erfannamira.github.io/ytget-gui/assets/img/app-prefs.jpg" alt="تنظیمات" width="385" />
+</p>
 
-**نصب‌کننده (پیشنهادی)**  
-1. فایل [`YTGet-windows-setup.exe`](https://github.com/ErfanNamira/ytget-gui/releases/latest) را از صفحه انتشار دانلود کنید.  
-2. آن را اجرا کنید. نصب فقط برای کاربر فعلی انجام می‌شود، پس پیام UAC نمایش داده نمی‌شود.  
-3. در صورت تمایل، گزینه‌های «میان‌بر دسکتاپ» و «اجرا هنگام ورود به سیستم» را انتخاب کنید.  
-4. YTGet از منوی Start اجرا می‌شود و حذف آن از طریق «Apps & features» انجام می‌شود.  
+---
 
-**نسخه قابل حمل**  
-1. آخرین نسخه `YTGet-windows.zip` را [اینجا](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-windows.zip) دانلود کنید (فرمت `.7z` هم موجود است).  
-2. فایل را از حالت فشرده خارج کنید.  
-3. `YTGet.exe` را اجرا کنید.  
+## 🆕 تازه‌های نسخه ۲.۸.۵
 
-### 🐧 لینوکس  
-1. نصب وابستگی‌ها: 
+- 🔄 **تغییر نوع ضبط آیتم‌های صف، درجا** — چند سطر را انتخاب کنید و با دکمه **TYPE** نوار دسته‌ای (یا راست‌کلیک ← «تغییر نوع ضبط…») به هر پیش‌تنظیمی ببرید. آیتم‌ها جایگاه، جزئیات و تصویر خود را نگه می‌دارند؛ خودِ پنجره هم حدود ۳۰٪ پهن‌تر شده تا چیزی فشرده نباشد.
+- 🧩 **رفع خطای «Requested format is not available»** — همه راه‌های شکست اکسترکتور یوتیوب در yt-dlp 2026.10.26+ پوشش داده شده: Deno همراه برنامه فقط وقتی ≥ 2.3.0 باشد استفاده می‌شود، دریافت متادیتا با حذف player client پین‌شده بازیابی می‌شود و لاگ صف دلیل واقعی غیبت فرمت‌ها را نشان می‌دهد. خرابی حل‌کننده چالش EJS در نوامبر ۲۰۲۶ تشخیص داده شده و به‌جای تلاش مجدد بی‌پایان، به‌صورت نیاز به بروزرسانی yt-dlp گزارش می‌شود.
+- 📏 **تخمین حجم بر اساس کدک** — کارت‌های صف حجم مربوط به همان کدکی (AV1/VP9/AVC) را نشان می‌دهند که فرمت شما واقعاً ترجیح می‌دهد.
+- ⏱️ **فاصله‌گذاری درخواست‌ها: پیش‌تنظیم یا دلخواه** — فاصله‌گذاری توصیه‌شده ضد 429 حالا در «تنظیمات ← پیشرفته ← Request pacing» است، نه در فیلد آرگومان‌های اضافی؛ یا پیش‌تنظیم Sleep را انتخاب کنید یا چهار مقدار خودتان را تنظیم کنید.
+- 🛡️ **تاب‌آوری زیرنویس در برابر 429** — اگر دانلود زیرنویس با خطای 429 مواجه شود، زیرنویس فقط برای تلاش‌های مجدد همان آیتم غیرفعال می‌شود و کل دانلود خراب نمی‌شود.
+- 📏 عنوان‌های طولانی دیگر چیدمان صف را به‌هم نمی‌ریزند.
+
+تاریخچه کامل در [CHANGELOG.md](./CHANGELOG.md) و [RELEASE_NOTES.md](./RELEASE_NOTES.md).
+
+---
+
+## ☄️ روش نصب
+
+### 🪟 ویندوز
+
+**نصب‌کننده (پیشنهادی)** — فایل `YTGet-<version>-windows-setup.exe` را از
+[صفحه انتشارها](https://github.com/ErfanNamira/ytget-gui/releases/latest) دانلود و اجرا کنید.
+نصب فقط برای کاربر فعلی است (بدون پیام مدیر سیستم)، با میان‌بر دسکتاپ و گزینه اختیاری «اجرا هنگام ورود».
+
+**نسخه قابل حمل** — [`YTGet-windows.zip`](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-windows.zip) را دانلود کنید (`.7z` هم موجود است)، استخراج کنید و `YTGet.exe` را اجرا کنید.
+
+### 🐧 لینوکس
+
+```bash
+sudo apt-get update && sudo apt-get install -y ffmpeg python3-mutagen \
+  libxcb-cursor0 libxcb-xinerama0 libxcb-xinput0 libxcb-xfixes0 libxcb-shape0 \
+  libxcb-render-util0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+  libxcb-render0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xkb1
 ```
-sudo apt-get update && sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libxcb-xinput0 libxcb-xfixes0 libxcb-shape0 libxcb-render-util0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xkb1
-```  
-2. آخرین نسخه `YTGet-Linux.tar.gz` را [اینجا](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-linux.tar.gz) دانلود کنید.  
-3. استخراج: `tar -xzf YTGet-Linux.tar.gz`  
-4. اجرا: `chmod +x YTGet && ./YTGet`  
 
-### 🍎 مک‌اواس  
-1. دانلود آخرین نسخه: [Apple Silicon](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS-arm64.tar.gz) یا [Intel](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS-x86_64.tar.gz)  
-2. ترمینال را باز و دستورات زیر را وارد کنید.
-3. رفتن به پوشه دانلودها: `cd Downloads`  
-4. استخراج: `tar -xzf YTGet-macOS-arm64.tar` یا `tar -xzf YTGet-macOS-x86_64.tar`  
-5. حذف قرنطینه: `xattr -d com.apple.quarantine YTGet.app`  
-6. دسترسی اجرا: `chmod +x YTGet.app/Contents/MacOS/YTGet`  
-7. انتقال اختیاری: `mv YTGet.app /Applications/`  
-8. اجرا از Finder یا با دستور: `open /Applications/YTGet.app`  
-9. بروزرسانی yt-dlp از منوبار: Help → Check yt-dlp Update  
+سپس [`YTGet-linux.tar.gz`](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-linux.tar.gz) را دانلود و:
 
----  
+```bash
+tar -xzf YTGet-linux.tar.gz && chmod +x YTGet && ./YTGet
+```
 
-## ✨ ویژگی‌ها  
+### 🍎 مک‌اواس
 
-- 🎯 رابط Qt تمیز و ساده  
-- 🛑 توقف دانلود در هر لحظه  
-- 🔒 بدون نیاز به پایتون  
-- 📹 دانلود ویدئو از 480p تا 8K  
-- 🎵 استخراج MP3/FLAC/Opus با تصویر و متادیتا  
-- 📄 دریافت زیرنویس‌ها  
-- 📂 پشتیبانی کامل پلی‌لیست  
-- ⚙️ تنظیمات دائمی در `config.json`  
-- 🚀 مدیریت پیشرفته پلی‌لیست‌ها  
-- ✂️ برش ویدئو بر اساس زمان  
-- ⏭️ حذف تبلیغات و اینترو (SponsorBlock)  
-- 🧩 مدیریت فصل‌ها و تقسیم‌بندی ویدئو  
-- 🎼 متادیتای دقیق موسیقی یوتیوب  
-- 🌐 پشتیبانی پروکسی  
-- 📅 فیلتر تاریخ انتشار  
-- 🧪 آرگومان‌های سفارشی FFmpeg  
-- 🔊 نرمال‌سازی صدا  
-- 🗃 سازمان‌دهی ویدئوها در پوشه کانال‌ها  
-- ⚡ بهینه‌سازی نرخ دانلود و تلاش مجدد  
+نسخه متناسب با دستگاه خود را دانلود کنید —
+[Apple Silicon (arm64)](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS-arm64.tar.gz) ·
+[Intel (x86_64)](https://github.com/ErfanNamira/ytget-gui/releases/latest/download/YTGet-macOS-x86_64.tar.gz)
 
-### 🆕 تازه‌ها در نسخه ۲.۸.۳  
+<details>
+<summary>مراحل راه‌اندازی (اجرای اول)</summary>
 
-- 🛡️ **رفع بسته شدن ناگهانی:** برنامه دیگر در میانه دانلود (یا هنگام کمینه بودن در سینی سیستم و بستن یک پنجره) خودبه‌خود بسته نمی‌شود.  
-- 🏷️ **نام‌گذاری برای هر سایت و نوع ضبط:** در «تنظیمات ← خروجی ← نام‌گذاری برای هر سایت» برای یوتیوب، یوتیوب موزیک و سایر سایت‌ها، جداگانه برای ویدئو و صدا قالب نام انتخاب کنید (مثلاً «هنرمند - شماره قطعه عنوان» برای موسیقی). پیش‌فرض همه «استفاده از تنظیم عمومی» است.  
-- 🩺 **گزارش خطا:** فایل‌های `ytget.log` و `crash.log` در پوشه `logs` ذخیره می‌شوند؛ از منوی Help ← Open Logs Folder باز کنید.  
+```bash
+cd Downloads
+tar -xzf YTGet-macOS-arm64.tar.gz        # یا YTGet-macOS-x86_64.tar.gz
+xattr -d com.apple.quarantine YTGet.app  # حذف قرنطینه
+chmod +x YTGet.app/Contents/MacOS/YTGet
+mv YTGet.app /Applications/              # اختیاری
+open /Applications/YTGet.app
+```
 
-### 🆕 تازه‌ها در نسخه ۲.۸.۲  
+</details>
 
-- 🏎️ **صف روان‌تر:** خطا در یک آیتم دیگر صف‌های طولانی را قفل نمی‌کند و صف در پس‌زمینه ذخیره می‌شود.  
-- 🛑 **توقف و خروج فوری:** توقف، رد کردن یا بستن برنامه همه پردازش‌های کمکی را بلافاصله متوقف می‌کند.  
-- 🔄 **مدیر به‌روزرسانی بدون گیر:** محدودیت درخواست GitHub تشخیص داده و دور زده می‌شود و پنجره فوراً بسته می‌شود.  
-- 🖼️ **تصاویر بندانگشتی از حافظه:** تصاویر ذخیره‌شده بدون هیچ درخواست شبکه نمایش داده می‌شوند.  
-- 🧹 **رفع اشکال صف:** «پاک کردن تکمیل‌شده‌ها» دیگر فرمت دیگرِ همان لینک را حذف نمی‌کند و گزینه‌های پخش فایل بلافاصله پس از دانلود در منو ظاهر می‌شوند.  
-- 🎵 **رفع اشکال دانلود:** پلی‌لیست‌های دارای عنوان تکراری (حتی با تنظیمات پیش‌فرض) و نرمال‌سازی صدا درست کار می‌کنند و برچسب‌ها و کاور فایل‌های MP3/M4A/FLAC موجود دیگر بازنویسی نمی‌شوند.  
+> در مک‌اواس، پس از اولین اجرا یک‌بار **Help → Check yt-dlp Update** را هم اجرا کنید.
 
-### 🆕 تازه‌ها در نسخه ۲.۸.۰  
+### 🐍 PyPI
 
-- 💿 **نصب‌کننده ویندوز:** در کنار فایل‌های فشرده، یک نصب‌کننده کامل با میان‌بر، اجرا هنگام ورود و حذف‌کننده.  
-- 🖱️ **سینی سیستم:** کنترل صف بدون باز کردن پنجره، به همراه بستن به سینی و اعلان‌ها.  
-- 📋 **پایش کلیپ‌بورد:** هر لینکی که کپی کنید خودکار به صف اضافه می‌شود؛ ۷۶ سایت شناسایی می‌شود و برای هر دسته (یوتیوب، یوتیوب موزیک، اسپاتیفای و سایر) فرمت پیش‌فرض جداگانه تعیین می‌شود.  
-- 🌍 **سیاست سایت‌های فهرست‌نشده:** لینک سایت‌هایی که در فهرست نیستند را می‌توانید «خودکار اضافه کن»، «از من بپرس» یا «نادیده بگیر» کنید.  
-- ⏰ **زمان‌بند:** شروع و پایان خودکار صف در ساعت مشخص، با مدیریت خاموش کردن یا خواب سیستم.  
-- 🚀 **اجرا هنگام ورود:** اجرای YTGet در سینی سیستم پس از ورود، با تأخیر قابل تنظیم.  
-- 📄 **ورود و خروج لینک‌ها:** خواندن فهرست لینک از فایل متنی و ذخیره صف در فایل متنی.  
-- 🎞️ **چند فرمت از یک لینک:** یک ویدئو را می‌توانید همزمان با کیفیت ۱۰۸۰p و MP3 به صف اضافه کنید. نام‌گذاری پیش‌فرض حفظ می‌شود و فقط اگر دو فرمت در یک قالب مشابه (مثلاً هر دو `.mkv`) باشند، برچسب کیفیت به نام دومی اضافه می‌شود؛ مثل `Title.mkv` و `Title QHD.mkv`.  
-- 📏 **نمایش حجم:** حجم تقریبی هر آیتم (ویدئو + صدا) روی کارت صف نشان داده می‌شود.  
-- 🖼️ **برش تصویر آلبوم:** برش ۱:۱ تصویر آلبوم درست پس از پایان دانلود هر آیتم انجام می‌شود، نه در پایان صف؛ پس توقف صف باعث نمی‌شود فایل‌های دانلودشده بدون برش بمانند.  
-- ✂️ **گزینه‌های پیشرفته فقط برای آیتم جدید:** برش زمانی و انتخاب آیتم‌های پلی‌لیست تنها روی آیتمی که اضافه می‌کنید اعمال می‌شود.  
-- 🏎️ **اجرای سریع‌تر:** پنجره برنامه محسوس‌تر سریع‌تر باز می‌شود.  
+```bash
+pip install ytget-gui            # نصب
+pip install --upgrade ytget-gui  # بروزرسانی
+```
 
----  
+نسخه PyPI به **FFmpeg** نیاز دارد: یا آن را به `PATH` اضافه کنید، یا فایل‌های `ffmpeg`/`ffprobe` را کنار فایل اجرایی قرار دهید. در مک‌اواس `brew install ffmpeg` و در دبیان/اوبونتو `sudo apt install ffmpeg`.
 
-## 🖼 تصاویر  
+---
 
-<p align="center">  
-  <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.4%20(1).JPG" width="220" />  
-  <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.4%20(2).JPG" width="220" />  
-  <img src="https://raw.githubusercontent.com/ErfanNamira/YTGet/refs/heads/main/Images/YTGet2.4%20(3).JPG" width="220" />  
-  <img src="https://raw.githubusercontent.com/ErfanNamira/ytget/refs/heads/main/Images/YTGet2.4.3.JPG" width="220" />  
-</p>  
+## 🧰 روش استفاده
 
----  
+1. ▶️ اجرای **YTGet** و وارد کردن لینک یوتیوب.
+2. 🎚️ انتخاب فرمت — مثلاً 1080p MKV یا MP3.
+3. ⚙️ اختیاری: **Advanced** را باز کنید تا برش زمانی یا انتخاب آیتم‌های پلی‌لیست *فقط برای آیتم بعدی* فعال شود (دکمه هنگام فعال بودن نقطه نشان می‌دهد).
+4. ➕ کلیک روی **Add to Queue**. همان لینک با فرمت دیگر را می‌خواهید؟ آن فرمت را انتخاب و دوباره اضافه کنید — هر فرمت سطر خودش را دارد.
+5. ▶️ کلیک روی **Start Queue**.
 
-## 🧰 روش استفاده  
+برای دانلود بدون دخالت دست، **Tools → Clipboard Watcher** (`Ctrl+Shift+V`) را فعال کنید و فقط لینک‌ها را کپی کنید — ۷۶ سایت شناسایی می‌شود و برای هر دسته (یوتیوب، یوتیوب موزیک، اسپاتیفای و سایر) فرمت پیش‌فرض جداگانه‌ای تعیین می‌شود.
 
-1. اجرای `YTGet`  
-2. وارد کردن لینک ویدئو  
-3. انتخاب فرمت (مثلاً MP3 یا 1080p)  
-4. در صورت نیاز، تنظیم گزینه‌های پیشرفته برای همین آیتم  
-5. کلیک روی ➕ افزودن به صف  
-6. کلیک روی ▶️ شروع صف  
+---
 
-برای دانلود خودکار، از منوی **Tools → Clipboard Watcher** (کلید `Ctrl+Shift+V`) استفاده کنید و سپس لینک‌ها را کپی کنید.  
+## ✨ ویژگی‌ها
 
----  
+| | |
+|---|---|
+| 🎞️ **ویدئو 480p تا 8K** | MKV / MP4 / WebM با بهترین صدا ادغام‌شده |
+| 🎵 **استخراج صدا** | MP3، FLAC و Opus با تصویر، تگ و متادیتا |
+| 📂 **پلی‌لیست‌ها** | کامل یا انتخابی، ترتیب معکوس، ردیابی آرشیو |
+| 🔁 **چند فرمت از یک لینک** | یک ویدئو هم به‌صورت 1080p و هم MP3 در صف — هر کدام سطر خودش |
+| 🔄 **تغییر نوع ضبط درجا** | تغییر آیتم‌های صف به هر پیش‌تنظیم بدون افزودن مجدد |
+| 📏 **تخمین حجم** | بر اساس کدک، روی هر کارت صف |
+| ✂️ **برش ویدئو** | دانلود بخشی از ویدئو با زمان شروع/پایان، به‌صورت هر آیتم |
+| ⏭️ **SponsorBlock** | حذف تبلیغات، اینترو و اوترو |
+| 🧩 **فصل‌ها** | جاسازی یا تقسیم بر اساس فصل‌ها |
+| 🎼 **متادیتای یوتیوب موزیک** | اطلاعات دقیق موسیقی و آلبوم |
+| 📄 **زیرنویس‌ها** | دریافت خودکار، چندزبانه |
+| 🌐 **پروکسی** | مسیریابی دانلودها از طریق پروکسی |
+| 📅 **فیلتر تاریخ** | فقط ویدئوهای منتشرشده بعد از تاریخ مشخص |
+| 🔊 **نرمال‌سازی صدا** | بلندی یکنواخت در همه دانلودها |
+| 🧪 **آرگومان‌های سفارشی FFmpeg** | برای کاربران حرفه‌ای |
+| 🗃 **سازمان‌دهی کانال‌ها** | مرتب‌سازی خودکار در پوشه آپلودکننده |
+| 🖱️ **سینی سیستم** | کنترل صف بدون باز کردن پنجره |
+| 📋 **پایش کلیپ‌بورد** | افزودن خودکار هر لینکی که کپی کنید |
+| ⏰ **زمان‌بند** | شروع/توقف صف در ساعت مشخص |
+| 🚀 **اجرا هنگام ورود** | اجرای برنامه به‌صورت کوچک‌شده در سینی |
+| 📄 **ورود/خروج لینک‌ها** | خواندن فهرست لینک از فایل متنی یا ذخیره صف در آن |
+| ⏱️ **فاصله‌گذاری درخواست‌ها** | پیش‌تنظیم ضد 429 یا فاصله‌گذاری کاملاً دلخواه در Advanced |
+| 🔄 **مدیر بروزرسانی** | بروزرسانی برنامه، yt-dlp و Deno از **Help → Check for Updates** |
+| 🩺 **لاگ و گزارش خطا** | `ytget.log` / `crash.log` از **Help → Open Logs Folder** |
 
-## 📁 خروجی  
+---
 
-- ✅ نام‌گذاری تمیز: `%(title)s.ext` (پیش‌فرض)  
-- 🏷️ قالب نام جداگانه برای یوتیوب، یوتیوب موزیک و سایر سایت‌ها، و برای ویدئو و صدا  
-- 🏷️ افزودن برچسب کیفیت تنها زمانی که دو فرمت هم‌قالب از یک لینک در صف باشند  
-- 🎵 برای موسیقی: تصویر آلبوم (برش‌خورده به ۱:۱) و متادیتا  
-- 🔀 اگر دو آپلود متفاوت عنوان یکسانی داشته باشند (مثلاً تک‌آهنگ و نسخه آلبوم در کانال «Topic» یوتیوب موزیک)، هر دو نگه داشته می‌شوند و دومی با نام `Title [video-id].ext` ذخیره می‌شود. پیام کوتاهی که در لاگ می‌بینید طبیعی است و فایل موجود دست‌نخورده می‌ماند.  
+## 📁 خروجی و نام‌گذاری
 
----  
+- نام‌گذاری تمیز به‌صورت پیش‌فرض: `%(title)s.ext`
+- **قوانین نام‌گذاری هر سایت** (تنظیمات ← Output): قالب نام جداگانه برای **یوتیوب**، **یوتیوب موزیک** و **سایر سایت‌ها**، جداگانه برای ویدئو و صدا — مثلاً «هنرمند - شماره قطعه عنوان» برای موسیقی و «آپلودکننده - عنوان» برای ویدئو. همه در ابتدا روی «استفاده از تنظیم عمومی» هستند تا وقتی خودتان چیزی انتخاب کنید چیزی تغییر نکند.
+- دانلودهای صوتی شامل تصویر آلبوم (برش‌خورده ۱:۱) و تگ‌های متادیتا هستند.
+- اگر دو آپلود متفاوت عنوان یکسانی داشته باشند، هر دو نگه داشته می‌شوند و دومی با نام `Title [video-id].ext` ذخیره می‌شود.
+- لاگ‌ها و گزارش‌های خطا در پوشه `logs` پوشه داده برنامه نگهداری می‌شوند.
 
-## 🧩 گزینه‌های فرمت  
+---
 
-| فرمت | توضیح |  
-|------|-------|  
-| 🎞️ 480p–8K | ویدئو با صدا در MKV/MP4/WebM |  
-| 🎵 FLAC Audio | صدای باکیفیت همراه با تگ و تصویر |  
-| 🎵 MP3 Audio | صدای باکیفیت همراه با تگ و تصویر |  
-| 🎵 Opus Audio | صدای فشرده با حجم کمتر |  
-| 📃 Playlist MP3 | استخراج گروهی صدا از پلی‌لیست‌ها |  
+## 🔒 کوکی‌ها (محتوای خصوصی یا محدود به سن)
 
----  
+1. کوکی‌ها را با افزونه [Get cookies.txt](https://chrome.google.com/webstore/detail/get-cookiestxt/lgmpjfekhdgcmpcpnmlhkfkfjdkpmoec) استخراج کنید.
+2. فایل را در `_internal/cookies.txt` قرار دهید.
 
-## 🔒 کوکی‌ها  
+---
 
-برای محتوای **خصوصی یا محدود به سن**: کوکی‌ها را با افزونه [Get cookies.txt](https://chrome.google.com/webstore/detail/get-cookiestxt/lgmpjfekhdgcmpcpnmlhkfkfjdkpmoec) استخراج کرده و در `_internal/cookies.txt` قرار دهید.  
+## 🩺 رفع اشکال
 
----  
+- **خطای «Requested format is not available»** — مطمئن شوید yt-dlp و Deno بروز هستند (**Help → Check for Updates**، هر کدام یک کلیک). اگر بنر ابتدای برنامه درباره Deno هشدار می‌دهد، یک‌بار آن را بروزرسانی کنید.
+- **«n challenge solving failed» یا «Only images are available»** — یک باگ شناخته‌شده در yt-dlp با پلیرهای اواخر نوامبر ۲۰۲۶ یوتیوب است که در **yt-dlp 2026.11.23** رفع شده. yt-dlp را از **Help → Check for Updates** بروزرسانی کنید؛ YTGet این خطا را تشخیص می‌دهد و آیتم را با راهنمای لازم نشانه‌گذاری می‌کند تا بی‌فایده تلاش مجدد نشود. مشکل از Deno، کوکی‌ها یا پروکسی نیست.
+- **خطاهای مکرر HTTP 429** — گزینه **Sleep (gentle spacing)** را در «تنظیمات ← پیشرفته ← Request pacing» فعال کنید، یا **Custom** را انتخاب و چهار مقدار دلخواه خود را تنظیم کنید.
+- برخی فرمت‌ها خودِ یوتیوب محدود یا موقتاً در دسترس نیستند؛ اگر فرمتی مدام شکست می‌خورد، احتمالاً باید منتظر بروزرسانی yt-dlp بمانید.
 
-## ⚙️ پیش‌نیازها  
+---
 
-- ✅ نصب‌کننده یا نسخه قابل حمل؛ هیچ وابستگی جداگانه‌ای لازم نیست  
-- 🪟 ویندوز 10 به بالا (۶۴بیتی)  
-- 🌐 اتصال اینترنت برای دانلود (برنامه خودش آفلاین کار می‌کند)  
+## 🔧 راه‌اندازی توسعه
 
----  
+**پیش‌نیازها:** [Python 3.13+](https://www.python.org/downloads/) و [FFmpeg](https://www.ffmpeg.org/download.html) در PATH یا پوشه پروژه.
 
-## 🔧 راه‌اندازی توسعه  
+```bash
+git clone https://github.com/ErfanNamira/ytget-gui.git
+cd ytget-gui
+python -m venv venv
+source venv/bin/activate        # ویندوز: venv\Scripts\activate
+pip install -r requirements.txt
 
-1. نصب Python 3.13+ و FFmpeg  
-2. کلون پروژه: `git clone https://github.com/ErfanNamira/ytget-gui.git`  
-3. ورود به پوشه: `cd ytget-gui`  
-4. ساخت محیط مجازی: `python -m venv venv` و فعال‌سازی  
-5. نصب وابستگی‌ها: `pip install -r requirements.txt`  
-6. اجرای برنامه: `python -m ytget_gui`  
-7. اجرای تست‌ها: `python -m pytest`  
+python -m ytget_gui             # اجرای برنامه
+python -m pytest                # اجرای تست‌ها
+```
 
----  
+---
 
-## 🤝 مشارکت  
+## 🤝 مشارکت
 
-1. فورک و کلون مخزن  
-2. ایجاد شاخه جدید: `git checkout -b my-feature`  
-3. کامیت و پوش: `git commit -m "msg" && git push origin my-feature`  
-4. ارسال Pull Request  
+1. فورک و کلون مخزن
+2. ساخت شاخه جدید: `git checkout -b my-feature`
+3. کامیت و پوش: `git commit -m "msg" && git push origin my-feature`
+4. ارسال Pull Request
 
----  
+---
 
-## 📄 مجوز  
+## 🙏 سپاسگزاری‌ها
 
-این پروژه تحت مجوز **MIT** است. جزئیات در فایل [LICENSE](./LICENSE).  
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — موتور اصلی دانلود.
+- [PySide6 / Qt](https://www.qt.io/qt-for-python) — ابزار رابط کاربری.
 
----  
+---
 
-## 📦 دانلود  
+## 📄 مجوز
 
-👉 [آخرین نسخه](https://github.com/ErfanNamira/ytget-gui/releases/latest)  
+این پروژه تحت مجوز **MIT** منتشر شده — جزئیات در فایل [LICENSE](./LICENSE).
+
+---
+
+## 📦 دانلود
+
+👉 [آخرین نسخه](https://github.com/ErfanNamira/ytget-gui/releases/latest)

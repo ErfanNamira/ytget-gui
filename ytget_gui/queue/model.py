@@ -23,8 +23,20 @@ log = logging.getLogger(__name__)
 
 # Settings keys an individual queue item may override. Everything else is
 # global by design; these are the "for this download only" options.
+# DISABLE_SUBS is set automatically when subtitle downloads tripped a
+# rate limit (HTTP 429), so the next attempt of that item skips them.
+# DROP_PLAYER_CLIENT is set automatically when a pinned YouTube player
+# client returned no usable formats, so the next attempt uses yt-dlp's
+# default clients.
 ITEM_OPTION_KEYS = frozenset(
-    {"CLIP_START", "CLIP_END", "PLAYLIST_ITEMS", "PLAYLIST_REVERSE"}
+    {
+        "CLIP_START",
+        "CLIP_END",
+        "PLAYLIST_ITEMS",
+        "PLAYLIST_REVERSE",
+        "DISABLE_SUBS",
+        "DROP_PLAYER_CLIENT",
+    }
 )
 
 
@@ -401,6 +413,47 @@ class QueueModel:
             return
         del self._items[position]
         self._items.append(item)
+
+    def change_format(
+        self, item: QueueItem, format_code: str, format_label: str
+    ) -> bool:
+        """Switch one queued item to a different recording type, in place.
+
+        The item keeps its queue position, metadata, thumbnail and per-item
+        options; only the selector and its label move. The old workflow --
+        copy the URL, re-add it with the right type, delete the wrong row --
+        is exactly what this replaces. Returns False when the target
+        url+format pair is already queued (by another item) or nothing
+        would change; the caller reports those as skipped.
+        """
+        code = normalise_video_selector(str(format_code or ""))
+        if not code:
+            return False
+        new_key = f"{item.url}\n{code}"
+        existing = self._index.get(new_key)
+        if existing is not None and existing is not item:
+            return False
+        if code == item.format_code:
+            return False
+
+        self._unindex(item)
+        item.format_code = code
+        item.format_label = str(format_label or "")
+        # Stale run state: the recorded output belongs to the old type.
+        item.status = Status.PENDING
+        item.progress = 0
+        item.stage = ""
+        item.last_error = ""
+        item.queue_attempts = 0
+        item.output_path = ""
+        item.output_count = 0
+        item.produced_files = []
+        # The size belonged to the previous selector; it is recomputed when
+        # the refreshed metadata for this URL arrives.
+        item.filesize = None
+        self._index[item.key] = item
+        self._by_url.setdefault(item.url, []).append(item)
+        return True
 
     def move_many(self, keys: Sequence[str], *, to_top: bool, after: int = 0) -> None:
         """Move the given item keys as a block.

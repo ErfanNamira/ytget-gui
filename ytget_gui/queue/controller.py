@@ -26,7 +26,12 @@ from ytget_gui.styles import AppStyles
 from ytget_gui.utils.text import short
 from ytget_gui.utils.validators import is_spotify_url
 from ytget_gui.workers.base import CANCELLED_EXIT, BaseDownloadWorker
-from ytget_gui.workers.download_worker import DownloadWorker
+from ytget_gui.workers import fetch_core
+from ytget_gui.workers.download_worker import (
+    DownloadWorker,
+    is_challenge_solver_failure,
+    is_subtitle_rate_limited,
+)
 from ytget_gui.workers.spotdl_worker import SpotDLWorker
 
 log = logging.getLogger(__name__)
@@ -435,6 +440,58 @@ class QueueController(QObject):
 
         # Genuine failure. DownloadWorker has already exhausted its in-process
         # retries for transient errors by this point.
+        #
+        # Subtitle fetches trip HTTP 429 far more often than the media itself
+        # (they are extra requests per item). When that is what failed, the
+        # queue-level retry drops subtitles for this item so the next
+        # attempt can actually succeed.
+        if is_subtitle_rate_limited(item.last_error) and not item.options.get(
+            "DISABLE_SUBS"
+        ):
+            item.options["DISABLE_SUBS"] = True
+            self._log(
+                "\u2139\ufe0f Subtitles were rate-limited (HTTP 429) for this item; "
+                "they will be skipped on the next attempt.",
+                AppStyles.INFO_COLOR,
+            )
+
+        # A pinned YouTube player client that yields no usable formats is a
+        # configuration problem, not a transient one: every retry of the
+        # identical command fails identically. Drop the pin for this item so
+        # the queue-level attempt actually has a chance.
+        if (
+            fetch_core.is_format_selection_error(item.last_error)
+            and str(
+                getattr(self.settings, "YOUTUBE_PLAYER_CLIENT", "auto") or "auto"
+            ).strip()
+            not in ("", "auto")
+            and not item.options.get("DROP_PLAYER_CLIENT")
+        ):
+            item.options["DROP_PLAYER_CLIENT"] = True
+            self._log(
+                "\u2139\ufe0f The pinned YouTube player client returned no usable "
+                "formats for this item; the next attempt will use yt-dlp's "
+                "default clients.",
+                AppStyles.INFO_COLOR,
+            )
+
+        # A crashed challenge solver is an yt-dlp bug (fixed upstream in
+        # 2026.11.23): every retry of the identical command fails
+        # identically, so the item fails now with update guidance instead
+        # of burning queue slots on doomed attempts.
+        if is_challenge_solver_failure(item.last_error):
+            item.status = Status.ERROR
+            item.progress = 0
+            item.stage = ""
+            self._log(
+                "\u274c\ufe0f yt-dlp's YouTube challenge solver is broken for this "
+                "player build (known yt-dlp bug, fixed in 2026.11.23). "
+                "Update yt-dlp from Help \u2192 Check for Updates, then retry "
+                "this item.",
+                AppStyles.ERROR_COLOR,
+            )
+            self.queue_changed.emit()
+            return
         item.queue_attempts += 1
         item.progress = 0
         item.stage = ""
@@ -507,6 +564,37 @@ class QueueController(QObject):
             self.save_soon()
             self._emit_progress()
         return removed
+
+    def change_formats(self, keys: List[str], format_code: str, format_label: str) -> int:
+        """Switch queued items to a different recording type, in place.
+
+        The item currently downloading is skipped: its worker already holds
+        the old selector. Items whose target url+format pair is already
+        queued (or whose type is unchanged) are skipped by the model and
+        reported through the return value only.
+        """
+        changed = 0
+        current = self._current
+        for key in list(keys):
+            item = self.model.get(key)
+            if item is None:
+                continue
+            if current is not None and item is current:
+                self._log(
+                    "\u2139\ufe0f Cannot change the type of an item while it is "
+                    "downloading; it was skipped.",
+                    AppStyles.INFO_COLOR,
+                )
+                continue
+            if self.model.change_format(item, format_code, format_label):
+                changed += 1
+        if changed:
+            self._finish_announced = False
+            self.queue_changed.emit()
+            self.save_soon()
+            self._emit_progress()
+            QTimer.singleShot(0, self._pump)
+        return changed
 
     def clear_completed(self) -> int:
         removed = self.model.remove_completed()

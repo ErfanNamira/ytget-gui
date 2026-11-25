@@ -23,7 +23,7 @@ import os
 
 from typing import Callable, List, Optional, Sequence, Tuple, Union
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -41,6 +41,21 @@ from ytget_gui.queue.model import QueueItem, Status
 from ytget_gui.utils.text import clamp, human_bytes
 
 __all__ = ["QueueCard"]
+
+# Hard bound on the card's reported size-hint width. Titles and meta text
+# are elided to the label width, so the layout only needs room for the fixed
+# elements (thumbnail, buttons); this guards against any future change
+# reintroducing content-driven widths -- one long title used to widen the
+# whole queue past the viewport and force a horizontal scrollbar, pushing
+# the action buttons out of reach.
+_MAX_HINT_WIDTH = 900
+_DEFAULT_TITLE_WIDTH = 360
+# Floor for the card's reported minimum width. Text lines are elided to the
+# available width, so the only genuine minimum is the fixed furniture
+# (drag handle, thumbnail, buttons, chip); without this override the
+# QLabel minimum hints ratchet upward with every re-elide and the card can
+# never shrink again.
+_MIN_CARD_WIDTH = 320
 
 _CHIP_STYLES = {
     Status.PENDING: (
@@ -150,6 +165,8 @@ class QueueCard(QFrame):
         self._last_status: Optional[Status] = None
         self._last_percent = -1
         self._last_title = ""
+        self._title_text = ""
+        self._title_width = -1
         self._last_meta = ""
         self._meta_text = ""
         self._meta_width = -1
@@ -190,7 +207,17 @@ class QueueCard(QFrame):
         title_row.setSpacing(6)
         self.title_lbl = QLabel()
         self.title_lbl.setObjectName("CardTitle")
-        self.title_lbl.setWordWrap(True)
+        # Single line, elided to the available width (see _set_title): a
+        # word-wrapped label reports the width of its longest line/word as
+        # its minimum, so an unbroken 90-character title or URL expanded
+        # every card -- and the list -- horizontally.
+        self.title_lbl.setWordWrap(False)
+        self.title_lbl.setMinimumWidth(0)
+        self.title_lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        # Re-elide whenever the layout gives the label a new width; the
+        # card-level resizeEvent fires before the children are re-laid out,
+        # so by itself it always elides against the previous width.
+        self.title_lbl.installEventFilter(self)
         title_row.addWidget(self.title_lbl, 1)
 
         self.status_chip = QLabel()
@@ -207,6 +234,7 @@ class QueueCard(QFrame):
         self.meta_lbl.setMinimumWidth(0)
         self.meta_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.meta_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.meta_lbl.installEventFilter(self)
         centre.addWidget(self.meta_lbl)
 
         progress_row = QHBoxLayout()
@@ -355,8 +383,23 @@ class QueueCard(QFrame):
         if title == self._last_title:
             return
         self._last_title = title
-        self.title_lbl.setText(clamp(title, 90))
-        self.title_lbl.setToolTip(title)
+        # The label shows the width-elided text; the tooltip keeps the full
+        # title. clamp() only bounds the stored copy.
+        self._title_text = clamp(title, 300)
+        self._apply_elided_title(force=True)
+
+    def _apply_elided_title(self, *, force: bool = False) -> None:
+        width = self.title_lbl.width()
+        if width <= 0:
+            width = _DEFAULT_TITLE_WIDTH
+        if not force and width == self._title_width:
+            return
+        self._title_width = width
+        metrics = self.title_lbl.fontMetrics()
+        self.title_lbl.setText(
+            metrics.elidedText(self._title_text, Qt.ElideRight, width)
+        )
+        self.title_lbl.setToolTip(self._title_text)
 
     def _set_status(self, status: Status) -> None:
         if status is self._last_status:
@@ -519,6 +562,28 @@ class QueueCard(QFrame):
         self._set_elevated(False)
         super().leaveEvent(event)
 
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Resize:
+            if obj is self.title_lbl:
+                self._apply_elided_title()
+            elif obj is self.meta_lbl:
+                self._apply_elided_meta()
+        return super().eventFilter(obj, event)
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._apply_elided_meta()
+        self._apply_elided_title()
+
+    def sizeHint(self) -> QSize:
+        # Bounded in width: the list sizes rows from this hint, and a hint
+        # wider than the viewport is exactly what created the horizontal
+        # scrollbar that pushed the action buttons out of view.
+        hint = super().sizeHint()
+        hint.setWidth(max(_MIN_CARD_WIDTH, min(hint.width(), _MAX_HINT_WIDTH)))
+        return hint
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        hint.setWidth(_MIN_CARD_WIDTH)
+        return hint

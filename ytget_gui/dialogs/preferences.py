@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QDoubleSpinBox,
     QSpinBox,
     QSplitter,
     QStackedWidget,
@@ -62,6 +63,8 @@ from ytget_gui.filename_rules import (
 )
 from ytget_gui.settings import (
     BROWSERS,
+    PACING_DEFAULTS,
+    REQUEST_PACING_CHOICES,
     THUMBNAIL_FORMATS,
     VIDEO_CONTAINERS,
     VIDEO_CODEC_CHOICES,
@@ -1391,6 +1394,12 @@ class PreferencesDialog(QDialog):
         self.startup_minimized.setEnabled(enabled)
         self.startup_delay.setEnabled(enabled)
 
+    def _on_pacing_mode_changed(self) -> None:
+        """Custom pacing fields are only editable in Custom mode."""
+        self.pacing_values_row.setEnabled(
+            self.request_pacing.currentText() == "Custom"
+        )
+
     # -- Advanced ------------------------------------------------------
 
     def _page_advanced(self) -> QWidget:
@@ -1407,6 +1416,84 @@ class PreferencesDialog(QDialog):
                 "Download-only arguments. Execution, hidden targets and reporting-mode overrides are not allowed.",
                 "Extra yt-dlp arguments",
             ),
+        )
+        # The sleep preset used to live only as flags users typed into the
+        # extra-arguments field above; it now has its own card so the
+        # recommended anti-429 pacing is a one-click choice that survives
+        # edits to that free-text field.
+        self.request_pacing = self._bind_combo_mapped(
+            "REQUEST_PACING",
+            ui.combo([], "Request pacing preset"),
+            tuple(
+                (label, value) for value, label in REQUEST_PACING_CHOICES.items()
+            ),
+            "off",
+        )
+
+        # Custom pacing fields: the four flags of the Sleep recipe exposed as
+        # spin boxes, enabled only while the combo above is on Custom. They
+        # default to the Sleep values, so a fresh Custom selection starts
+        # from the recommended spacing.
+        def pacing_spin(low, high, step, decimals, accessible):
+            widget = QDoubleSpinBox()
+            widget.setRange(low, high)
+            widget.setSingleStep(step)
+            widget.setDecimals(decimals)
+            widget.setMinimumHeight(34)
+            widget.setSuffix(" s")
+            widget.setKeyboardTracking(False)
+            widget.setAccessibleName(accessible)
+            return widget
+
+        self.pacing_subtitles = self._register(
+            "SLEEP_SUBTITLES",
+            pacing_spin(0, 600, 1.0, 1, "Sleep before each subtitle download"),
+            lambda: self.pacing_subtitles.value(),
+            lambda v, d=PACING_DEFAULTS["SLEEP_SUBTITLES"]: (
+                self.pacing_subtitles.setValue(float(d if v is None else v))
+            ),
+        )
+        self.pacing_requests = self._register(
+            "SLEEP_REQUESTS",
+            pacing_spin(0, 60, 0.25, 2, "Sleep between metadata requests"),
+            lambda: self.pacing_requests.value(),
+            lambda v, d=PACING_DEFAULTS["SLEEP_REQUESTS"]: (
+                self.pacing_requests.setValue(float(d if v is None else v))
+            ),
+        )
+        self.pacing_interval = self._register(
+            "SLEEP_INTERVAL",
+            pacing_spin(0, 3600, 1.0, 1, "Minimum sleep between downloads"),
+            lambda: self.pacing_interval.value(),
+            lambda v, d=PACING_DEFAULTS["SLEEP_INTERVAL"]: (
+                self.pacing_interval.setValue(float(d if v is None else v))
+            ),
+        )
+        self.pacing_max_interval = self._register(
+            "MAX_SLEEP_INTERVAL",
+            pacing_spin(0, 3600, 1.0, 1, "Maximum sleep between downloads"),
+            lambda: self.pacing_max_interval.value(),
+            lambda v, d=PACING_DEFAULTS["MAX_SLEEP_INTERVAL"]: (
+                self.pacing_max_interval.setValue(float(d if v is None else v))
+            ),
+        )
+
+        pacing_values = QWidget()
+        pacing_layout = QHBoxLayout(pacing_values)
+        pacing_layout.setContentsMargins(0, 0, 0, 0)
+        pacing_layout.setSpacing(6)
+        for text, widget in (
+            ("Subtitles", self.pacing_subtitles),
+            ("Requests", self.pacing_requests),
+            ("Interval", self.pacing_interval),
+            ("Max", self.pacing_max_interval),
+        ):
+            pacing_layout.addWidget(QLabel(text))
+            pacing_layout.addWidget(widget, 1)
+        self.pacing_values_row = pacing_values
+        pacing_values.setEnabled(False)
+        self.request_pacing.currentIndexChanged.connect(
+            self._on_pacing_mode_changed
         )
 
         self.prefer_hls = self._bind_switch("PREFER_HLS", ui.switch("Prefer HLS streams"))
@@ -1456,6 +1543,25 @@ class PreferencesDialog(QDialog):
                 ),
                 title="yt-dlp",
                 subtitle="These override the application's own flags.",
+            ),
+            ui.card(
+                self._column(
+                    self._row(
+                        "Preset",
+                        self.request_pacing,
+                        "Sleep spaces out yt-dlp's requests to stay under "
+                        "YouTube's rate limit. Custom uses the values below.",
+                    ),
+                    self._row("Custom values", pacing_values),
+                ),
+                title="Request pacing",
+                subtitle=(
+                    "Sleep adds --sleep-subtitles 5 --sleep-requests 0.75 "
+                    "--sleep-interval 10 --max-sleep-interval 20. Custom "
+                    "builds the same flags from the fields below, which "
+                    "start from the Sleep values. The same flags typed in "
+                    "Extra arguments take precedence."
+                ),
             ),
             ui.card(
                 self._column(
@@ -1517,6 +1623,7 @@ class PreferencesDialog(QDialog):
         self.archive_path.setEnabled(self.archive_enabled.isChecked())
         self.thumbnail_format.setEnabled(self.convert_thumbnails.isChecked())
         self.hls_domains.setEnabled(self.prefer_hls.isChecked())
+        self._on_pacing_mode_changed()
         self._on_filename_changed()
         self._update_video_quality_hint()
         self._snapshot = self.get_settings()
@@ -1598,6 +1705,8 @@ class PreferencesDialog(QDialog):
             elif isinstance(widget, QComboBox):
                 widget.currentIndexChanged.connect(self._on_changed)
             elif isinstance(widget, QSpinBox):
+                widget.valueChanged.connect(self._on_changed)
+            elif isinstance(widget, QDoubleSpinBox):
                 widget.valueChanged.connect(self._on_changed)
             elif isinstance(widget, (QCheckBox, UISwitch, QRadioButton)):
                 widget.toggled.connect(self._on_changed)

@@ -47,6 +47,13 @@ log = logging.getLogger(__name__)
 # Enumerated choices
 # --------------------------------------------------------------------------
 
+# Client choices aligned with what current yt-dlp can actually serve without
+# a PO token. android and ios were removed: every yt-dlp since 2025 skips all
+# of their formats without a GVS PO token, so pinning either one failed every
+# YouTube download with "Requested format is not available". A stored value
+# that is no longer in this map is normalised back to "auto" on load, which
+# silently repairs configurations saved against the old list. tv_samsung and
+# visionos are the extractor's current anonymous defaults.
 YOUTUBE_PLAYER_CLIENTS: Dict[str, str] = {
     "Auto (yt-dlp default)": "auto",
     "default,web_embedded (cookies-safe fallback)": "default,web_embedded",
@@ -56,10 +63,50 @@ YOUTUBE_PLAYER_CLIENTS: Dict[str, str] = {
     "web_safari": "web_safari",
     "tv": "tv",
     "tv_embedded": "tv_embedded",
+    "tv_samsung": "tv_samsung",
     "mweb": "mweb",
-    "ios": "ios",
-    "android": "android",
 }
+
+# Request pacing presets, kept out of EXTRA_YTDLP_ARGS so rate-limit spacing
+# is a one-click choice in Preferences instead of a flags string to type (and
+# retype after every reinstall). "sleep" is the gentle anti-429 recipe:
+# --sleep-subtitles 5 --sleep-requests 0.75
+# --sleep-interval 10 --max-sleep-interval 20
+# "custom" is not a flag list: the worker builds the same four flags from
+# the per-field values below, so the user can dial in their own spacing.
+REQUEST_PACING_PRESETS: Dict[str, List[str]] = {
+    "off": [],
+    "sleep": [
+        "--sleep-subtitles", "5",
+        "--sleep-requests", "0.75",
+        "--sleep-interval", "10",
+        "--max-sleep-interval", "20",
+    ],
+}
+
+# Display labels for the Preferences combo (stored value -> label).
+REQUEST_PACING_CHOICES: Dict[str, str] = {
+    "off": "Off",
+    "sleep": "Sleep (gentle spacing)",
+    "custom": "Custom",
+}
+
+# Defaults for the Custom pacing fields. They mirror the recommended
+# "sleep" recipe, so switching to Custom starts from sane spacing.
+PACING_DEFAULTS: Dict[str, float] = {
+    "SLEEP_SUBTITLES": 5.0,
+    "SLEEP_REQUESTS": 0.75,
+    "SLEEP_INTERVAL": 10.0,
+    "MAX_SLEEP_INTERVAL": 20.0,
+}
+
+
+def _as_float(value: Any, default: float) -> float:
+    """Coerce a config value to float, falling back to the default."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 # Presets live in filename_rules (Qt-free and shared with the worker); kept
 # importable from here for existing callers.
@@ -131,6 +178,11 @@ _PLAIN_KEYS: tuple[str, ...] = (
     "CLIP_END",
     "CUSTOM_FFMPEG_ARGS",
     "EXTRA_YTDLP_ARGS",
+    "REQUEST_PACING",
+    "SLEEP_SUBTITLES",
+    "SLEEP_REQUESTS",
+    "SLEEP_INTERVAL",
+    "MAX_SLEEP_INTERVAL",
     "YOUTUBE_PLAYER_CLIENT",
     "CROP_AUDIO_COVERS",
     "VIDEO_FORMAT",
@@ -202,6 +254,21 @@ _VALIDATORS: Dict[str, Callable[[Any], Any]] = {
     "THUMBNAIL_FORMAT": lambda v: v if v in THUMBNAIL_FORMATS else "png",
     "YOUTUBE_PLAYER_CLIENT": (
         lambda v: v if v in YOUTUBE_PLAYER_CLIENTS.values() else "auto"
+    ),
+    "REQUEST_PACING": (
+        lambda v: v if v in REQUEST_PACING_CHOICES else "off"
+    ),
+    "SLEEP_SUBTITLES": (
+        lambda v: max(0.0, min(600.0, _as_float(v, PACING_DEFAULTS["SLEEP_SUBTITLES"])))
+    ),
+    "SLEEP_REQUESTS": (
+        lambda v: max(0.0, min(60.0, _as_float(v, PACING_DEFAULTS["SLEEP_REQUESTS"])))
+    ),
+    "SLEEP_INTERVAL": (
+        lambda v: max(0.0, min(3600.0, _as_float(v, PACING_DEFAULTS["SLEEP_INTERVAL"])))
+    ),
+    "MAX_SLEEP_INTERVAL": (
+        lambda v: max(0.0, min(3600.0, _as_float(v, PACING_DEFAULTS["MAX_SLEEP_INTERVAL"])))
     ),
     "FILENAME_FORMAT": _normalise_filename_choice,
     "FILENAME_RULES": _normalise_filename_rules,
@@ -338,6 +405,17 @@ class AppSettings:
     # Parsed with shlex and appended after all built-in flags, so a user can
     # override any default.
     EXTRA_YTDLP_ARGS: str = "--sleep-interval 15 --max-sleep-interval 20"
+    # Curated rate-limit spacing preset (see REQUEST_PACING_PRESETS), kept
+    # separate from EXTRA_YTDLP_ARGS so it survives edits to that field.
+    # Applied before the extra arguments, so anything typed there overrides
+    # the preset's flags. Off by default: pacing slows large queues down.
+    REQUEST_PACING: str = "off"
+    # Per-field values used when REQUEST_PACING is "custom". Defaults match
+    # the "sleep" recipe, so Custom starts from the recommended spacing.
+    SLEEP_SUBTITLES: float = PACING_DEFAULTS["SLEEP_SUBTITLES"]
+    SLEEP_REQUESTS: float = PACING_DEFAULTS["SLEEP_REQUESTS"]
+    SLEEP_INTERVAL: float = PACING_DEFAULTS["SLEEP_INTERVAL"]
+    MAX_SLEEP_INTERVAL: float = PACING_DEFAULTS["MAX_SLEEP_INTERVAL"]
     # yt-dlp periodically has to deprecate individual player clients faster
     # than app releases can track, so this is a preference, not a constant.
     YOUTUBE_PLAYER_CLIENT: str = "auto"
